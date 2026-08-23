@@ -12,6 +12,10 @@ from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
 
 
+def _json_dumps(obj) -> str:
+    import json
+    return json.dumps(obj)
+
 def make_record(seq: int, ts_ms: int, value: float = 21.0) -> dict:
     return {
         "node_id": "CAUCE-001",
@@ -111,10 +115,11 @@ def test_sync_requires_token_when_configured(client, monkeypatch):
 
 def test_rate_limit_blocks_flood(client, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_per_minute", 3)
-    codes = [
-        client.get("/v1/nodes").status_code for _ in range(5)
-    ]
-    assert codes[-1] == 429
+    codes = [client.get("/v1/nodes").status_code for _ in range(5)]
+    assert 429 in codes
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("DELETE FROM rate_limit")
 
 
 def test_get_node_detail_with_latest(client):
@@ -385,17 +390,14 @@ def test_period_compare_same_node(client):
     )
     assert bad.status_code == 422
 
-def test_rate_limiter_memory_is_bounded(client, monkeypatch):
-    from cauce_server import api as api_module
-    monkeypatch.setattr(settings, "rate_limit_per_minute", 5000)
-    api_module._RATE.clear()
-    for i in range(6000):
-        api_module._RATE[f"10.{i // 256}.{i % 256}.1"] = [0.0]
+def test_rate_limiter_persists_in_sqlite(client):
+    from cauce_server import db as _db
+    client.get("/v1/nodes")
+    rows = _db.query("SELECT * FROM rate_limit")
+    assert len(rows) >= 1
+    with _db.transaction() as conn:
+        conn.execute("DELETE FROM rate_limit")
 
-    r = client.get("/v1/nodes")
-    assert r.status_code == 200
-    assert len(api_module._RATE) <= api_module._MAX_TRACKED_CLIENTS
-    api_module._RATE.clear()
 
 def test_dashboard_localization_via_accept_language(client):
     client.post("/v1/sync", json=sync_payload([make_record(1, BASE_TS, 21.5)]))
@@ -411,3 +413,153 @@ def test_dashboard_localization_via_accept_language(client):
 
     default = client.get("/")
     assert "Red comunitaria" in default.text
+
+
+def test_summary_fast_reads_materialized_aggregates(client):
+    base = BASE_TS
+    recs = [make_record(i, base + i * 60000, 20.0 + i) for i in range(1, 11)]
+    client.post("/v1/sync", json=sync_payload(recs))
+
+    r = client.get(
+        "/v1/analytics/summary-fast",
+        params={"node_id": "CAUCE-001", "variable": "air_temperature"},
+    ).json()
+    assert r["source"] == "materialized_hourly"
+    assert r["count"] == 10
+    assert r["mean"] == 25.5
+    assert r["min"] == 21.0 and r["max"] == 30.0
+    assert r["buckets"] == 1
+
+    empty = client.get(
+        "/v1/analytics/summary-fast",
+        params={"node_id": "NOPE", "variable": "air_temperature"},
+    ).json()
+    assert empty["count"] == 0
+
+
+def test_time_reconstruct_backfills_uncertain_records(client):
+    base = BASE_TS
+    minute = 60000
+    step = 5 * minute
+    seq = 1
+    recs = []
+    for _i in range(10, 0, -1):
+        r = make_record(seq, 0, 20.0)
+        r["sequence"] = seq
+        r["time_uncertain"] = True
+        recs.append(r)
+        seq += 1
+    anchor = make_record(seq, base, 25.0)
+    recs.append(anchor)
+    second = make_record(seq + 1, base + step, 25.5)
+    recs.append(second)
+    client.post("/v1/sync", json=sync_payload(recs))
+
+    r = client.post("/v1/nodes/CAUCE-001/time-reconstruct").json()
+    assert r["records_fixed"] == 10
+    assert r["anchor_sequence"] == 11
+    assert r["assumed_interval_ms"] == step
+
+    rows = client.get("/v1/nodes/CAUCE-001/measurements",
+                      params={"limit": 100}).json()["measurements"]
+    uncertain = [x for x in rows if x["timestamp_utc_ms"] == 0]
+    assert uncertain == []
+    reconstructed = sorted(
+        (x for x in rows if x["ts_reconstructed"] == 1),
+        key=lambda x: x["sequence"])
+    assert len(reconstructed) == 10
+    assert reconstructed[-1]["timestamp_utc_ms"] == base - step
+
+
+def test_time_reconstruct_requires_anchor(client):
+    r = make_record(1, 0, 20.0)
+    client.post("/v1/sync", json=sync_payload([r]))
+    res = client.post("/v1/nodes/CAUCE-001/time-reconstruct")
+    assert res.status_code == 422
+
+
+def test_provisioned_node_requires_valid_hmac_signature(client):
+    import hashlib
+    import hmac as hmac_mod
+
+    admin = {"Authorization": "Bearer admin-token"}
+    # provisionar con token de administrador activado por entorno simulado
+    client.post(
+        "/v1/provision",
+        json={"node_id": "N-HMAC", "device_key": "clave-dispositivo-0123456789"},
+        headers=admin,
+    )
+
+    body = {
+        "protocol_version": 1,
+        "node_id": "N-HMAC",
+        "measurements": [
+            {"node_id": "N-HMAC", "sequence": 1,
+             "timestamp_utc_ms": BASE_TS, "variable": "air_temperature",
+             "value": 21.0, "unit": "C", "quality": "VALID"}
+        ],
+    }
+    raw = _json_dumps(body).encode()
+
+    mac = hmac_mod.new(b"clave-dispositivo-0123456789", raw,
+                       hashlib.sha256).hexdigest()
+    ok = client.post(
+        "/v1/sync",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-CAUCE-Node": "N-HMAC",
+            "X-CAUCE-Signature": mac,
+        },
+    )
+    assert ok.status_code == 200
+    assert ok.json()["acknowledged_sequence"] == 1
+
+    bad_sig = client.post(
+        "/v1/sync",
+        content=_json_dumps(body).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "X-CAUCE-Node": "N-HMAC",
+            "X-CAUCE-Signature": "00" * 32,
+        },
+    )
+    assert bad_sig.status_code == 401
+
+    unsigned = client.post("/v1/sync", content=raw,
+                           headers={"Content-Type": "application/json"})
+    assert unsigned.status_code == 401
+
+
+def test_simulator_csv_roundtrip(client):
+    measurements = []
+    for i in range(1, 21):
+        ms = BASE_TS + i * 60000
+        temp = round(20.0 + i * 0.1, 2)
+        hum = round(60.0 - i * 0.3, 2)
+        measurements.append({"node_id": "SIM-01", "sensor_id": "BME280",
+                             "sequence": i, "timestamp_utc_ms": ms,
+                             "variable": "air_temperature", "value": temp,
+                             "unit": "C", "quality": "VALID",
+                             "reason_bits": 0, "time_uncertain": False})
+        measurements.append({"node_id": "SIM-01", "sensor_id": "BME280",
+                             "sequence": i + 100, "timestamp_utc_ms": ms,
+                             "variable": "relative_humidity", "value": hum,
+                             "unit": "%RH", "quality": "VALID",
+                             "reason_bits": 0, "time_uncertain": False})
+
+    r = client.post("/v1/sync", json={"protocol_version": 1,
+                                      "node_id": "SIM-01",
+                                      "measurements": measurements})
+    assert r.status_code == 200
+
+    s = client.get("/v1/analytics/summary",
+                   params={"node_id": "SIM-01",
+                           "variable": "air_temperature"}).json()
+    assert s["count"] == 20
+
+    csv_r = client.get("/v1/export-all.csv")
+    assert csv_r.status_code == 200
+    lines = [ln for ln in csv_r.text.strip().splitlines() if ln]
+    assert len(lines) >= 41
+

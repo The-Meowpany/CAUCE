@@ -34,8 +34,14 @@ of records actually serialized.
 
 ```
 POST {server}/v1/sync
-Authorization: Bearer <token>            # optional per deployment
+Authorization: Bearer <token>            # legacy/global path (optional)
+X-CAUCE-Node: CAUCE-001                  # required when provisioned
+X-CAUCE-Signature: <hex hmac-sha256>     # required when provisioned
 Content-Type: application/json
+
+Signature = HMAC_SHA256(device_key, raw_request_body). The server keeps only
+what it needs to verify; compromising one device key does not enable forging
+other nodes' batches.
 
 {"protocol_version":1,"node_id":"CAUCE-001","batch_size":    5,
  "measurements":[{...}]}

@@ -1,9 +1,11 @@
-# CAUCE real system status
+﻿# CAUCE real system status
 
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (97 firmware + 20 backend tests, E2E green)
+## Implemented and verified
+| **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 3 pruebas nuevas (firmware HMAC RFC4231?2 + matriz backend v?lida/firma-mala/sin-firma) |
+ (97 firmware + 20 backend tests, E2E green)
 
 | Component | Evidence |
 |---|---|
@@ -45,23 +47,46 @@ not. It overrides any aspirational claim elsewhere.
   table; map deferred to avoid proprietary tile dependencies).
 - Deep sleep application (policy evaluator shipped; application requires bench).
 
-## Known technical debt
+## Known technical debt / backlog (prioritized)
 
-1. `Logger::eventf` fixed buffers (224 B) — fine for pilot scale.
-2. `LogStorageRepository` opens with sequential scan — fine to ~10⁵ records.
-3. Single Unity binary for all suites — state isolation via dedicated data dirs.
-4. Historical docs partially Spanish — English migration tracked in git history;
-   core docs already translated.
-5. Windows needs MinGW-w64 on PATH for the `native` env; CI uses Linux containers.
+| # | Sev | Item | Trigger | State |
+|---|---|---|---|---|
+| 1 | HIGH | Transport security (TLS) + node crypto identity | Exposing beyond trusted LAN | HMAC per-device signing shipped; TLS deferred to deployment decision |
+| 2 | HIGH | Physical bench validation (B1–B5) | Field expansion | docs/BENCH_PLAN.md |
+| 3 | MED | OTA download is synchronous/blocking → dashboard down during update | First real OTA | Accepted; async FSM proposed |
+| 4 | MED | `LogStorageRepository` open() O(bytes); CK01 checkpoint designed, not implemented | Storage budget >512 KiB | Design below |
+| 5 | MED | Backend `_RATE` in-memory (resets on restart); `sync_batches` unbounded; `/v1/nodes` unpaged | Central growth | Straightforward fixes |
+| 6 | LOW | `Logger::eventf` fixed 224 B buffers (silent truncation) | Long messages | — |
+| 7 | LOW | Unity single binary — cross-suite isolation via dedicated data dirs | — | — |
+| 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | — |
+
+### Closed this round
+- Sync batch payload buffer moved from caller stack to manager member
+  (4 KB off loopTask stack).
+- Per-request shared statics removed (ApiRouter route buffer,
+  Esp32ApiServer auth header).
+- `addSensor` capacity overflow logs `SENSOR_CAPACITY_REACHED` instead of
+  silently dropping.
+- verify-all/run-e2e toolchain PATH hardened (prepend MinGW + explicit
+  CC/CXX), fixing intermittent gcc-not-found when invoked as a fresh
+  powershell child process.
+
+### CK01 checkpoint design (ready to implement)
+File `<dir>/checkpoint.bin`: magic `CK01` + u32 totalRecords + u32 totalBytes +
+u32 lastSequence + u16 numSegments + per-segment {u32 bytes, u32 records} +
+60-byte last-record payload + CRC32 over all preceding bytes.
+`open()` fast-path adopts state when segment count/sizes match exactly; any
+mismatch falls back to the full-scan recovery path (current behavior). Flush
+every 64 appends and after rotation/retention/integrityCheck.
 
 ## Reproduce from zero
 
 ```powershell
 pip install platformio
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 ≥ GCC 9
-cd firmware && pio test -e native      # expect: 97 succeeded
+cd firmware && pio test -e native      # expect: 102 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 22 passed
+python -m pytest tests -q              # expect: 26 passed
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

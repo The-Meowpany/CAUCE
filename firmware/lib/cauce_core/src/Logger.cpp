@@ -22,14 +22,14 @@ const char* levelName(LogLevel level) {
 }  // namespace
 
 void Logger::event(LogLevel level, const char* event) {
-  char line[160];
+  char line[Logger::kMaxLineLength];
   std::snprintf(line, sizeof(line), "%s %s", levelName(level), event);
   sink_.writeLine(line);
 }
 
 void Logger::eventf(LogLevel level, const char* event, const char* detailsFormat,
                     ...) {
-  char line[224];
+  char line[Logger::kMaxLineLength];
   int used = std::snprintf(line, sizeof(line), "%s %s ", levelName(level), event);
   if (used < 0 || static_cast<size_t>(used) >= sizeof(line)) {
     sink_.writeLine(levelName(level));

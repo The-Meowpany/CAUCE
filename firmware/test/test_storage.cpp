@@ -145,6 +145,72 @@ void test_retention_removes_oldest_but_keeps_one_segment() {
   TEST_ASSERT_TRUE(store->totalRecords() >= 1);
 }
 
+
+
+void test_checkpoint_fast_reopen_and_increment() {
+  resetStore("data", kFrameSize * 4);
+  for (uint32_t i = 1; i <= 7; ++i) {
+    store->append(makeMeasurement(i, 6000000000ULL + i, Variable::Pressure,
+                                  1000.0f + i, Quality::Valid));
+  }
+  store->flushCheckpoint();
+
+  resetStore("data", kFrameSize * 4, false);
+  TEST_ASSERT_TRUE(store->lastOpenUsedCheckpoint());
+  TEST_ASSERT_EQUAL_UINT32(7, store->totalRecords());
+  TEST_ASSERT_EQUAL_UINT32(7, store->lastSequence());
+
+  Measurement latest{};
+  TEST_ASSERT_TRUE(store->latest(latest));
+  TEST_ASSERT_EQUAL_UINT32(7, latest.sequence);
+
+  store->append(makeMeasurement(8, 6000080000ULL, Variable::Pressure,
+                                1008.0f, Quality::Valid));
+  TEST_ASSERT_EQUAL_UINT32(8, store->totalRecords());
+}
+
+void test_checkpoint_falls_back_when_segment_size_tampered() {
+  resetStore("data", kFrameSize * 8);
+  for (uint32_t i = 1; i <= 5; ++i) {
+    store->append(makeMeasurement(i, 7000000000ULL + i,
+                                  Variable::AirTemperature, 21.0f,
+                                  Quality::Valid));
+  }
+  store->flushCheckpoint();
+
+  uint8_t garbage[10] = {0xDE};
+  fs.appendBytes("data/meas_000001.clog", garbage, sizeof(garbage));
+
+  resetStore("data", kFrameSize * 8, false);
+  TEST_ASSERT_FALSE(store->lastOpenUsedCheckpoint());
+  TEST_ASSERT_EQUAL_UINT32(5, store->totalRecords());
+  TEST_ASSERT_TRUE(store->corruptedFrames() >= 1);
+
+  Measurement latest{};
+  TEST_ASSERT_TRUE(store->latest(latest));
+  TEST_ASSERT_EQUAL_UINT32(5, latest.sequence);
+}
+
+void test_corrupt_checkpoint_falls_back_to_full_scan() {
+  resetStore("data", kFrameSize * 16);
+  for (uint32_t i = 1; i <= 6; ++i) {
+    store->append(makeMeasurement(i, 8000000000ULL + i, Variable::Light,
+                                  400.0f * i, Quality::Valid));
+  }
+  store->flushCheckpoint();
+
+  uint8_t broken[64] = {0x00};
+  fs.writeWholeFile("data/checkpoint.bin", broken, sizeof(broken));
+
+  resetStore("data", kFrameSize * 16, false);
+  TEST_ASSERT_FALSE(store->lastOpenUsedCheckpoint());
+  TEST_ASSERT_EQUAL_UINT32(6, store->totalRecords());
+
+  store->flushCheckpoint();
+  resetStore("data", kFrameSize * 16, false);
+  TEST_ASSERT_TRUE(store->lastOpenUsedCheckpoint());
+}
+
 void registerStorageTests() {
 
   RUN_TEST(test_append_and_query_roundtrip);
@@ -153,4 +219,7 @@ void registerStorageTests() {
   RUN_TEST(test_corrupted_tail_is_isolated_on_reopen);
   RUN_TEST(test_segment_rotation_occurs_when_limit_reached);
   RUN_TEST(test_retention_removes_oldest_but_keeps_one_segment);
+  RUN_TEST(test_checkpoint_fast_reopen_and_increment);
+  RUN_TEST(test_checkpoint_falls_back_when_segment_size_tampered);
+  RUN_TEST(test_corrupt_checkpoint_falls_back_to_full_scan);
 }

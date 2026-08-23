@@ -11,9 +11,15 @@ MeasurementScheduler::MeasurementScheduler(hal::IClock& clock,
     : clock_(clock), store_(store), validator_(validator), logger_(logger) {}
 
 void MeasurementScheduler::addSensor(drivers::ISensorDriver* sensor) {
-  if (sensor && sensorCount_ < kMaxSensors) {
-    sensors_[sensorCount_++] = sensor;
+  if (!sensor) return;
+  if (sensorCount_ >= kMaxSensors) {
+    logger_.eventf(LogLevel::Warn, "SENSOR_CAPACITY_REACHED",
+                   "max=%lu rejected_id=%s",
+                   static_cast<unsigned long>(kMaxSensors),
+                   sensor->metadata().id);
+    return;
   }
+  sensors_[sensorCount_++] = sensor;
 }
 
 void MeasurementScheduler::setNodeId(const char* nodeId) {

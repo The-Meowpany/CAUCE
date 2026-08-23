@@ -30,9 +30,8 @@ void Esp32ApiServer::begin() {
       req.bodyLen = strlen(req.body);
     }
     if (server_.hasHeader("Authorization")) {
-      static String auth;
-      auth = server_.header("Authorization");
-      req.authorization = auth.c_str();
+      lastAuth_ = server_.header("Authorization");
+      req.authorization = lastAuth_.c_str();
     }
 
     ApiRouter::Response response =

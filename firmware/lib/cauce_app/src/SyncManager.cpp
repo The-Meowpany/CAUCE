@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "cauce/core/DataExporter.h"
+#include "cauce/core/SecurityUtils.h"
 #include "cauce/core/Types.h"
 
 namespace cauce::app {
@@ -31,6 +32,16 @@ void SyncManager::configureEndpoint(const char* serverUrl,
   copyString(bearerToken_, sizeof(bearerToken_), bearerToken ? bearerToken : "");
   endpointConfigured_ = serverUrl_[0] != '\0';
   if (endpointConfigured_) transport_.configure(serverUrl_, bearerToken_);
+}
+
+void SyncManager::setDeviceSecret(const char* asciiSecret) {
+  if (!asciiSecret || !asciiSecret[0]) {
+    hasDeviceKey_ = false;
+    return;
+  }
+  sha256(reinterpret_cast<const uint8_t*>(asciiSecret),
+         std::strlen(asciiSecret), deviceKey_);
+  hasDeviceKey_ = true;
 }
 
 void SyncManager::loadState() {
@@ -105,17 +116,18 @@ bool SyncManager::syncOneBatch() {
     return true;
   }
 
-  char payload[4096];
+  char* payload = batchPayload_;
+  const size_t payloadCapacity = sizeof(batchPayload_);
   size_t used = 0;
   used += static_cast<size_t>(std::snprintf(
-      payload + used, sizeof(payload) - used,
+      payload + used, payloadCapacity - used,
       "{\"protocol_version\":%u,\"node_id\":\"%s\",\"batch_size\":",
       Versions::kProtocol, nodeId_));
   const size_t batchSizePos = used;
   std::memcpy(payload + used, "00000", 5);
   used += 5;
   used += static_cast<size_t>(
-      std::snprintf(payload + used, sizeof(payload) - used,
+      std::snprintf(payload + used, payloadCapacity - used,
                     ",\"measurements\":["));
 
   uint32_t emitted = 0;
@@ -125,7 +137,7 @@ bool SyncManager::syncOneBatch() {
     const size_t recordLen =
         measurementToJson(batch[i], record, sizeof(record));
     const size_t needed = recordLen + (emitted ? 1 : 0) + 3;
-    if (recordLen == 0 || used + needed > sizeof(payload) - 1) break;
+    if (recordLen == 0 || used + needed > payloadCapacity - 1) break;
     if (emitted > 0) payload[used++] = ',';
     std::memcpy(payload + used, record, recordLen);
     used += recordLen;
@@ -133,7 +145,7 @@ bool SyncManager::syncOneBatch() {
     ++emitted;
   }
   used += static_cast<size_t>(
-      std::snprintf(payload + used, sizeof(payload) - used, "]}"));
+      std::snprintf(payload + used, payloadCapacity - used, "]}"));
 
   char countText[8];
   std::snprintf(countText, sizeof(countText), "%5u",
@@ -144,9 +156,24 @@ bool SyncManager::syncOneBatch() {
                  "records=%u after_seq=%lu bytes=%zu", emitted,
                  static_cast<unsigned long>(lastAckedSeq_), used);
 
+  char signatureHex[65] = {0};
+  if (hasDeviceKey_) {
+    uint8_t mac[32];
+    hmacSha256(deviceKey_, sizeof(deviceKey_),
+               reinterpret_cast<const uint8_t*>(payload), used, mac);
+    static const char* hexDigits = "0123456789abcdef";
+    for (int i = 0; i < 32; ++i) {
+      signatureHex[i * 2] = hexDigits[(mac[i] >> 4) & 0xF];
+      signatureHex[i * 2 + 1] = hexDigits[mac[i] & 0xF];
+    }
+    signatureHex[64] = '\0';
+  }
+
   uint32_t ackedSeq = lastAckedSeq_;
-  const auto result =
-      transport_.postBatch(payload, used, tuning_.requestTimeoutMs, ackedSeq);
+  const auto result = transport_.postBatch(
+      payload, used,
+      hasDeviceKey_ ? signatureHex : nullptr,
+      tuning_.requestTimeoutMs, ackedSeq);
 
   switch (result) {
     case hal::ISyncTransport::Result::Ok: {

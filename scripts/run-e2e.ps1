@@ -9,7 +9,10 @@ $root = Split-Path $PSScriptRoot -Parent
 $fw = Join-Path $root "firmware"
 $backend = Join-Path $root "backend"
 
-$env:Path += ";C:\Users\filip\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin"
+$mingwBin = "C:\Users\filip\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin"
+$env:Path = "$mingwBin;" + $env:Path
+$env:CC = "$mingwBin\gcc.exe"
+$env:CXX = "$mingwBin\g++.exe"
 
 Write-Host "== 1/4 build binario integracion ==" -ForegroundColor Cyan
 pio run -e integration --project-dir $fw | Out-Null

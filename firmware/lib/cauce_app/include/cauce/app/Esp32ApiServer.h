@@ -25,6 +25,7 @@ class Esp32ApiServer {
   WebServer& server_;
   ApiRouter& router_;
   char buffer_[kResponseCapacity];
+  String lastAuth_;
 };
 
 }  // namespace cauce::app

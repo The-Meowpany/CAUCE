@@ -107,6 +107,7 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("wifi_ssid=%s\n", config.wifiSsid);
   c.write("wifi_password=%s\n", config.wifiPassword);
   c.write("ntp_server=%s\n", config.ntpServer);
+  c.write("sync_device_key=%s\n", config.syncDeviceKey);
   c.write("storage_max_bytes=%lu\n",
           static_cast<unsigned long>(config.storageMaxBytes));
   c.write("segment_max_bytes=%lu\n",
@@ -191,6 +192,8 @@ bool parseConfig(const char* text, NodeConfig& out) {
         copyString(cfg.wifiPassword, sizeof(cfg.wifiPassword), valueText);
       } else if (std::strcmp(key, "ntp_server") == 0) {
         copyString(cfg.ntpServer, sizeof(cfg.ntpServer), valueText);
+      } else if (std::strcmp(key, "sync_device_key") == 0) {
+        copyString(cfg.syncDeviceKey, sizeof(cfg.syncDeviceKey), valueText);
       } else if (std::strcmp(key, "storage_max_bytes") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.storageMaxBytes = static_cast<uint32_t>(intValue);

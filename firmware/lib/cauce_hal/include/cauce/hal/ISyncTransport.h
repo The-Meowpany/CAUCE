@@ -18,7 +18,9 @@ class ISyncTransport {
   virtual ~ISyncTransport() = default;
   virtual void configure(const char* serverUrl, const char* bearerToken) = 0;
   virtual Result postBatch(const char* jsonPayload, size_t length,
-                           uint32_t timeoutMs, uint32_t& ackedSequenceOut) = 0;
+                           const char* signatureHex,
+                           uint32_t timeoutMs,
+                           uint32_t& ackedSequenceOut) = 0;
 };
 
 }  // namespace cauce::hal

@@ -54,7 +54,7 @@ CAUCE/
 # Requirements: Python 3.10+, PlatformIO (pip install platformio),
 # GCC MinGW-w64 on PATH (native tests) — see docs/TESTING.md
 cd firmware
-pio test -e native          # 97 tests on PC
+pio test -e native          # 102 tests on PC
 pio run -e native           # builds host simulation demo
 .\.pio\build\native\program.exe   # runs injected-fault scenarios
 ```
@@ -67,7 +67,7 @@ disconnect, recovery. Watch data quality move from `VALID` to `SUSPECT`,
 
 ```powershell
 cd backend && pip install -r requirements.txt
-python -m pytest tests -q          # 20 tests
+python -m pytest tests -q          # 26 tests
 ..\scripts\run-e2e.ps1             # node C++ -> FastAPI -> SQLite (4 phases)
 ```
 
@@ -102,6 +102,8 @@ validation is a declared pending item.
 | [OTA.md](docs/OTA.md) | Firmware update architecture |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Full pilot deployment guide |
 | [DOMAIN_GLOSSARY.md](docs/DOMAIN_GLOSSARY.md) | Canonical English vocabulary |
+| [BENCH_PLAN.md](docs/BENCH_PLAN.md) | Physical validation plan (power cuts, sensor soak, radio endurance) |
+
 
 ## License
 

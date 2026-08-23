@@ -12,6 +12,7 @@ class HostHttpTransport final : public hal::ISyncTransport {
  public:
   void configure(const char* serverUrl, const char* bearerToken) override;
   hal::ISyncTransport::Result postBatch(const char* jsonPayload, size_t length,
+                                        const char* signatureHex,
                                         uint32_t timeoutMs,
                                         uint32_t& ackedSequenceOut) override;
 

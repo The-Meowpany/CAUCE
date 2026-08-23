@@ -29,6 +29,8 @@ class SyncManager {
 
   void setNodeId(const char* nodeId);
   void configureEndpoint(const char* serverUrl, const char* bearerToken);
+  // Per-device secret used to HMAC-sign every batch (X-CAUCE-Signature).
+  void setDeviceSecret(const char* asciiSecret);
   void loadState();
   void onNetworkConnected();
   void onNetworkLost();
@@ -56,6 +58,11 @@ class SyncManager {
   char nodeId_[16]{"CAUCE-001"};
   char serverUrl_[96];
   char bearerToken_[65];
+  uint8_t deviceKey_[32];
+  bool hasDeviceKey_{false};
+  // Batch serialization buffer lives here (not on the caller's stack):
+  // tick() may run on tasks with small stacks.
+  char batchPayload_[4096];
   Tuning tuning_;
 
   bool connected_{false};

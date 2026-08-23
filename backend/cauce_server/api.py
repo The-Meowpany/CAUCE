@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -11,26 +13,31 @@ from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
-_RATE: dict[str, list[float]] = {}
-_MAX_TRACKED_CLIENTS = 4096
-
-
 def _check_rate(request: Request) -> None:
     key = request.client.host if request.client else "unknown"
-    now = time.monotonic()
-    window = [t for t in _RATE.get(key, []) if now - t < 60.0]
-    if len(window) >= settings.rate_limit_per_minute:
-        _RATE[key] = window
-        raise HTTPException(status_code=429, detail="rate_limited")
-    window.append(now)
-    if key not in _RATE and len(_RATE) >= _MAX_TRACKED_CLIENTS:
-        stale = [k for k, v in _RATE.items() if not v or now - v[-1] >= 60.0]
-        for k in stale:
-            del _RATE[k]
-        while len(_RATE) >= _MAX_TRACKED_CLIENTS:
-            oldest_key = min(_RATE, key=lambda k: _RATE[k][-1])
-            del _RATE[oldest_key]
-    _RATE[key] = window
+    now = time.time()
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT request_count, window_start FROM rate_limit WHERE client_ip=?",
+            (key,),
+        ).fetchone()
+        if row is None or now - row["window_start"] >= 60.0:
+            conn.execute(
+                """INSERT INTO rate_limit(client_ip,window_start,request_count) VALUES(?,?,1)
+                   ON CONFLICT(client_ip) DO UPDATE SET window_start=?, request_count=1""",
+                (key, now, now),
+            )
+            return
+        if row["request_count"] >= settings.rate_limit_per_minute:
+            raise HTTPException(status_code=429, detail="rate_limited")
+        conn.execute(
+            "UPDATE rate_limit SET request_count=request_count+1 WHERE client_ip=?",
+            (key,),
+        )
+    # prune stale entries periodically (every 64th check)
+    if hash(key) % 64 == 0:
+        with transaction() as conn:
+            conn.execute("DELETE FROM rate_limit WHERE window_start<?", (now - 120.0,))
 
 
 def _acknowledged_sequence(conn, node_id: str, records: list[dict]) -> int | None:
@@ -46,14 +53,69 @@ def _acknowledged_sequence(conn, node_id: str, records: list[dict]) -> int | Non
     return highest
 
 
-@router.post("/sync")
-def sync_batch(
+@router.post("/provision")
+def provision_node(
     payload: dict,
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.sync_token)
+    require_bearer_token(authorization, settings.api_token)
+    node_id = payload.get("node_id")
+    device_key = payload.get("device_key")
+    if not isinstance(node_id, str) or not node_id:
+        raise HTTPException(status_code=422, detail="missing_node_id")
+    if not isinstance(device_key, str) or len(device_key) < 16:
+        raise HTTPException(status_code=422, detail="weak_device_key")
+    with transaction() as conn:
+        conn.execute(
+            """INSERT INTO nodes(node_id, device_key, first_seen_utc_ms, last_seen_utc_ms)
+               VALUES(?,?,?,?)
+               ON CONFLICT(node_id) DO UPDATE SET device_key=excluded.device_key""",
+            (node_id, device_key, int(time.time() * 1000), int(time.time() * 1000)),
+        )
+    return {"status": "provisioned", "node_id": node_id}
+
+
+@router.post("/sync")
+async def sync_batch(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_cauce_node: str | None = Header(default=None),
+    x_cauce_signature: str | None = Header(default=None),
+) -> dict:
+    import json as _json
+
+    _check_rate(request)
+    raw_body = await request.body()
+    try:
+        payload = _json.loads(raw_body.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid_json") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="invalid_payload")
+
+    node_id_claim = payload.get("node_id")
+    device_key = None
+    if isinstance(node_id_claim, str) and node_id_claim:
+        rows_ = query("SELECT device_key FROM nodes WHERE node_id=?",
+                      (node_id_claim,))
+        if rows_ and rows_[0]["device_key"]:
+            device_key = rows_[0]["device_key"]
+
+    if device_key:
+        # Provisioned node: HMAC over the raw body is mandatory, and the
+        # identity header must match the payload's node_id.
+        expected_sig = hmac.new(device_key.encode(), raw_body,
+                                hashlib.sha256).hexdigest()
+        provided_sig = x_cauce_signature.strip().lower() if x_cauce_signature else ""
+        header_ok = bool(x_cauce_node) and x_cauce_node == node_id_claim
+        if not header_ok or not provided_sig or not hmac.compare_digest(
+            provided_sig, expected_sig
+        ):
+            raise HTTPException(status_code=401, detail="invalid_signature")
+    else:
+        require_bearer_token(authorization, settings.sync_token)
 
     if payload.get("protocol_version") != settings.protocol_version:
         raise HTTPException(status_code=422, detail="unsupported_protocol_version")
@@ -82,6 +144,7 @@ def sync_batch(
             (node_id, now_ms, now_ms),
         )
         inserted_max = None
+        inserted_rows: list[dict] = []
         for rec in measurements:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO measurements
@@ -101,10 +164,38 @@ def sync_batch(
                     1 if rec.get("time_uncertain") else 0,
                 ),
             )
-            if cur.rowcount == 1 and (
-                inserted_max is None or rec["sequence"] > inserted_max
-            ):
-                inserted_max = rec["sequence"]
+            if cur.rowcount == 1:
+                inserted_rows.append(rec)
+                if inserted_max is None or rec["sequence"] > inserted_max:
+                    inserted_max = rec["sequence"]
+
+        for rec in inserted_rows:
+            hour_ts = (rec["timestamp_utc_ms"] // 3600000) * 3600000
+            conn.execute(
+                """INSERT INTO agg_hourly(node_id,variable,hour_ts,cnt,sum,sumsq,min_v,max_v)
+                   VALUES(?,?,?,?,?,?,?,?)
+                   ON CONFLICT(node_id,variable,hour_ts) DO UPDATE SET
+                     cnt = cnt + excluded.cnt,
+                     sum = sum + excluded.sum,
+                     sumsq = sumsq + excluded.sumsq,
+                     min_v = MIN(min_v, excluded.min_v),
+                     max_v = MAX(max_v, excluded.max_v)""",
+                (
+                    node_id,
+                    rec["variable"],
+                    hour_ts,
+                    1,
+                    rec["value"],
+                    (rec["value"] or 0.0) ** 2 if rec["value"] is not None else 0.0,
+                    rec["value"],
+                    rec["value"],
+                ),
+            )
+
+        conn.execute(
+            """DELETE FROM sync_batches WHERE batch_id NOT IN
+               (SELECT batch_id FROM sync_batches ORDER BY batch_id DESC LIMIT 5000)"""
+        )
 
         acked = _acknowledged_sequence(conn, node_id, measurements) or inserted_max
         if acked is not None:
@@ -127,17 +218,27 @@ def sync_batch(
 
 
 @router.get("/nodes")
-def list_nodes(request: Request, authorization: str | None = Header(default=None)) -> dict:
+def list_nodes(
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    authorization: str | None = Header(default=None),
+) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
+    limit = max(1, min(limit, 1000))
+    offset = max(0, offset)
+    total = query("SELECT COUNT(*) AS c FROM nodes")[0]["c"]
     rows = query(
         """SELECT node_id, site_id, firmware_version,
                   first_seen_utc_ms, last_seen_utc_ms,
                   (SELECT COUNT(*) FROM measurements m WHERE m.node_id=n.node_id) AS measurement_count,
                   (SELECT MAX(timestamp_utc_ms) FROM measurements m WHERE m.node_id=n.node_id) AS last_measurement_utc_ms
-           FROM nodes n ORDER BY node_id"""
+           FROM nodes n ORDER BY node_id LIMIT ? OFFSET ?""",
+        (limit, offset),
     )
-    return {"nodes": [dict(r) for r in rows]}
+    return {"total": total, "limit": limit, "offset": offset,
+            "nodes": [dict(r) for r in rows]}
 
 
 @router.get("/nodes/{node_id}")
@@ -367,3 +468,134 @@ def analytics_period_compare(
         "period_b": {"start_utc_ms": b_start, "end_utc_ms": b_end, **period_b},
         "mean_shift": mean_shift,
     }
+
+
+def _agg_stats(rows) -> dict:
+    import math
+    cnt = sum(r["cnt"] for r in rows)
+    if cnt == 0:
+        return {"count": 0}
+    total_sum = sum(r["sum"] for r in rows)
+    total_sumsq = sum(r["sumsq"] for r in rows)
+    mean = total_sum / cnt
+    variance = max(0.0, total_sumsq / cnt - mean * mean)
+    mins = [r["min_v"] for r in rows if r["min_v"] is not None]
+    maxs = [r["max_v"] for r in rows if r["max_v"] is not None]
+    return {
+        "count": cnt,
+        "min": round(min(mins), 3) if mins else None,
+        "max": round(max(maxs), 3) if maxs else None,
+        "mean": round(mean, 3),
+        "stddev_pop": round(math.sqrt(variance), 3),
+        "buckets": len(rows),
+        "granularity": "hourly",
+    }
+
+
+@router.get("/analytics/summary-fast")
+def analytics_summary_fast(
+    node_id: str,
+    request: Request,
+    variable: str,
+    from_utc_ms: int | None = None,
+    to_utc_ms: int | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Reads precomputed hourly aggregates; O(buckets) instead of O(records)."""
+    _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    sql = """SELECT hour_ts, cnt, sum, sumsq, min_v, max_v FROM agg_hourly
+             WHERE node_id=? AND variable=?"""
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        first_hour = (from_utc_ms // 3600000) * 3600000
+        sql += " AND hour_ts>=?"
+        params.append(first_hour)
+    if to_utc_ms is not None:
+        last_hour = (to_utc_ms // 3600000) * 3600000
+        sql += " AND hour_ts<=?"
+        params.append(last_hour)
+    sql += " ORDER BY hour_ts"
+    rows = query(sql, tuple(params))
+    stats = _agg_stats(rows)
+    return {
+        "node_id": node_id,
+        "variable": variable,
+        "metric_type": "derived",
+        "source": "materialized_hourly",
+        "note": ("descriptive statistics only; does not imply causality"
+                 if stats.get("count") else "no data in range"),
+        **stats,
+    }
+
+
+@router.post("/nodes/{node_id}/time-reconstruct")
+def time_reconstruct(
+    node_id: str,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Backfills timestamps of leading time_uncertain records using the first
+    anchored sample and the median interval between consecutive anchored
+    samples. Marks reconstructed rows and never touches anchored ones."""
+    _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+
+    with transaction() as conn:
+        rows = conn.execute(
+            """SELECT sequence, timestamp_utc_ms FROM measurements
+               WHERE node_id=? ORDER BY sequence""",
+            (node_id,),
+        ).fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="node_not_found")
+
+        anchored = [(r["sequence"], r["timestamp_utc_ms"]) for r in rows
+                    if r["timestamp_utc_ms"]]
+        if len(anchored) < 2:
+            raise HTTPException(status_code=422, detail="no_time_anchor")
+
+        intervals = [b[1] - a[1] for a, b in zip(anchored, anchored[1:], strict=False)
+                     if b[1] > a[1]]
+        intervals.sort()
+        step = intervals[len(intervals) // 2]
+        if step <= 0:
+            raise HTTPException(status_code=422, detail="invalid_intervals")
+
+        anchor_seq, anchor_ts = anchored[0]
+        fixed = 0
+
+        # walk backwards from the first anchor over preceding uncertain rows
+        pending = [(s, ts) for s, ts in anchored]
+        first_seq, first_ts = pending[0]
+        cur = conn.execute(
+            """SELECT sequence FROM measurements
+               WHERE node_id=? AND sequence<? AND timestamp_utc_ms=0
+               ORDER BY sequence DESC""",
+            (node_id, first_seq),
+        ).fetchall()
+        uncertain_seqs = [r["sequence"] for r in cur]
+        for seq in uncertain_seqs:
+            distance = anchor_seq - seq
+            if distance <= 0:
+                continue
+            new_ts = first_ts - distance * step
+            if new_ts <= 0:
+                continue
+            conn.execute(
+                """UPDATE measurements SET timestamp_utc_ms=?, ts_reconstructed=1
+                   WHERE node_id=? AND sequence=? AND timestamp_utc_ms=0""",
+                (new_ts, node_id, seq),
+            )
+            fixed += 1
+
+    return {
+        "status": "reconstructed",
+        "node_id": node_id,
+        "records_fixed": fixed,
+        "anchor_sequence": anchor_seq,
+        "assumed_interval_ms": step,
+        "note": ("timestamps inferred backwards from first anchor using median "
+                 "interval; margin of error grows with distance from anchor"),
+    }
+

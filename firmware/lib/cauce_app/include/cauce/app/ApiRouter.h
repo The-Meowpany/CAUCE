@@ -64,6 +64,7 @@ class ApiRouter {
   const char* htmlData_{nullptr};
   size_t htmlLen_{0};
   size_t htmlPos_{0};
+  char routePathBuf_[96];
 };
 
 }  // namespace cauce::app

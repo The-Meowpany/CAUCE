@@ -13,7 +13,8 @@ namespace cauce::hal {
 class Esp32HttpSyncTransport final : public ISyncTransport {
  public:
   void configure(const char* serverUrl, const char* bearerToken) override;
-  Result postBatch(const char* jsonPayload, size_t length, uint32_t timeoutMs,
+  Result postBatch(const char* jsonPayload, size_t length,
+                   const char* signatureHex, uint32_t timeoutMs,
                    uint32_t& ackedSequenceOut) override;
 
  private:

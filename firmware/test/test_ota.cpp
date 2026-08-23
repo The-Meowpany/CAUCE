@@ -108,6 +108,7 @@ std::string makeFirmware(int seed, size_t size) {
 
 void fillRelease(OtaRelease& r, const std::string& fw) {
   copyString(r.version, sizeof(r.version), "1.1.0");
+  r.manifestHmacHex[0] = '\0';
   uint8_t digest[32];
   sha256(reinterpret_cast<const uint8_t*>(fw.data()), fw.size(), digest);
   static const char* hex = "0123456789abcdef";
@@ -118,6 +119,15 @@ void fillRelease(OtaRelease& r, const std::string& fw) {
   r.sha256Hex[64] = '\0';
   copyString(r.url, sizeof(r.url), "mem://fw.bin");
   r.totalSize = static_cast<uint32_t>(fw.size());
+}
+
+
+void drainOta(OtaManager& mgr, hal::ManualClock& clk) {
+  int guard = 0;
+  while (mgr.state() == OtaState::Downloading && guard++ < 1000) {
+    clk.advanceMs(10);
+    mgr.tick();
+  }
 }
 
 }  // namespace
@@ -159,6 +169,7 @@ void test_happy_path_applies_and_reports_reboot_pending() {
   rig.reader.payload = fw;
 
   rig.manager.tick();
+  drainOta(rig.manager, otaClock);
 
   TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
   TEST_ASSERT_EQUAL_STRING("1.1.0", rig.manager.pendingVersion());
@@ -179,7 +190,7 @@ void test_hash_mismatch_aborts_and_marks_verify_failed() {
   rig.reader.payload = fw;
 
   rig.manager.tick();
-
+  drainOta(rig.manager, otaClock);
   TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
   TEST_ASSERT_TRUE(rig.installer.aborted);
 }
@@ -193,6 +204,7 @@ void test_size_exceeded_is_verify_failed() {
   rig.reader.payload = fw;
 
   rig.manager.tick();
+  drainOta(rig.manager, otaClock);
   TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
   TEST_ASSERT_TRUE(rig.installer.aborted);
 }
@@ -229,6 +241,7 @@ void test_installer_rejection_is_verify_failed_with_abort() {
   rig.installer.finishDecision = InstallDecision::Abort;
 
   rig.manager.tick();
+  drainOta(rig.manager, otaClock);
   TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
   TEST_ASSERT_TRUE(rig.installer.aborted);
 }
@@ -262,6 +275,61 @@ void test_low_battery_blocks_update() {
   TEST_ASSERT_EQUAL(0, rig.reader.openCalls);
 }
 
+
+
+void test_manifest_signature_gate() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  const std::string fw = makeFirmware(21, 900);
+  rig.manager.setFirmwareVersion("1.0.0");
+  const uint8_t key[32] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                           17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32};
+  rig.manager.setManifestKey(key);
+
+  // sin firma -> rechazado
+  fillRelease(rig.catalog.release, fw);
+  copyString(rig.catalog.release.manifestHmacHex,
+             sizeof(rig.catalog.release.manifestHmacHex), "");
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+  TEST_ASSERT_EQUAL(0, rig.reader.openCalls);
+
+  // firma invalida -> rechazado
+  fillRelease(rig.catalog.release, fw);
+  copyString(rig.catalog.release.manifestHmacHex,
+             sizeof(rig.catalog.release.manifestHmacHex),
+             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+  otaClock.advanceMs(21600001);
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+
+  // firma valida sobre "version|url|totalSize" -> descarga y aplica
+  fillRelease(rig.catalog.release, fw);
+  char canonical[160];
+  std::snprintf(canonical, sizeof(canonical), "%s|%s|%u",
+                rig.catalog.release.version, rig.catalog.release.url,
+                static_cast<unsigned>(rig.catalog.release.totalSize));
+  uint8_t mac[32];
+  cauce::hmacSha256(key, sizeof(key),
+                    reinterpret_cast<const uint8_t*>(canonical),
+                    std::strlen(canonical), mac);
+  char sig[65];
+  static const char* hd = "0123456789abcdef";
+  for (int i = 0; i < 32; ++i) {
+    sig[i * 2] = hd[(mac[i] >> 4) & 0xF];
+    sig[i * 2 + 1] = hd[mac[i] & 0xF];
+  }
+  sig[64] = 0;
+  copyString(rig.catalog.release.manifestHmacHex,
+             sizeof(rig.catalog.release.manifestHmacHex), sig);
+  otaClock.advanceMs(21600001);
+  rig.manager.tick();
+  drainOta(rig.manager, otaClock);
+  TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
+}
+
 void registerOtaTests() {
   UNITY_BEGIN();
   RUN_TEST(test_compare_semver_pairs);
@@ -274,5 +342,6 @@ void registerOtaTests() {
   RUN_TEST(test_installer_rejection_is_verify_failed_with_abort);
   RUN_TEST(test_safety_gate_blocks_before_download);
   RUN_TEST(test_low_battery_blocks_update);
+  RUN_TEST(test_manifest_signature_gate);
   UNITY_END();
 }

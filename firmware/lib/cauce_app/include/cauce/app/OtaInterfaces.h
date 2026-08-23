@@ -9,6 +9,7 @@ struct OtaRelease {
   char version[16];
   char sha256Hex[65];
   char url[128];
+  char manifestHmacHex[65];
   uint32_t totalSize;
 };
 

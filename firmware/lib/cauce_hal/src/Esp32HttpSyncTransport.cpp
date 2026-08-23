@@ -15,14 +15,17 @@ void Esp32HttpSyncTransport::configure(const char* serverUrl,
 }
 
 ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
-    const char* jsonPayload, size_t length, uint32_t timeoutMs,
-    uint32_t& ackedSequenceOut) {
+    const char* jsonPayload, size_t length, const char* signatureHex,
+    uint32_t timeoutMs, uint32_t& ackedSequenceOut) {
   HTTPClient http;
   http.setTimeout(timeoutMs);
   if (!http.begin(url_)) return Result::NetworkError;
   http.addHeader("Content-Type", "application/json");
   if (token_.length() > 0) {
     http.addHeader("Authorization", "Bearer " + token_);
+  }
+  if (signatureHex && signatureHex[0]) {
+    http.addHeader("X-CAUCE-Signature", String(signatureHex));
   }
 
   const int code = http.POST(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(jsonPayload)),

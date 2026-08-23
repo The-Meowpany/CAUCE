@@ -1,5 +1,6 @@
 #pragma once
 
+#include <utility>
 #include <vector>
 
 #include "cauce/core/IStorageRepository.h"
@@ -22,6 +23,8 @@ class LogStorageRepository final : public IStorageRepository {
                        uint32_t segmentMaxBytes = 256u * 1024u);
 
   bool open() override;
+  bool lastOpenUsedCheckpoint() const { return lastOpenUsedCheckpoint_; }
+  void flushCheckpoint();
   bool append(const Measurement& measurement) override;
   size_t query(uint64_t fromUtcMs, uint64_t toUtcMs, size_t skipMatches,
                Measurement* out, size_t capacity, QueryStats& stats) override;
@@ -38,7 +41,34 @@ class LogStorageRepository final : public IStorageRepository {
   const std::vector<SegmentInfo>& segments() const { return segments_; }
 
  private:
+  struct CheckpointData {
+    bool valid{false};
+    uint32_t totalRecords{0};
+    uint32_t totalBytes{0};
+    uint32_t lastSequence{0};
+    Measurement lastRecord{};
+    struct CkSeg {
+      uint32_t index;
+      uint32_t bytes;
+      uint32_t records;
+      bool sealed;
+    };
+    std::vector<CkSeg> segments;
+  };
+
+  bool tryLoadCheckpoint(CheckpointData& out);
+  void saveCheckpointLocked();
   bool scanAllSegments();
+  bool adoptCheckpoint(const CheckpointData& cp);
+  const char* checkpointPath();
+  static void appendU16(std::vector<uint8_t>& b, uint16_t v);
+  static void appendU32(std::vector<uint8_t>& b, uint32_t v);
+  static uint16_t readU16(const std::vector<uint8_t>& b, size_t& off);
+  static uint32_t readU32(const std::vector<uint8_t>& b, size_t& off);
+
+  bool opened_{false};
+  bool lastOpenUsedCheckpoint_{false};
+  uint32_t appendedSinceCkpt_{0};
   uint32_t scanSegment(SegmentInfo& info);
   bool rollSegmentIfNeeded(size_t incomingFrameBytes);
   bool createSegment(uint32_t index, SegmentInfo& created);
@@ -55,7 +85,6 @@ class LogStorageRepository final : public IStorageRepository {
   uint32_t totalBytes_{0};
   Measurement lastRecord_{};
   bool hasLastRecord_{false};
-  bool opened_{false};
 };
 
 }  // namespace cauce

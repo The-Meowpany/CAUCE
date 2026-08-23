@@ -72,8 +72,8 @@ void HostHttpTransport::configure(const char* serverUrl, const char* bearerToken
 }
 
 hal::ISyncTransport::Result HostHttpTransport::postBatch(
-    const char* jsonPayload, size_t length, uint32_t timeoutMs,
-    uint32_t& ackedSequenceOut) {
+    const char* jsonPayload, size_t length, const char* signatureHex,
+    uint32_t timeoutMs, uint32_t& ackedSequenceOut) {
   if (httpDebug())
     std::fprintf(stderr, "[http] POST %zu bytes -> %s\n", length, url_.c_str());
 #ifdef _WIN32
@@ -132,6 +132,11 @@ hal::ISyncTransport::Result HostHttpTransport::postBatch(
   request += "Host: " + parts.host + ":" + parts.port + "\r\n";
   request += "Content-Type: application/json\r\n";
   if (!token_.empty()) request += "Authorization: Bearer " + token_ + "\r\n";
+  if (signatureHex && signatureHex[0]) {
+    request += "X-CAUCE-Signature: ";
+    request += signatureHex;
+    request += "\r\n";
+  }
   request += "Content-Length: " + std::to_string(length) + "\r\n";
   request += "Connection: close\r\n\r\n";
   request.append(jsonPayload, length);

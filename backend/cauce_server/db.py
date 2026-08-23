@@ -1,3 +1,5 @@
+﻿from __future__ import annotations
+
 import os
 import sqlite3
 import threading
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS measurements (
     quality TEXT NOT NULL,
     reason_bits INTEGER NOT NULL DEFAULT 0,
     time_uncertain INTEGER NOT NULL DEFAULT 0,
+    ts_reconstructed INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (node_id, sequence)
 );
 
@@ -46,6 +49,12 @@ CREATE TABLE IF NOT EXISTS interventions (
     notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS rate_limit (
+    client_ip TEXT PRIMARY KEY,
+    window_start REAL NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS sync_batches (
     batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL,
@@ -53,6 +62,18 @@ CREATE TABLE IF NOT EXISTS sync_batches (
     first_sequence INTEGER,
     last_sequence INTEGER,
     received_at_utc_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agg_hourly (
+    node_id TEXT NOT NULL,
+    variable TEXT NOT NULL,
+    hour_ts INTEGER NOT NULL,
+    cnt INTEGER NOT NULL,
+    sum REAL NOT NULL,
+    sumsq REAL NOT NULL,
+    min_v REAL,
+    max_v REAL,
+    PRIMARY KEY (node_id, variable, hour_ts)
 );
 """
 
@@ -75,12 +96,28 @@ _engine_lock = threading.Lock()
 _engine: sqlite3.Connection | None = None
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+    if "device_key" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN device_key TEXT")
+    mcols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(measurements)").fetchall()
+    }
+    if mcols and "ts_reconstructed" not in mcols:
+        conn.execute(
+            "ALTER TABLE measurements ADD COLUMN ts_reconstructed INTEGER "
+            "NOT NULL DEFAULT 0"
+        )
+
+
 def engine() -> sqlite3.Connection:
     global _engine
     with _engine_lock:
         if _engine is None:
             _engine = connect()
             _engine.executescript(_SCHEMA)
+            _migrate(_engine)
             _engine.commit()
         return _engine
 
@@ -99,6 +136,7 @@ def transaction():
 
 def query(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
     return engine().execute(sql, params).fetchall()
+
 
 def reset_for_tests() -> None:
     global _engine

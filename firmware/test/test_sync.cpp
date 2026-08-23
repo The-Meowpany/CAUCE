@@ -1,4 +1,4 @@
-#include <cstdlib>
+﻿#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -8,6 +8,7 @@
 #include "cauce/app/SyncManager.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
+#include "cauce/core/SecurityUtils.h"
 #include "cauce/hal/MemoryFileSystem.h"
 #include "cauce/hal/ManualClock.h"
 
@@ -19,14 +20,16 @@ namespace {
 class ScriptedTransport final : public hal::ISyncTransport {
  public:
   std::vector<std::string> calls;
+  std::vector<std::string> signatures;
   Result nextResult{Result::Ok};
   int okCallsRemaining{-1};
 
   void configure(const char*, const char*) override {}
 
-  Result postBatch(const char* payload, size_t length, uint32_t,
-                   uint32_t& ackedOut) override {
+  Result postBatch(const char* payload, size_t length, const char* signatureHex,
+                   uint32_t, uint32_t& ackedOut) override {
     calls.push_back(std::string(payload, length));
+    signatures.push_back(signatureHex ? std::string(signatureHex) : "");
     if (okCallsRemaining == 0) return hal::ISyncTransport::Result::NetworkError;
     if (okCallsRemaining > 0) --okCallsRemaining;
     if (nextResult != Result::Ok) return nextResult;
@@ -143,6 +146,7 @@ void test_sends_all_records_and_persists_watermark() {
   fresh.loadState();
   TEST_ASSERT_EQUAL_UINT32(40, fresh.lastAckedSequence());
 }
+
 void test_resume_without_duplicates_after_interruption() {
   wipeSyncData();
   Rig rig;
@@ -199,6 +203,7 @@ void test_watermark_loss_resends_idempotently() {
   TEST_ASSERT_TRUE(resentFirstBatch);
   TEST_ASSERT_EQUAL_UINT32(5, rig.manager.lastAckedSequence());
 }
+
 void test_auth_failure_schedules_long_backoff_without_data_loss() {
   wipeSyncData();
   Rig rig;
@@ -271,6 +276,50 @@ void test_network_lost_gates_syncing() {
   TEST_ASSERT_TRUE(rig.transport.calls.size() > calls);
 }
 
+void test_device_secret_signs_batches() {
+  wipeSyncData();
+  Rig rig;
+  rig.manager.setDeviceSecret("device-secret-01");
+  for (uint32_t i = 1; i <= 3; ++i)
+    rig.store.append(makeM(i, 1787356800000ULL + i * 60000ULL));
+
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+
+  TEST_ASSERT_FALSE(rig.transport.calls.empty());
+  const std::string& body = rig.transport.calls.front();
+  const std::string& sig = rig.transport.signatures.front();
+  TEST_ASSERT_TRUE(sig.size() == 64);
+
+  uint8_t key[32];
+  const char* asciiSecret = "device-secret-01";
+  cauce::sha256(reinterpret_cast<const uint8_t*>(asciiSecret),
+                static_cast<size_t>(strlen(asciiSecret)), key);
+  uint8_t mac[32];
+  cauce::hmacSha256(key, sizeof(key),
+                    reinterpret_cast<const uint8_t*>(body.data()),
+                    body.size(), mac);
+  char expected[65];
+  static const char* hexDigits = "0123456789abcdef";
+  for (int i = 0; i < 32; ++i) {
+    expected[i * 2] = hexDigits[(mac[i] >> 4) & 0xF];
+    expected[i * 2 + 1] = hexDigits[mac[i] & 0xF];
+  }
+  expected[64] = 0;
+  TEST_ASSERT_EQUAL_STRING(expected, sig.c_str());
+}
+
+void test_no_device_secret_sends_unsigned() {
+  wipeSyncData();
+  Rig rig;
+  for (uint32_t i = 1; i <= 2; ++i)
+    rig.store.append(makeM(i, 1787356800000ULL + i * 60000ULL));
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_FALSE(rig.transport.calls.empty());
+  TEST_ASSERT_TRUE(rig.transport.signatures.front().empty());
+}
+
 void registerSyncTests() {
   UNITY_BEGIN();
   RUN_TEST(test_idle_when_disconnected_or_empty);
@@ -281,5 +330,7 @@ void registerSyncTests() {
   RUN_TEST(test_server_rejection_halts_sync);
   RUN_TEST(test_payload_contains_protocol_and_node);
   RUN_TEST(test_network_lost_gates_syncing);
+  RUN_TEST(test_device_secret_signs_batches);
+  RUN_TEST(test_no_device_secret_sends_unsigned);
   UNITY_END();
 }

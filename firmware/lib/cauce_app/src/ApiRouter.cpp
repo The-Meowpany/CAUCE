@@ -442,13 +442,13 @@ ApiRouter::Response ApiRouter::handle(const Request& request, char* out,
     const size_t qlen = std::strlen(qmark + 1);
     copyString(queryBuf, sizeof(queryBuf), qmark + 1);
     query = queryBuf;
-    static char pathOnly[96];
-    const size_t plen = static_cast<size_t>(qmark - path) < sizeof(pathOnly) - 1
+    const size_t plen = static_cast<size_t>(qmark - path) <
+                                sizeof(routePathBuf_) - 1
                             ? static_cast<size_t>(qmark - path)
-                            : sizeof(pathOnly) - 1;
-    std::memcpy(pathOnly, path, plen);
-    pathOnly[plen] = '\0';
-    path = pathOnly;
+                            : sizeof(routePathBuf_) - 1;
+    std::memcpy(routePathBuf_, path, plen);
+    routePathBuf_[plen] = '\0';
+    path = routePathBuf_;
   }
 
   const bool isGet = std::strcmp(request.method ? request.method : "GET",

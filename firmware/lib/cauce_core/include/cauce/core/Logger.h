@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 
+#include <cstddef>
 #include <cstdarg>
 #include <cstdint>
 
@@ -19,6 +20,8 @@ class Logger {
 
   void eventf(LogLevel level, const char* event, const char* detailsFormat, ...);
   void event(LogLevel level, const char* event);
+
+  static constexpr size_t kMaxLineLength = 512;
 
  private:
   ILogSink& sink_;

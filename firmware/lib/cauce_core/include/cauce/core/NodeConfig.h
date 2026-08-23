@@ -26,6 +26,7 @@ struct NodeConfig {
   char wifiSsid[33]{};
   char wifiPassword[65]{};
   char ntpServer[48]{"pool.ntp.org"};
+  char syncDeviceKey[65]{};
   uint32_t storageMaxBytes{512u * 1024u};
   uint32_t segmentMaxBytes{64u * 1024u};
   char adminTokenSha256[65]{};

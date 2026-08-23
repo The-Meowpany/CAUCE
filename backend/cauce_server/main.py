@@ -26,7 +26,12 @@ app = FastAPI(
 
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"status": "ok", "service": "cauce-central"}
+    from .db import query
+    nodes = query("SELECT COUNT(*) AS c FROM nodes")
+    measurements = query("SELECT COUNT(*) AS c FROM measurements")
+    return {"status": "ok", "service": "cauce-central",
+            "nodes": nodes[0]["c"] if nodes else 0,
+            "measurements": measurements[0]["c"] if measurements else 0}
 
 
 app.include_router(router)

@@ -137,6 +137,37 @@ void sha256Hex(const char* input, char outHex[65]) {
   outHex[64] = '\0';
 }
 
+void hmacSha256(const uint8_t* key, size_t keyLen,
+                const uint8_t* data, size_t dataLen,
+                uint8_t outDigest[32]) {
+  uint8_t kBlock[64];
+  std::memset(kBlock, 0, sizeof(kBlock));
+  if (keyLen > 64) {
+    sha256(key, keyLen, kBlock);
+  } else {
+    std::memcpy(kBlock, key, keyLen);
+  }
+
+  uint8_t ipad[64];
+  uint8_t opad[64];
+  for (int i = 0; i < 64; ++i) {
+    ipad[i] = static_cast<uint8_t>(kBlock[i] ^ 0x36);
+    opad[i] = static_cast<uint8_t>(kBlock[i] ^ 0x5C);
+  }
+
+  Sha256Ctx ctx;
+  sha256Begin(&ctx);
+  sha256Append(&ctx, ipad, sizeof(ipad));
+  sha256Append(&ctx, data, dataLen);
+  uint8_t inner[32];
+  sha256Finish(&ctx, inner);
+
+  sha256Begin(&ctx);
+  sha256Append(&ctx, opad, sizeof(opad));
+  sha256Append(&ctx, inner, sizeof(inner));
+  sha256Finish(&ctx, outDigest);
+}
+
 bool secureEquals(const char* a, const char* b) {
   volatile uint8_t diff = 0;
   size_t i = 0;

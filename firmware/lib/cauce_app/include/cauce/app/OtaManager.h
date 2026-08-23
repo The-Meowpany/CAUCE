@@ -5,6 +5,7 @@
 
 #include "cauce/app/OtaInterfaces.h"
 #include "cauce/core/Logger.h"
+#include "cauce/core/Sha256Stream.h"
 #include "cauce/hal/IClock.h"
 
 namespace cauce::app {
@@ -28,7 +29,7 @@ class OtaManager {
  public:
   struct Tuning {
     uint32_t checkIntervalS{21600};
-    size_t chunkSize{1024};
+    size_t chunkSize{512};
     uint32_t minFreeHeapBytes{40960};
     float minBatteryV{0.0f};
   };
@@ -44,19 +45,24 @@ class OtaManager {
   void setSafetyHooks(FreeHeapFn freeHeap, BatteryFn battery);
   void setMinFreeHeapBytes(uint32_t minBytes);
   void setMinBatteryV(float minVolts);
+  void setManifestKey(const uint8_t key[32]);
   void setRebootHook(RebootFn reboot);
   void setInterval(uint32_t checkIntervalS);
   void tick();
 
   OtaState state() const { return state_; }
   const char* pendingVersion() const { return pendingVersion_; }
+  size_t downloadProgress() const { return downloadReceived_; }
 
  private:
   bool safetyOk() const;
   void runCheck();
-  bool runDownload(const OtaRelease& release);
-  OtaRelease pendingRelease_{};
+  bool startDownload();
+  bool pumpChunk();
+  bool finishDownload();
+  void abortDownload(const char* event, OtaState failState, LogLevel level);
   void scheduleFailure(OtaState failureState, const char* event, LogLevel level);
+  void resetDownload();
 
   IManifestSource& catalog_;
   IFirmwareReader& reader_;
@@ -72,6 +78,13 @@ class OtaManager {
   FreeHeapFn freeHeap_{nullptr};
   BatteryFn battery_{nullptr};
   RebootFn reboot_{nullptr};
+  uint8_t manifestKey_[32];
+  bool hasManifestKey_{false};
+
+  Sha256Ctx shaCtx_{};
+  size_t downloadReceived_{0};
+  bool readerOpened_{false};
+  OtaRelease pendingRelease_{};
 };
 
 }  // namespace cauce::app
