@@ -1,0 +1,198 @@
+#include "cauce/app/SyncManager.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "cauce/core/DataExporter.h"
+#include "cauce/core/Types.h"
+
+namespace cauce::app {
+
+SyncManager::SyncManager(IStorageRepository& store,
+                         hal::ISyncTransport& transport, hal::IClock& clock,
+                         Logger& logger, hal::IFileSystem& fs,
+                         const char* statePath)
+    : store_(store),
+      transport_(transport),
+      clock_(clock),
+      logger_(logger),
+      fs_(fs) {
+  copyString(statePath_, sizeof(statePath_), statePath);
+}
+
+void SyncManager::setNodeId(const char* nodeId) {
+  copyString(nodeId_, sizeof(nodeId_), nodeId);
+}
+
+void SyncManager::configureEndpoint(const char* serverUrl,
+                                    const char* bearerToken) {
+  copyString(serverUrl_, sizeof(serverUrl_), serverUrl ? serverUrl : "");
+  copyString(bearerToken_, sizeof(bearerToken_), bearerToken ? bearerToken : "");
+  endpointConfigured_ = serverUrl_[0] != '\0';
+  if (endpointConfigured_) transport_.configure(serverUrl_, bearerToken_);
+}
+
+void SyncManager::loadState() {
+  loadWatermarkLocked();
+  logger_.eventf(LogLevel::Info, "SYNC_STATE_LOADED", "node=%s last_acked=%lu",
+                 nodeId_, static_cast<unsigned long>(lastAckedSeq_));
+}
+
+void SyncManager::loadWatermarkLocked() {
+  lastAckedSeq_ = 0;
+  if (!fs_.exists(statePath_)) return;
+  const size_t size = fs_.fileSize(statePath_);
+  if (size == 0 || size > 64) return;
+  char buf[65];
+  if (!fs_.readRange(statePath_, 0, reinterpret_cast<uint8_t*>(buf), size))
+    return;
+  buf[size] = '\0';
+  const char* key = "last_acked_seq=";
+  const char* found = std::strstr(buf, key);
+  if (!found) return;
+  lastAckedSeq_ = static_cast<uint32_t>(std::strtoul(found + std::strlen(key),
+                                                     nullptr, 10));
+}
+
+bool SyncManager::saveWatermark() {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "last_acked_seq=%lu\n",
+                static_cast<unsigned long>(lastAckedSeq_));
+  return fs_.writeWholeFile(statePath_,
+                            reinterpret_cast<const uint8_t*>(buf),
+                            std::strlen(buf));
+}
+
+void SyncManager::onNetworkConnected() {
+  if (!connected_) {
+    connected_ = true;
+    failures_ = 0;
+    nextAttemptMonotonicMs_ = clock_.monotonicMs();
+    logger_.event(LogLevel::Info, "SYNC_LINK_UP");
+  }
+}
+
+void SyncManager::onNetworkLost() {
+  if (connected_) {
+    connected_ = false;
+    logger_.event(LogLevel::Warn, "SYNC_LINK_DOWN");
+  }
+}
+
+void SyncManager::scheduleRetry(bool authFailure) {
+  ++failures_;
+  uint32_t backoffS = authFailure
+                          ? tuning_.authBackoffS
+                          : tuning_.backoffBaseS << (failures_ - 1 > 4 ? 4
+                                                                        : failures_ - 1);
+  if (backoffS > tuning_.backoffMaxS) backoffS = tuning_.backoffMaxS;
+  nextAttemptMonotonicMs_ =
+      clock_.monotonicMs() + static_cast<uint64_t>(backoffS) * 1000ULL;
+  logger_.eventf(LogLevel::Warn, "SYNC_RETRY_SCHEDULED",
+                 "failures=%lu backoff_s=%lu",
+                 static_cast<unsigned long>(failures_),
+                 static_cast<unsigned long>(backoffS));
+}
+
+bool SyncManager::syncOneBatch() {
+  Measurement batch[kRecordsPerBatch];
+  QueryStats stats{};
+  store_.queryAfterSequence(lastAckedSeq_, batch, kRecordsPerBatch, stats);
+  if (stats.returned == 0) {
+    nextAttemptMonotonicMs_ =
+        clock_.monotonicMs() + static_cast<uint64_t>(tuning_.intervalS) * 1000ULL;
+    return true;
+  }
+
+  char payload[4096];
+  size_t used = 0;
+  used += static_cast<size_t>(std::snprintf(
+      payload + used, sizeof(payload) - used,
+      "{\"protocol_version\":%u,\"node_id\":\"%s\",\"batch_size\":",
+      Versions::kProtocol, nodeId_));
+  const size_t batchSizePos = used;
+  std::memcpy(payload + used, "00000", 5);
+  used += 5;
+  used += static_cast<size_t>(
+      std::snprintf(payload + used, sizeof(payload) - used,
+                    ",\"measurements\":["));
+
+  uint32_t emitted = 0;
+  uint32_t maxSentSeq = lastAckedSeq_;
+  for (size_t i = 0; i < stats.returned; ++i) {
+    char record[384];
+    const size_t recordLen =
+        measurementToJson(batch[i], record, sizeof(record));
+    const size_t needed = recordLen + (emitted ? 1 : 0) + 3;
+    if (recordLen == 0 || used + needed > sizeof(payload) - 1) break;
+    if (emitted > 0) payload[used++] = ',';
+    std::memcpy(payload + used, record, recordLen);
+    used += recordLen;
+    if (batch[i].sequence > maxSentSeq) maxSentSeq = batch[i].sequence;
+    ++emitted;
+  }
+  used += static_cast<size_t>(
+      std::snprintf(payload + used, sizeof(payload) - used, "]}"));
+
+  char countText[8];
+  std::snprintf(countText, sizeof(countText), "%5u",
+                static_cast<unsigned>(emitted));
+  std::memcpy(payload + batchSizePos, countText, 5);
+
+  logger_.eventf(LogLevel::Info, "SYNC_BATCH_SENDING",
+                 "records=%u after_seq=%lu bytes=%zu", emitted,
+                 static_cast<unsigned long>(lastAckedSeq_), used);
+
+  uint32_t ackedSeq = lastAckedSeq_;
+  const auto result =
+      transport_.postBatch(payload, used, tuning_.requestTimeoutMs, ackedSeq);
+
+  switch (result) {
+    case hal::ISyncTransport::Result::Ok: {
+      lastAckedSeq_ = ackedSeq > maxSentSeq ? maxSentSeq : ackedSeq;
+      saveWatermark();
+      failures_ = 0;
+      lastSyncUtcMs_ = clock_.utcMs();
+      nextAttemptMonotonicMs_ =
+          clock_.monotonicMs() +
+          (stats.matched > stats.returned
+               ? 0ULL
+               : static_cast<uint64_t>(tuning_.intervalS) * 1000ULL);
+      logger_.eventf(LogLevel::Info, "SYNC_BATCH_ACKED",
+                     "acked_seq=%lu pending_more=%s",
+                     static_cast<unsigned long>(lastAckedSeq_),
+                     stats.matched > stats.returned ? "yes" : "no");
+      return true;
+    }
+    case hal::ISyncTransport::Result::AuthFailed:
+      logger_.event(LogLevel::Error, "SYNC_AUTH_FAILED");
+      scheduleRetry(true);
+      return false;
+    case hal::ISyncTransport::Result::Rejected:
+      halted_ = true;
+      logger_.eventf(LogLevel::Error, "SYNC_REJECTED_HALTED",
+                     "after_seq=%lu", static_cast<unsigned long>(lastAckedSeq_));
+      return false;
+    default:
+      scheduleRetry(false);
+      return false;
+  }
+}
+
+void SyncManager::tick() {
+  if (!connected_ || halted_) return;
+  if (!endpointConfigured_) return;
+  const uint32_t now = clock_.monotonicMs();
+  if (now < nextAttemptMonotonicMs_) return;
+
+  for (uint32_t drain = 0; drain < kRecordsPerBatch; ++drain) {
+    if (!syncOneBatch()) return;
+    Measurement probe[1];
+    QueryStats probeStats{};
+    store_.queryAfterSequence(lastAckedSeq_, probe, 1, probeStats);
+    if (probeStats.matched == 0) break;
+  }
+}
+
+}  // namespace cauce::app

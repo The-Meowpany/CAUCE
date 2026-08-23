@@ -1,0 +1,16 @@
+services:
+  cauce-central:
+    build: ../backend
+    ports:
+      - "8000:8000"
+    environment:
+      CAUCE_DB_PATH: /data/cauce.sqlite
+      CAUCE_SYNC_TOKEN: ${CAUCE_SYNC_TOKEN:-}
+      CAUCE_API_TOKEN: ${CAUCE_API_TOKEN:-}
+      CAUCE_RATE_LIMIT: "120"
+    volumes:
+      - cauce-data:/data
+    restart: unless-stopped
+
+volumes:
+  cauce-data:

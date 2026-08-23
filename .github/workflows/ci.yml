@@ -1,0 +1,85 @@
+name: cauce-ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  firmware-native-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Unit tests (host)
+        run: pio test -e native
+        working-directory: firmware
+
+  firmware-esp32-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - name: Build ESP32
+        run: pio run -e esp32dev
+        working-directory: firmware
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Pytest
+        run: python -m pytest tests -q
+
+  integration-e2e:
+    runs-on: ubuntu-latest
+    needs: [firmware-native-tests, backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio
+      - run: pip install fastapi "uvicorn[standard]" httpx pytest
+      - name: Build integration binary
+        run: pio run -e integration
+        working-directory: firmware
+      - name: Run E2E (node C++ -> FastAPI -> SQLite)
+        shell: bash
+        working-directory: backend
+        run: |
+          DB="$GITHUB_WORKSPACE/e2e.sqlite"
+          export CAUCE_DB_PATH="$DB"
+          python -m uvicorn cauce_server.main:app --port 8766 &
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8766/healthz && break
+            sleep 0.5
+          done
+          "$GITHUB_WORKSPACE/firmware/.pio/build/integration/program" \
+            http://127.0.0.1:8766/v1/sync 50 | tee e2e.log
+          grep -c "^E2E_OK" e2e.log | grep -qx 3
+          python - <<'PY'
+          import os, sqlite3
+          conn = sqlite3.connect(os.environ["CAUCE_DB_PATH"])
+          total = conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0]
+          distinct = conn.execute(
+              "SELECT COUNT(DISTINCT sequence) FROM measurements"
+          ).fetchone()[0]
+          assert total == distinct == 55, (total, distinct)
+          print("E2E_OK rows=55 distinct=55")
+          PY
