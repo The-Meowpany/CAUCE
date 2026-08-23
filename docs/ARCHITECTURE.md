@@ -1,92 +1,93 @@
-# Arquitectura CAUCE
+# CAUCE Architecture
 
-## Principios
+## Principles
 
-1. **El dominio nunca toca hardware.** Toda dependencia pasa por interfaces
-   en `cauce_hal`. El mismo binario de dominio corre en ESP32 y en el host.
-2. **Offline-first.** Nada del núcleo requiere red. La sincronización futura
-   es una extensión, no un requisito.
-3. **Fail-safe por diseño.** Los datos inválidos se almacenan marcados, no se
-   descartan silenciosamente. La corrupción se aísla, no propaga.
-4. **Sin delays bloqueantes.** Todo el flujo es `tick()`-driven; listo para
-   FreeRTOS más adelante sin reescribir el dominio.
+1. **The domain never touches hardware.** All dependencies go through
+   `cauce_hal` interfaces. The same domain code runs on ESP32 and host.
+2. **Offline-first.** Nothing in the core requires connectivity; sync is an
+   extension, not a requirement.
+3. **Fail-safe by design.** Invalid data is stored flagged, never silently
+   dropped. Corruption is isolated, never propagated.
+4. **No blocking delays.** Everything is `tick()`-driven; moving to FreeRTOS
+   later is mechanical.
 
-## Capas
+## Layers
 
 ```
 ┌─────────────────────────────────────────────┐
-│ main.cpp (composition root)                 │  cablea implementaciones
+│ main.cpp (composition root)                 │  wires implementations
 ├─────────────────────────────────────────────┤
-│ cauce_app                                   │  scheduler, máquina de estados
+│ cauce_app                                   │  scheduler, network FSM,
+│                                             │  API router, sync, OTA
 ├─────────────────────────────────────────────┤
-│ cauce_drivers                               │  ISensorDriver → BME280 / Simulado
+│ cauce_drivers                               │  ISensorDriver → BME280/Simulated
 ├─────────────────────────────────────────────┤
-│ cauce_core                                  │  dominio puro: medición, validación,
-│                                             │  storage, config, logging, seguridad
+│ cauce_core                                  │  pure domain: measurement,
+│                                             │  validation, storage, config,
+│                                             │  logging, security, metrics
 ├─────────────────────────────────────────────┤
-│ cauce_hal (interfaces)                      │  IClock · II2cBus · IFileSystem
+│ cauce_hal (interfaces)                      │  IClock · II2cBus · IFileSystem ·
+│                                             │  INetworkController · ISyncTransport
 ├─────────────────────────────────────────────┤
-│ Implementaciones: Native*/Manual*/Memory*   │  Esp32Clock/WireBus/LittleFs
-│ (host)                                      │  (ESP32/Arduino)
+│ Host impls: Native*/Manual*/Memory*         │  ESP32: Esp32Clock/WireBus/
+│ (PC)                                        │  LittleFs (+ radio pending)
 └─────────────────────────────────────────────┘
 ```
 
-Dependencias permitidas: solo hacia abajo. `cauce_core` no incluye nada de
-HAL salvo las interfaces; los tests usan dobles (`ManualClock`,
-`ScriptedI2cBus`, `MemoryFileSystem`) sin tocar hardware.
+Dependencies point downward only. Tests use doubles (`ManualClock`,
+`ScriptedI2cBus`, `MemoryFileSystem`, scripted network/sync fakes).
 
-## Flujo de una medición
+## Measurement flow
 
 ```
 tick() [scheduler]
-  └─ sensor->read(var)                    # driver específico
-       └─ ValidationEngine::evaluate()    # calidad + bits de razón
-            └─ LogStorageRepository::append()   # frame CRC32, append-only
+  └─ sensor->read(var)                    # concrete driver
+       └─ ValidationEngine::evaluate()    # quality + reason bits
+            └─ LogStorageRepository::append()   # CRC32 frame, append-only
                  └─ Logger::eventf("MEAS_STORED", ...)
 ```
 
-Cada etapa puede fallar sin detener el ciclo: read fallido → contador +
-placeholder MISSING tras 2 fallos consecutivos; storage caído → contador y
-el siguiente tick reintenta.
+Every stage may fail without stopping the cycle: failed read → counter +
+MISSING placeholder after 2 consecutive misses; storage down → counter, next
+tick retries.
 
-Consumo posterior de los datos:
+Downstream consumers:
 
 ```
-ChunkedExporter (CSV/JSON)  ·  Metrics (stats/agregación/exposición)
+ChunkedExporter (CSV/JSON)  ·  Metrics (stats/aggregation/exposure)
 ```
 
-ambos leen por paginación desde `IStorageRepository` sin duplicar estado.
+Both paginate from `IStorageRepository`; no duplicated state.
 
-## Máquina de estados
+## State machines
 
-Implementada hoy: `BOOT → SENSOR_DISCOVERY → READY ⇄ MEASURING ⇄ STORING`.
-Red (lógica verificada con controlador simulado): `OFFLINE ↔
-WAITING_RETRY ↔ CONNECTING → CONNECTED ⇄ DEGRADED`, con fallback a
-`AP_FALLBACK` tras N intentos fallidos y backoff exponencial 5s→300s.
-Pendientes de hardware: integración del radio real, `SERVING`, `SYNCING`.
+- **Node** (implemented): `BOOT → SENSOR_DISCOVERY → READY ⇄ MEASURING ⇄ STORING`.
+- **Network** (logic verified against a scripted controller): `OFFLINE ↔
+  WAITING_RETRY ↔ CONNECTING → CONNECTED ⇄ DEGRADED`, AP fallback after N
+  failures, exponential backoff 5s→300s.
+- **OTA**: IDLE → CHECKING → DOWNLOADING → REBOOT_PENDING with three failure
+  states; alternate-partition anti-brick rules (see docs/OTA.md).
 
-## Almacenamiento
+## Storage
 
-- Segmentos `data/meas_NNNNNN.clog`, append-only.
-- Frame: `[0xCA][0x01][len u16][payload 60 B][crc32 u32]` = 72 B.
-- Apertura escanea todos los segmentos: reconstruye contadores, última
-  secuencia y último registro; la cola parcial corrupta sella el segmento.
-- Rotación por tamaño; retención borra el segmento más viejo conservando
-  siempre uno.
+- Segments `data/meas_NNNNNN.clog`, append-only.
+- Frame: `[0xCA][0x01][len u16][60B payload][crc32]` = 72 B.
+- Open scans all segments: rebuilds counters, last sequence, latest record;
+  a partial corrupt tail seals the segment (writes roll to a new one).
+- Size-based rotation; retention removes oldest segments keeping ≥1.
 
-## Configuración
+## Configuration
 
-KV plano versionado (`schema_version=1`), validación estricta con lista de
-errores, backup automático del archivo previo al guardar y cadena de carga
-`principal → .bak → defaults`. Los tokens administrativos se guardan solo
-como SHA-256.
+Flat versioned KV (`schema_version=1`), strict validation with enumerated
+errors, automatic backup of the previous file before save, load chain
+`main → .bak → defaults`. Admin tokens stored only as SHA-256.
 
-## Decisiones y su rationale
+## Key decisions
 
-| Decisión | Alternativa descartada | Motivo |
+| Decision | Rejected alternative | Why |
 |---|---|---|
-| Formato binario propio con CRC | SQLite embebida | Control total del formato, tolerancia a apagón demostrable, footprint mínimo |
-| KV plano para config | JSON embebido | Cero dependencias, parseo sin heap, diffs legibles; JSON queda para la API |
-| Compensación entera Bosch + espejo float | Solo float | La entera es la referencia del fabricante; la espejo valida independencia de implementación |
-| `tick()` sin RTOS | Tareas FreeRTOS desde ya | El dominio no lo necesita; migrar luego es mecánico |
-| Tests Unity en un binario nativo | Tests on-target | Ciclo de feedback en segundos, CI trivial |
+| Own binary format with CRC | Embedded SQLite | Full format control, demonstrable power-cut tolerance, minimal footprint |
+| Flat KV config | Embedded JSON | Zero dependencies, parse without heap, readable diffs; JSON reserved for APIs |
+| Bosch integer compensation + float mirror | Float only | Integer version is the vendor reference; the mirror validates transcription |
+| `tick()` without RTOS | FreeRTOS tasks now | Domain doesn't need it; migrating later is mechanical |
+| Unity single binary on host | On-target tests | Seconds-level feedback, trivial CI |

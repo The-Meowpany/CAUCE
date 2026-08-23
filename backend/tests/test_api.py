@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 os.environ["CAUCE_DB_PATH"] = "./data/test_backend.sqlite"
 
-from cauce_server.main import app  # noqa: E402
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
+from cauce_server.main import app  # noqa: E402
 
 
 def make_record(seq: int, ts_ms: int, value: float = 21.0) -> dict:
@@ -191,7 +190,7 @@ def test_analytics_compare_two_nodes(client):
         },
     ).json()
     assert cmp["mean_difference"] == 4.0
-    assert "no causalidad" in cmp["note"]
+    assert "not causality" in cmp["note"]
     assert cmp["node_a"]["count"] == 3
 
 
@@ -300,7 +299,7 @@ def test_insufficient_sample_flagged_in_before_after(client):
                 "node_id": "CAUCE-001", "variable": "air_temperature"},
     ).json()
     assert res["sufficient_sample"] is False
-    assert "INSUFICIENTES" in res["note"]
+    assert "INSUFFICIENT SAMPLES" in res["note"]
 
 
 def test_dashboard_served_html(client):
@@ -385,3 +384,30 @@ def test_period_compare_same_node(client):
                 "b_start": 200, "b_end": 300},
     )
     assert bad.status_code == 422
+
+def test_rate_limiter_memory_is_bounded(client, monkeypatch):
+    from cauce_server import api as api_module
+    monkeypatch.setattr(settings, "rate_limit_per_minute", 5000)
+    api_module._RATE.clear()
+    for i in range(6000):
+        api_module._RATE[f"10.{i // 256}.{i % 256}.1"] = [0.0]
+
+    r = client.get("/v1/nodes")
+    assert r.status_code == 200
+    assert len(api_module._RATE) <= api_module._MAX_TRACKED_CLIENTS
+    api_module._RATE.clear()
+
+def test_dashboard_localization_via_accept_language(client):
+    client.post("/v1/sync", json=sync_payload([make_record(1, BASE_TS, 21.5)]))
+
+    es = client.get("/", headers={"Accept-Language": "es-UY,es;q=0.9"})
+    assert "Red comunitaria" in es.text and ">Nodo<" in es.text
+
+    en = client.get("/", headers={"Accept-Language": "en"})
+    assert "Community microstation" in en.text and ">Node<" in en.text
+
+    pt = client.get("/", headers={"Accept-Language": "pt-BR,pt;q=0.8"})
+    assert "Rede comunit\u00e1ria" in pt.text and ">N\u00f3<" in pt.text
+
+    default = client.get("/")
+    assert "Red comunitaria" in default.text

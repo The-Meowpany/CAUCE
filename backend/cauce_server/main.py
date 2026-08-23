@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="CAUCE Central",
     version="0.1.0",
-    description="Backend multi-nodo para microestaciones climáticas CAUCE",
+    description="Multi-node backend for CAUCE microstations",
     lifespan=lifespan,
 )
 

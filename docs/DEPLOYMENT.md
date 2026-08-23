@@ -1,26 +1,26 @@
-# Despliegue CAUCE
+# CAUCE Deployment
 
-Guía consolidada para pasar de repositorio limpio a red operativa
-(piloto de 5–10 nodos + servidor central).
+Consolidated guide: clean repository → operating pilot (5–10 nodes +
+central server).
 
-## 0. Requisitos
+## 0. Requirements
 
-| Componente | Versión | Uso |
+| Component | Version | Purpose |
 |---|---|---|
-| Python | ≥3.10 (probado 3.12) | PlatformIO CLI + backend |
-| PlatformIO Core | ≥6.1 | build/test firmware |
-| GCC MinGW-w64 (Windows) o gcc (Linux) | ≥9 | tests y binarios nativos |
-| Docker (opcional) | — | backend en contenedor |
-| Hardware por nodo | ver docs/HARDWARE.md | ESP32 + BME280 |
+| Python | ≥3.10 (tested 3.12) | PlatformIO CLI + backend |
+| PlatformIO Core | ≥6.1 | firmware build/test |
+| GCC MinGW-w64 (Windows) / gcc (Linux) | ≥9 | native tests & binaries |
+| Docker (optional) | — | backend container |
+| Per-node hardware | see docs/HARDWARE.md | ESP32 + BME280 |
 
-## 1. Verificar el entorno desde cero
+## 1. Verify environment from zero
 
 ```powershell
 git clone <repo> && cd CAUCE
 pip install platformio
 cd firmware
-pio test -e native        # esperado: 87 succeeded
-pio run -e esp32dev       # esperado: SUCCESS
+pio test -e native        # expect 97 succeeded
+pio run -e esp32dev       # expect SUCCESS
 ```
 
 Backend:
@@ -28,91 +28,80 @@ Backend:
 ```powershell
 cd backend
 pip install -r requirements.txt
-python -m pytest tests -q # esperado: 18 passed
+python -m pytest tests -q # expect 22 passed
 ```
 
-Integración nodo↔servidor (requiere lo anterior):
+Node↔server integration:
 
 ```powershell
-.\scripts\run-e2e.ps1    # esperado: E2E PASADO: 3 fases + base de datos
+.\scripts\run-e2e.ps1    # expect E2E PASSED
 ```
 
-## 2. Servidor central
+One-command gate: `.\scripts\verify-all.ps1`.
+
+## 2. Central server
 
 ```powershell
-# Opción A: directo
+# Direct
 cd backend
 $env:CAUCE_DB_PATH = "C:\cauce\data\central.sqlite"
-$env:CAUCE_SYNC_TOKEN = "<secreto-compartido-nodos>"
+$env:CAUCE_SYNC_TOKEN = "<shared-node-secret>"
 uvicorn cauce_server.main:app --host 0.0.0.0 --port 8000
 
-# Opción B: docker
-Copy-Item deployment\docker-compose.yml .
-$env:CAUCE_SYNC_TOKEN = "<secreto>"
-docker compose up -d --build
+# Docker
+docker compose -f deployment/docker-compose.yml up -d --build
 ```
 
-Verificación: `GET http://<servidor>:8000/healthz` → `{"status":"ok"}`;
-el dashboard central queda en `/`.
+Check `GET http://<server>:8000/healthz`; central dashboard at `/`.
 
-## 3. Preparar cada nodo
+## 3. Prepare each node
 
-1. **Identidad**: elegir `node_id` único (`CAUCE-001`, `CAUCE-002`, …).
-2. **Configuración**: copiar `configs/node.example.conf`, completar
-   identidad, ubicación (`latitude/longitude/elevation_m`),
-   contexto (`land_cover`, `shade_condition`) e `sampling_interval_s`.
-   El token del backend de sync NO va en este archivo (ver paso 5).
-3. **Hardware**: armar según docs/HARDWARE.md (BME280 en I2C 21/22,
-   dirección 0x76, radiación screen obligatoria).
-4. **Compilar y flashear**:
+1. **Identity**: unique `node_id` (`CAUCE-001`, …).
+2. **Config**: copy `configs/node.example.conf`, fill identity, location,
+   context, sampling interval.
+3. **Hardware**: assemble per docs/HARDWARE.md (BME280 on I2C 21/22, addr
+   0x76, radiation screen mandatory).
+4. **Flash**:
    ```powershell
-   cd firmware
    pio run -e esp32dev -t upload
-   pio device monitor            # observar logs estructurados de arranque
+   pio device monitor      # structured boot logs
    ```
-5. **Provisionar secretos**: Wi-Fi y token de sync se cargan por la UI
-   local (`http://<ip-del-nodo>/` → Configuración) usando el token admin
-   del nodo; el hash queda en su configuración, nunca el secreto.
+5. **Provision secrets**: Wi-Fi and sync token via the local UI
+   (`http://<node-ip>/` → Configuration) using the node's admin token;
+   only the hash is stored on flash.
 
-## 4. Puesta en marcha y validación de campo
+## 4. Field validation
 
-- Conectar el nodo; desde el dashboard local verificar:
-  `SENSOR_DISCOVERED` en logs, tarjetas con calidad `VALID`,
-  gráfico poblándose.
-- Registrar el sitio y el nodo en el central:
-  ```http
-  POST /v1/sites {"site_id":"...","name":"..."}
-  PUT  /v1/nodes/CAUCE-00X/site {"site_id":"..."}
-  ```
-- Confirmar llegada de datos: `GET /v1/nodes/CAUCE-00X/measurements?limit=5`
-  y fila visible en el dashboard central.
-- Dejar corriendo ≥48 h co-locados si se busca comparabilidad entre nodos
+- Node dashboard shows `SENSOR_DISCOVERED`, quality `VALID` cards, chart
+  filling in.
+- Register site + assignment on the server (`POST /v1/sites`,
+  `PUT /v1/nodes/{id}/site`).
+- Confirm ingestion: `GET /v1/nodes/{id}/measurements?limit=5`.
+- Keep nodes co-located ≥48h for cross-node comparability
   (docs/CALIBRATION.md).
 
-## 5. Evaluación antes/después de intervenciones
+## 5. Intervention evaluation
 
 ```http
-POST /v1/interventions {"site_id":"...","kind":"sombra",
+POST /v1/interventions {"site_id":"...","kind":"shade",
                         "start_utc_ms":1787356800000}
 GET  /v1/analytics/before-after?intervention_id=1&node_id=CAUCE-001&variable=air_temperature
 ```
 
-El endpoint marca `sufficient_sample:false` hasta que haya ≥30 muestras
-válidas por período — no interpretar antes de ese umbral.
+Do not interpret before `sufficient_sample:true`.
 
-## 6. Mantenimiento
+## 6. Maintenance
 
-- Logs del nodo por serie USB con formato estructurado (grep-able).
-- Salud remota: `GET /v1/nodes/{id}` y panel central.
-- Rotación de datos del nodo automática (retención configurable);
-  el histórico permanente vive en el central.
-- Actualizaciones de firmware: **pendiente OTA** — hoy requiere acceso
-  físico (USB). No desplegar flotas grandes sin plan de actualización.
+- Structured USB serial logs (grep-friendly).
+- Remote health via `/v1/nodes/{id}` and the central panel.
+- Node data rotation automatic; permanent history lives centrally.
+- Firmware updates: **OTA decision layer shipped; actual flashing pending
+  hardware** — today updates need physical access.
 
-## 7. Checklist final de aceptación del piloto
+## 7. Pilot acceptance checklist
 
-- [ ] `pio test -e native` verde en estación de trabajo
-- [ ] Backend levantado con token y rate-limit configurados
-- [ ] `run-e2e.ps1` verde tras cualquier cambio de protocolo
-- [ ] Cada nodo: identificado, geolocalizado, con calidad VALID fluyendo
-      al central, y metadata de instalación documentada
+- [ ] `pio test -e native` green
+- [ ] Backend up with token + rate limit configured
+- [ ] `run-e2e.ps1` green after any protocol change
+- [ ] Every node: identified, geo-located, VALID quality flowing to the
+      center, installation metadata documented

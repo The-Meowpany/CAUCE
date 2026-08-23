@@ -49,33 +49,70 @@ footer{text-align:center;color:var(--mut);font-size:.75rem;padding:1.2rem 0}
 <section class="box">
 <canvas id="chart" width="720" height="240"></canvas>
 <nav id="ranges">
-<button data-h="1">1h</button><button data-h="6" class="on">6h</button><button data-h="24">24h</button><button data-h="168">7d</button>
+<button data-h="1" data-i18n="r1h">1h</button><button data-h="6" class="on" data-i18n="r6h">6h</button><button data-h="24" data-i18n="r24h">24h</button><button data-h="168" data-i18n="r7d">7d</button>
 <span style="flex:1"></span>
-<button id="sT" class="on">T&deg;</button><button id="sH">HR%</button>
+<button id="sT" class="on" data-i18n="seriesT">T&deg;</button><button id="sH" data-i18n="seriesH">HR%</button>
 </nav>
 <div id="chartmsg" style="color:var(--mut);font-size:.8rem"></div>
 </section>
 <section class="box" style="display:flex;gap:.6rem;flex-wrap:wrap">
-<a class="btn" id="dlcsv">Exportar CSV</a><a class="btn" id="dljson">Exportar JSON</a>
+<a class="btn" id="dlcsv" data-i18n="exportCsv">Exportar CSV</a><a class="btn" id="dljson" data-i18n="exportJson">Exportar JSON</a>
 <a class="btn" href="/api/v1/health" target="_blank">/health</a>
 </section>
-<details><summary>Salud del sistema</summary><pre id="health">-</pre></details>
-<details><summary>Configuraci&oacute;n (admin)</summary>
+<details><summary data-i18n="healthTitle">Salud del sistema</summary><pre id="health">-</pre></details>
+<details><summary data-i18n="configTitle">Configuraci&oacute;n (admin)</summary>
 <form id="cfg">
-<label>Intervalo de medici&oacute;n (segundos)</label>
+<label data-i18n="cfgInterval">Intervalo de medici&oacute;n (segundos)</label>
 <input name="sampling_interval_s" type="number" min="10" max="3600">
-<label>Token de administraci&oacute;n</label>
+<label data-i18n="cfgToken">Token de administraci&oacute;n</label>
 <input name="__token" type="password" autocomplete="off">
 <label>&nbsp;</label>
-<button type="submit">Aplicar</button><span id="cfgmsg"></span>
+<button type="submit" data-i18n="cfgApply">Aplicar</button><span id="cfgmsg"></span>
 </form>
 </details>
-<footer id="lastupd">CAUCE &middot; monitoreo comunitario microclim&aacute;tico</footer>
+<footer id="lastupd"><span data-i18n="footer">CAUCE &middot; monitoreo comunitario microclim&aacute;tico</span> <button id="langEs" style="margin-left:.6rem">ES</button><button id="langEn">EN</button></footer>
 </main>
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const VAR_LABEL={air_temperature:"Temperatura",relative_humidity:"Humedad",pressure:"Presi\u00f3n",illuminance:"Luz",battery_voltage:"Bater\u00eda"};
+const I18N={
+ es:{r1h:"1h",r6h:"6h",r24h:"24h",r7d:"7d",seriesT:"T\u00b0",seriesH:"HR%",
+     exportCsv:"Exportar CSV",exportJson:"Exportar JSON",
+     healthTitle:"Salud del sistema",configTitle:"Configuraci\u00f3n (admin)",
+     cfgInterval:"Intervalo de medici\u00f3n (segundos)",cfgToken:"Token de administraci\u00f3n",
+     cfgApply:"Aplicar",footer:"CAUCE \u00b7 monitoreo comunitario microclim\u00e1tico",
+     connecting:"conectando\u2026",nodata:"sin datos",
+     cardQuality:"calidad",cardLatest:"\u00daltima medici\u00f3n",cardTimeNode:"Tiempo del nodo",
+     timeSynced:"sincronizado",timeUncertain:"incierto",noMeasurements:"sin mediciones",
+     lblTemp:"Temperatura",lblHum:"Humedad",lblPress:"Presi\u00f3n",lblLight:"Luz",lblBatt:"Bater\u00eda",
+     chartLoading:"cargando\u2026",chartNotEnough:"sin suficientes datos en el per\u00edodo",
+     chartNow:"ahora",chartTemp:"Temperatura",chartHum:"Humedad relativa",chartSamples:"muestras",
+     cfgNeedToken:"ingres\u00e1 el token",cfgNothing:"nada que aplicar",cfgApplied:"\u2713 aplicado",
+     cfgNetError:"error de red"},
+ en:{r1h:"1h",r6h:"6h",r24h:"24h",r7d:"7d",seriesT:"T\u00b0",seriesH:"RH%",
+     exportCsv:"Export CSV",exportJson:"Export JSON",
+     healthTitle:"System health",configTitle:"Configuration (admin)",
+     cfgInterval:"Measurement interval (seconds)",cfgToken:"Admin token",
+     cfgApply:"Apply",footer:"CAUCE \u00b7 community microclimate monitoring",
+     connecting:"connecting\u2026",nodata:"no data",
+     cardQuality:"quality",cardLatest:"Last measurement",cardTimeNode:"Node clock",
+     timeSynced:"synced",timeUncertain:"uncertain",noMeasurements:"no measurements",
+     lblTemp:"Temperature",lblHum:"Humidity",lblPress:"Pressure",lblLight:"Light",lblBatt:"Battery",
+     chartLoading:"loading\u2026",chartNotEnough:"not enough data in this period",
+     chartNow:"now",chartTemp:"Temperature",chartHum:"Relative humidity",chartSamples:"samples",
+     cfgNeedToken:"enter the token",cfgNothing:"nothing to apply",cfgApplied:"\u2713 applied",
+     cfgNetError:"network error"}};
+let LANG=localStorage.getItem("cauce-lang")||
+  ((navigator.language||"es").toLowerCase().startsWith("en")?"en":"es");
+function tr(k){return (I18N[LANG]&&I18N[LANG][k])||(I18N.es&&I18N.es[k])||k}
+function applyLang(){
+ document.querySelectorAll("[data-i18n]").forEach(el=>{el.innerHTML=tr(el.dataset.i18n)});
+ $("langEs").classList.toggle("on",LANG==="es");
+ $("langEn").classList.toggle("on",LANG==="en");
+ localStorage.setItem("cauce-lang",LANG);
+}
+let VAR_LABEL={};
+function rebuildLabels(){VAR_LABEL={air_temperature:tr("lblTemp"),relative_humidity:tr("lblHum"),pressure:tr("lblPress"),illuminance:tr("lblLight"),battery_voltage:tr("lblBatt")}}
 const VAR_UNIT={air_temperature:"\u00b0C",relative_humidity:"%",pressure:"hPa",illuminance:"lx",battery_voltage:"V"};
 let hours=6, series="T";
 function fmtAgo(ts){if(!ts)return"-";const s=Math.max(0,(Date.now()-ts)/1000);if(s<90)return"hace "+Math.round(s)+" s";if(s<5400)return"hace "+Math.round(s/60)+" min";if(s<172800)return"hace "+Math.round(s/3600)+" h";return"hace "+Math.round(s/86400)+" d"}
@@ -93,16 +130,16 @@ async function refreshStatus(){
   const L=status.latest;
   if(L&&L.value!==null){
     c.innerHTML+=card(VAR_LABEL[L.variable]||L.variable,L.value.toFixed(1),VAR_UNIT[L.variable]||"",L.quality);
-    c.innerHTML+=card("Calidad",L.quality,"","");
-    c.innerHTML+=card("\u00daltima medici\u00f3n",fmtAgo(L.timestamp_utc_ms),"","");
-    c.innerHTML+=card("Tiempo del nodo",status.time_valid?"sincronizado":"incierto","", "");
-  } else { c.innerHTML=card("Estado","sin mediciones","","MISSING"); }
- }catch(e){$("state").textContent="sin datos";$("state").className="pill bad"}
+    c.innerHTML+=card(tr("cardQuality"),L.quality,"","");
+    c.innerHTML+=card(tr("cardLatest"),fmtAgo(L.timestamp_utc_ms),"","");
+    c.innerHTML+=card(tr("cardTimeNode"),status.time_valid?tr("timeSynced"):tr("timeUncertain"),"","");
+  } else { c.innerHTML=card(tr("cardQuality"),tr("noMeasurements"),"","MISSING"); }
+ }catch(e){$("state").textContent=tr("nodata");$("state").className="pill bad"}
 }
 function drawChart(pts){
  const cv=$("chart"),ctx=cv.getContext("2d");
  ctx.clearRect(0,0,cv.width,cv.height);
- if(pts.length<2){$("chartmsg").textContent="sin suficientes datos en el per\u00edodo";return}
+ if(pts.length<2){$("chartmsg").textContent=tr("chartNotEnough");return}
  const xs=pts.map(p=>p.t),ys=pts.map(p=>p.v);
  let y0=Math.min.apply(null,ys),y1=Math.max.apply(null,ys);
  if(y1-y0<0.5){const m=(y1+y0)/2;y0=m-0.5;y1=m+0.5}
@@ -118,10 +155,10 @@ function drawChart(pts){
  pts.forEach((p,i)=>{i?ctx.lineTo(X(i),Y(p.v)):ctx.moveTo(X(i),Y(p.v))});
  ctx.stroke();
  const last=pts[pts.length-1];
- $("chartmsg").textContent=(series==="T"?"Temperatura":"Humedad relativa")+" \u00b7 "+pts.length+" muestras \u00b7 ahora "+last.v.toFixed(1)+(series==="T"?" \u00b0C":" %");
+ $("chartmsg").textContent=(series==="T"?tr("chartTemp"):tr("chartHum"))+" \u00b7 "+pts.length+" "+tr("chartSamples")+" \u00b7 "+tr("chartNow")+" "+last.v.toFixed(1)+(series==="T"?" \u00b0C":" %");
 }
 async function loadChart(){
- $("chartmsg").textContent="cargando\u2026";
+ $("chartmsg").textContent=tr("chartLoading");
  const from=new Date(Date.now()-hours*3600000).toISOString();
  try{
   const data=await j("/api/v1/measurements?from="+encodeURIComponent(from));
@@ -146,21 +183,25 @@ async function refreshHealth(){
 $("cfg").addEventListener("submit",async ev=>{
  ev.preventDefault();
  const f=ev.target,msg=$("cfgmsg"),token=f.__token.value.trim();
- if(!token){msg.textContent="ingres\u00e1 el token";msg.className="err";return}
+ if(!token){msg.textContent=tr("cfgNeedToken");msg.className="err";return}
  const lines=[];
  const iv=f.sampling_interval_s.value.trim();
  if(iv)lines.push("sampling_interval_s="+iv);
- if(!lines.length){msg.textContent="nada que aplicar";return}
+ if(!lines.length){msg.textContent=tr("cfgNothing");return}
  try{
   const r=await fetch("/api/v1/config",{method:"POST",
    headers:{"Authorization":"Bearer "+token},
    body:lines.join("\n")+"\n"});
   const b=await r.json();
-  if(r.ok){msg.textContent="\u2713 aplicado";msg.className="okc";refreshStatus()}
+  if(r.ok){msg.textContent=tr("cfgApplied");msg.className="okc";refreshStatus()}
   else{msg.textContent=(b.errors||[b.error||("HTTP "+r.status)]).join("; ");msg.className="err"}
- }catch(e){msg.textContent="error de red";msg.className="err"}
+ }catch(e){msg.textContent=tr("cfgNetError");msg.className="err"}
 });
 async function tickAll(){await refreshStatus();setLinks();await refreshHealth()}
+$("langEs").onclick=()=>{LANG="es";rebuildLabels();applyLang();refreshStatus().then(loadChart)};
+$("langEn").onclick=()=>{LANG="en";rebuildLabels();applyLang();refreshStatus().then(loadChart)};
+rebuildLabels();
+applyLang();
 tickAll().then(loadChart);
 setInterval(refreshStatus,30000);
 setInterval(refreshHealth,60000);

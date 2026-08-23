@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import time
-from typing import Iterator
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Request
 
-from .analytics import compare_nodes, summary_stats
+from .analytics import summary_stats
 from .config import settings
 from .db import query, transaction
+from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
 _RATE: dict[str, list[float]] = {}
-_RATE_LOCK = None
+_MAX_TRACKED_CLIENTS = 4096
 
 
 def _check_rate(request: Request) -> None:
@@ -20,25 +20,17 @@ def _check_rate(request: Request) -> None:
     now = time.monotonic()
     window = [t for t in _RATE.get(key, []) if now - t < 60.0]
     if len(window) >= settings.rate_limit_per_minute:
+        _RATE[key] = window
         raise HTTPException(status_code=429, detail="rate_limited")
     window.append(now)
+    if key not in _RATE and len(_RATE) >= _MAX_TRACKED_CLIENTS:
+        stale = [k for k, v in _RATE.items() if not v or now - v[-1] >= 60.0]
+        for k in stale:
+            del _RATE[k]
+        while len(_RATE) >= _MAX_TRACKED_CLIENTS:
+            oldest_key = min(_RATE, key=lambda k: _RATE[k][-1])
+            del _RATE[oldest_key]
     _RATE[key] = window
-
-
-def _require_sync_auth(authorization: str | None) -> None:
-    expected = settings.sync_token
-    if not expected:
-        return
-    if authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="unauthorized")
-
-
-def _require_api_auth(authorization: str | None) -> None:
-    expected = settings.api_token
-    if not expected:
-        return
-    if authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="unauthorized")
 
 
 def _acknowledged_sequence(conn, node_id: str, records: list[dict]) -> int | None:
@@ -61,7 +53,7 @@ def sync_batch(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_sync_auth(authorization)
+    require_bearer_token(authorization, settings.sync_token)
 
     if payload.get("protocol_version") != settings.protocol_version:
         raise HTTPException(status_code=422, detail="unsupported_protocol_version")
@@ -137,7 +129,7 @@ def sync_batch(
 @router.get("/nodes")
 def list_nodes(request: Request, authorization: str | None = Header(default=None)) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     rows = query(
         """SELECT node_id, site_id, firmware_version,
                   first_seen_utc_ms, last_seen_utc_ms,
@@ -151,7 +143,7 @@ def list_nodes(request: Request, authorization: str | None = Header(default=None
 @router.get("/nodes/{node_id}")
 def get_node(node_id: str, request: Request, authorization: str | None = Header(default=None)) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     rows = query("SELECT * FROM nodes WHERE node_id=?", (node_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="node_not_found")
@@ -177,7 +169,7 @@ def node_measurements(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     limit = max(1, min(limit, 10000))
     sql = "SELECT * FROM measurements WHERE node_id=?"
     params: list = [node_id]
@@ -209,14 +201,14 @@ def analytics_summary(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     values = _values_for(node_id, variable, from_utc_ms, to_utc_ms)
     stats = summary_stats(values)
     return {
         "node_id": node_id,
         "variable": variable,
         "metric_type": "derived",
-        "note": "estadistica descriptiva; no implica causalidad",
+        "note": "descriptive statistics only; does not imply causality",
         **stats,
     }
 
@@ -232,7 +224,7 @@ def analytics_compare(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     a = summary_stats(_values_for(node_a, variable, from_utc_ms, to_utc_ms))
     b = summary_stats(_values_for(node_b, variable, from_utc_ms, to_utc_ms))
     mean_diff = None
@@ -241,7 +233,7 @@ def analytics_compare(
     return {
         "variable": variable,
         "metric_type": "derived_comparison",
-        "note": "diferencias pueden reflejar ubicacion/calibracion; no causalidad",
+        "note": "differences may reflect placement or calibration; not causality",
         "node_a": {"node_id": node_a, **a},
         "node_b": {"node_id": node_b, **b},
         "mean_difference": mean_diff,
@@ -278,7 +270,7 @@ def analytics_heat_events(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     sql = """SELECT timestamp_utc_ms, value FROM measurements
              WHERE node_id=? AND variable=? AND value IS NOT NULL
                AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')"""
@@ -331,7 +323,7 @@ def analytics_heat_events(
         "threshold": threshold,
         "min_duration_min": min_duration_min,
         "metric_type": "derived",
-        "note": "duracion estimada entre muestras consecutivas sobre el umbral; no causalidad",
+        "note": "duration estimated between consecutive above-threshold samples; not causality",
         "events": events,
     }
 
@@ -348,7 +340,7 @@ def analytics_period_compare(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     if min(a_start, a_end, b_start, b_end) < 0 or a_end <= a_start or b_end <= b_start:
         raise HTTPException(status_code=422, detail="invalid_windows")
 
@@ -365,8 +357,8 @@ def analytics_period_compare(
     return {
         "metric_type": "derived_period_comparison",
         "note": (
-            "comparacion del mismo nodo en dos ventanas; no implica causalidad. "
-            + ("" if sufficient else "MUESTRAS INSUFICIENTES (<30 por ventana)")
+            "same-node comparison across two windows; does not imply causality. "
+            + ("" if sufficient else "INSUFFICIENT SAMPLES (<30 per window)")
         ),
         "sufficient_sample": sufficient,
         "node_id": node_id,

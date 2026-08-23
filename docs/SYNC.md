@@ -1,69 +1,58 @@
-# Sincronización CAUCE — contrato v1
+# CAUCE Synchronization — v1 contract
 
-## Modelo
+## Model
 
-Eventual consistency offline-first (§19 del plan maestro):
+Offline-first eventual consistency (master plan §19):
 
 ```
-sin conexión:  measure → validate → store (local)
-con conexión:  connect → authenticate → lote desde watermark
-               → ack del servidor → persistir watermark → repetir
+offline:  measure → validate → store (local)
+online:   connect → authenticate → batches since watermark
+          → server ack → persist watermark → repeat
 ```
 
-- Identidad lógica de cada medición: `node_id + sequence` (idempotencia).
-- La marca de agua (`last_acked_seq`) se persiste en `/state/sync_state`
-  tras CADA ack — un apagón entre envío y ack solo causa reenvío, nunca
-  pérdida.
-- Si el archivo de estado se pierde, el nodo reinicia desde secuencia 0 y
-  reenvía todo: el servidor deduplica por `node_id+sequence`.
+- Logical identity: `node_id + sequence` (idempotency key).
+- The watermark (`last_acked_seq`) persists to `/state/sync_state` after
+  EVERY ack — a power cut between send and ack only causes a re-send, never
+  data loss.
+- If the state file is lost, the node restarts from sequence 0 and resends
+  everything: the server deduplicates on `(node_id, sequence)`.
 
-## Cliente (nodo)
+## Client behavior (`SyncManager`, 8 host tests)
 
-Implementado en `SyncManager` (lógica, 8 tests en host) +
-`Esp32HttpSyncTransport` (HTTP real, compilación verificada).
-
-Comportamiento:
-
-| Evento | Reacción |
+| Event | Reaction |
 |---|---|
-| Lote OK | watermark = ack; si quedan pendientes, siguiente lote inmediato |
-| NetworkError / ServerError | backoff exponencial 10s→1800s |
-| AuthFailed | backoff largo fijo (15 min), sin pérdida de datos |
-| Rechazo del servidor (422/409) | **halt** con log `SYNC_REJECTED_HALTED`; requiere intervención manual (evita ciclos de rechazo) |
-| Red caída | gating total, reintento al reconectar |
+| Batch OK | watermark = ack; more pending → next batch immediately |
+| NetworkError / ServerError | exponential backoff 10s→1800s |
+| AuthFailed | fixed long backoff (15 min), no data loss |
+| Server rejection (422/409) | **halt** with `SYNC_REJECTED_HALTED`; manual intervention required |
+| Link down | full gating, resumes on reconnect |
 
-Lotes: hasta 32 mediciones JSON por POST (truncado honesto: el campo
-`batch_size` SIEMPRE refleja los elementos realmente incluidos).
+Batches carry up to 32 measurements; `batch_size` ALWAYS equals the number
+of records actually serialized.
 
-## Contrato del servidor central (por implementar)
+## Central server contract
 
 ```
 POST {server}/v1/sync
-Authorization: Bearer <token>            # opcional según despliegue
+Authorization: Bearer <token>            # optional per deployment
 Content-Type: application/json
 
-{
-  "protocol_version": 1,
-  "node_id": "CAUCE-001",
-  "batch_size": 00018,
-  "measurements": [ {"node_id":"CAUCE-001","sensor_id":"BME280-1",
-                     "sequence":1842,"timestamp":"2026-08-22T00:01:00Z",
-                     "timestamp_utc_ms":1787356860000,
-                     "variable":"air_temperature","value":21.50,"unit":"C",
-                     "quality":"VALID","reason_bits":0,
-                     "time_uncertain":false}, ... ]
-}
+{"protocol_version":1,"node_id":"CAUCE-001","batch_size":    5,
+ "measurements":[{...}]}
 
 200 {"acknowledged_sequence": 1859}
-401/403 → credenciales inválidas
-422/409 → lote rechazado (cliente detiene sync y registra el motivo)
-5xx / red → reintento con backoff
+401/403 → invalid credentials
+422/409 → batch rejected (client halts)
+5xx / network → retry with backoff
 ```
 
-Reglas del servidor:
+Server rules:
 
-1. Deduplicar por `(node_id, sequence)`: reenvíos son esperables.
-2. `acknowledged_sequence` = última secuencia contigua almacenada para ese
-   nodo (no mayor al máximo recibido del lote).
-3. Validar esquema; ante payload malformado responder 422 (el cliente se
-   detiene en lugar de martillar).
+1. Deduplicate on `(node_id, sequence)`: re-sends are expected.
+2. `acknowledged_sequence` = highest contiguous stored sequence for that
+   node actually present in this batch's range (never fabricated).
+3. Validate schema; malformed payload → 422 so the client stops instead of
+   hammering.
+
+Reference implementation: `backend/` (FastAPI). E2E proof:
+`scripts/run-e2e.ps1`.

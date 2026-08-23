@@ -55,6 +55,7 @@ class OtaManager {
   bool safetyOk() const;
   void runCheck();
   bool runDownload(const OtaRelease& release);
+  OtaRelease pendingRelease_{};
   void scheduleFailure(OtaState failureState, const char* event, LogLevel level);
 
   IManifestSource& catalog_;

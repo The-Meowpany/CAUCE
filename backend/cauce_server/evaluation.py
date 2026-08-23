@@ -7,16 +7,9 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from .analytics import summary_stats
 from .config import settings
 from .db import query, transaction
+from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
-
-
-def _require_api_auth(authorization: str | None) -> None:
-    expected = settings.api_token
-    if not expected:
-        return
-    if authorization != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="unauthorized")
 
 
 @router.post("/sites")
@@ -25,7 +18,7 @@ def create_site(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
@@ -44,7 +37,7 @@ def create_site(
 
 @router.get("/sites")
 def list_sites(authorization: str | None = Header(default=None)) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     rows = query(
         """SELECT s.site_id, s.name, s.notes,
                   (SELECT COUNT(*) FROM nodes n WHERE n.site_id=s.site_id) AS node_count,
@@ -61,7 +54,7 @@ def assign_node_site(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
@@ -86,7 +79,7 @@ def create_intervention(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     kind = payload.get("kind")
     start_utc_ms = payload.get("start_utc_ms")
@@ -124,7 +117,7 @@ def list_interventions(
     site_id: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
     sql = "SELECT * FROM interventions"
     params: list = []
     if site_id:
@@ -142,7 +135,7 @@ def analytics_before_after(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
-    _require_api_auth(authorization)
+    require_bearer_token(authorization, settings.api_token)
 
     rows = query(
         "SELECT * FROM interventions WHERE intervention_id=?",
@@ -176,8 +169,9 @@ def analytics_before_after(
     return {
         "metric_type": "derived_before_after",
         "note": (
-            "comparacion descriptiva; no implica causalidad. "
-            + ("muestras suficientes" if sufficient else "MUESTRAS INSUFICIENTES (<30 por periodo): interpretar con cautela")
+            "descriptive comparison; does not imply causality. "
+            + ("sufficient samples" if sufficient
+               else "INSUFFICIENT SAMPLES (<30 per period): interpret with caution")
         ),
         "sufficient_sample": sufficient,
         "intervention": {

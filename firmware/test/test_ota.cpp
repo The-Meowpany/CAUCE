@@ -165,6 +165,7 @@ void test_happy_path_applies_and_reports_reboot_pending() {
   TEST_ASSERT_TRUE(rig.installer.begun);
   TEST_ASSERT_FALSE(rig.installer.aborted);
   TEST_ASSERT_EQUAL_UINT32(3000, rig.installer.received.size());
+  TEST_ASSERT_EQUAL_INT(1, rig.catalog.fetchCalls);
 }
 void test_hash_mismatch_aborts_and_marks_verify_failed() {
   otaClock = hal::ManualClock(1787356800000ULL);

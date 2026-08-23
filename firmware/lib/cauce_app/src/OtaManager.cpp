@@ -129,7 +129,7 @@ void OtaManager::scheduleFailure(OtaState failureState, const char* event,
 }
 
 void OtaManager::runCheck() {
-  OtaRelease release{};
+  OtaRelease& release = pendingRelease_;
   if (!catalog_.fetchLatest(currentVersion_, release)) {
     state_ = OtaState::UpToDate;
     nextCheckMonotonicMs_ =
@@ -252,17 +252,11 @@ void OtaManager::tick() {
   nextCheckMonotonicMs_ =
       now + static_cast<uint64_t>(tuning_.checkIntervalS) * 1000ULL;
   state_ = OtaState::Checking;
+  pendingRelease_ = OtaRelease{};
 
   runCheck();
 
-  if (state_ != OtaState::Downloading) return;
-
-  OtaRelease release{};
-  if (!catalog_.fetchLatest(currentVersion_, release)) {
-    state_ = OtaState::CheckFailed;
-    return;
-  }
-  runDownload(release);
+  if (state_ == OtaState::Downloading) runDownload(pendingRelease_);
 }
 
 }  // namespace cauce::app

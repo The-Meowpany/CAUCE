@@ -1,45 +1,44 @@
-# Modelo de datos CAUCE
+# CAUCE Data Model
 
-## Measurement (unidad atómica)
+## Measurement (atomic unit)
 
 ```cpp
 struct Measurement {
   char     nodeId[16];       // "CAUCE-001"
   char     sensorId[24];     // "BME280-1"
-  uint32_t sequence;         // monotónico, persiste entre reinicios
-  uint64_t timestampUtcMs;   // epoch ms; 0 si el reloj no es confiable
+  uint32_t sequence;         // monotonic, survives reboots
+  uint64_t timestampUtcMs;   // epoch ms; 0 when clock untrusted
   float    value;
   Variable variable;
   Quality  quality;
-  uint8_t  reasonBits;       // por qué la calidad es lo que es
-  bool     timeUncertain;    // separado de quality: el valor puede ser
-                             // bueno aunque el tiempo no
+  uint8_t  reasonBits;       // why the quality is what it is
+  bool     timeUncertain;    // orthogonal to quality
 };
 ```
 
-Reglas:
+Rules:
 
-- **Nunca se descarta silenciosamente.** Una lectura fuera de rango se
-  almacena con `quality=INVALID` y su `reasonBits`.
-- `timeUncertain` permite seguir operando sin NTP/RTC: los datos quedan
-  registrables y auditables, marcados para reconstrucción temporal futura.
-- La secuencia arranca del máximo almacenado +1 al reiniciar → no hay
-  duplicados tras apagones.
+- **Never silently discarded.** An out-of-range reading is stored as
+  `quality=INVALID` plus its reason bits.
+- `timeUncertain` keeps the node running without NTP/RTC: data stays recorded
+  and auditable, flagged for future temporal reconstruction.
+- The sequence restarts from stored-max+1 after reboot → no duplicates across
+  power cuts.
 
-## Calidad — semántica
+## Quality semantics
 
-| Estado | Significado |
+| State | Meaning |
 |---|---|
-| VALID | Pasó todas las verificaciones |
-| CALIBRATED / UNCALIBRATED | Overlay futuro de calibración (no aplicado aún en runtime) |
-| ESTIMATED | Reservado para agregación/imputación |
-| SUSPECT | Plausible pero anómalo (salto abrupto o sensor congelado) |
-| INVALID | Imposible (rango físico, NaN, duplicado) |
-| MISSING | Ventana esperada sin dato (sensor caído) |
+| VALID | Passed every check |
+| CALIBRATED / UNCALIBRATED | Future calibration overlay (not applied at runtime yet) |
+| ESTIMATED | Reserved for aggregation/imputation |
+| SUSPECT | Plausible but anomalous (abrupt jump or frozen sensor) |
+| INVALID | Impossible (physical range, NaN, duplicate) |
+| MISSING | Expected window without data |
 
-## Umbrales de validación (defaults, configurables por nodo)
+## Validation thresholds (defaults, configurable per node)
 
-| Variable | Rango | Máx. variación/min |
+| Variable | Range | Max change/minute |
 |---|---|---|
 | air_temperature | -40..85 °C | ±5 |
 | relative_humidity | 0..100 %RH | ±20 |
@@ -47,46 +46,43 @@ Reglas:
 | illuminance | 0..200000 lx | ±120000 |
 | battery_voltage | 2.5..4.5 V | ±0.2 |
 
-Detección de congelamiento: ≥6 lecturas idénticas dentro de épsilon 0.01.
+Stuck detection: ≥6 identical readings within epsilon 0.01.
 
-## Repositorio
+## Repository
 
-- Interfaz `IStorageRepository`: append / query paginada / latest /
-  contadores / retención / integrityCheck.
-- Implementación actual: `LogStorageRepository` (ver PROTOCOL.md).
-- Consulta: `query(from, to, skip, out[], capacity)` — nunca carga el
-  histórico completo en RAM; escanea secuencialmente con paginación.
+- Interface `IStorageRepository`: append / paginated query / query-by-
+  sequence / latest / counters / retention / integrityCheck.
+- Implementation: `LogStorageRepository` (protocol/v1/PROTOCOL.md).
+- Queries paginate sequentially — full history is never loaded into RAM.
 
-## Configuración del nodo (`NodeConfig`)
+## Node configuration (`NodeConfig`)
 
-Identidad (`node_id`, `site_id`), geolocalización opcional (lat/lon/
-elevación, NAN = no declarada), contexto de instalación (land_cover,
-shade_condition), operación (sampling_interval_s, sync_interval_s,
-timezone), red (wifi, ntp), almacenamiento (storage_max_bytes,
-segment_max_bytes) y umbrales de validación completos.
+Identity (`node_id`, `site_id`), optional geo (lat/lon/elevation, NAN =
+undeclared), installation context (land cover, shade), operation (sampling
+interval, sync interval, timezone), network (Wi-Fi, NTP), storage budgets and
+full validation thresholds.
 
-Garantías: validación con errores enumerados; backup `.bak` previo a cada
-guardado; cadena de recuperación principal→backup→defaults.
+Guarantees: validation with enumerated errors; `.bak` backup before every
+save; recovery chain main→backup→defaults.
 
-## Formatos de exportación
+## Export formats
 
-**CSV (RFC4180)** — compatible con Excel/LibreOffice/Python/R:
+**CSV (RFC4180)** — Excel/LibreOffice/Python/R compatible:
 
 ```
 node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,variable,value,unit,quality,reason_bits,time_uncertain
 CAUCE-001,BME280-1,1842,1787356860000,2026-08-22T00:01:00Z,air_temperature,21.50,C,VALID,0,0
 ```
 
-Campos de texto se entrecomillan y escapan según RFC4180. Codificación
-ASCII, separador `,`, salto `\n`.
+Text fields quoted/escaped per RFC4180. ASCII encoding.
 
-**JSON array** — un objeto por medición, mismo esquema del payload del
-protocolo v1 (ver protocol/v1/PROTOCOL.md).
+**JSON array** — one object per measurement, same schema as protocol v1
+payload.
 
-Ambos se generan en **streaming paginado** (`ChunkedExporter`): nunca se
-carga el histórico completo en RAM; el consumidor escribe chunks hasta
-`done()`.
+Both stream through `ChunkedExporter` — history is never loaded into RAM.
 
-Regla analítica: las métricas derivadas excluyen calidades
-`INVALID`, `MISSING` y `ESTIMATED`; `SUSPECT` participa pero debe
-reportarse junto al porcentaje de registros sospechosos.
+Analytical rule: derived metrics exclude `INVALID`, `MISSING` and
+`ESTIMATED`; `SUSPECT` participates but its share must be reported.
+
+Time-window semantics are INCLUSIVE on both ends everywhere (firmware and
+backend).

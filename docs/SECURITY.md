@@ -1,34 +1,35 @@
-# Seguridad CAUCE — estado actual
+# CAUCE Security — current posture
 
-## Implementado
+## Implemented
 
-- **Tokens administrativos hasheados**: la configuración almacena solo
-  SHA-256 del token (`admin_token_sha256`), nunca el secreto en texto
-  plano. SHA-256 propio verificado contra vectores NIST.
-- **Validación estricta de configuración**: rangos numéricos, longitudes
-  acotadas por buffers fijos, rechazo de entrada basura (parseConfig
-  devuelve error ante líneas malformadas múltiples).
-- **Sin heap en el hot path**: buffers fijos en medición/storage/config →
-  superficie de fragmentación y desbordamiento mínima.
-- **Límites de tamaño desde el diseño**: payload de registro fijo (60 B),
-  segmentos acotados, retención con tope de bytes.
-- **Separación futura lectura/administración** ya prevista en el modelo de
-  config (token admin vs datos públicos).
+- **Admin tokens stored hashed**: config keeps only SHA-256 hex
+  (`admin_token_sha256`); never plaintext. Own SHA-256 verified against NIST
+  vectors; comparisons constant-time on both node and server.
+- **Strict configuration validation**: numeric ranges, fixed-size buffers,
+  garbage rejection (multiple malformed lines fail parsing).
+- **No heap on hot paths**: fixed buffers across measurement/storage/config
+  minimize overflow and fragmentation surface.
+- **Size limits by design**: fixed 60-byte record payload, capped segments,
+  byte-budgeted retention.
+- **Backend hardening**: constant-time bearer comparison (`hmac.compare_digest`),
+  per-IP rate limiting with bounded memory on every endpoint, optional
+  tokens per scope (sync vs API).
+- **Read/write separation**: public reads vs authenticated writes on both
+  node API and central server.
 
-## No implementado todavía (fases 9/10/17 del plan)
+## Pending (later phases / hardware)
 
-- HTTP API: cuando exista, endpoints de escritura exigirán token
-  (comparación constante-tiempo contra el hash) y rate limiting.
-- Wi-Fi: credenciales hoy via config local física; el provisioning seguro
-  (portal con token) es fase del captive portal.
-- OTA firmado: pendiente; entre tanto NO habilitar actualizaciones remotas.
-- Sanitización de inputs HTTP: no aplica aún (no hay HTTP).
+- Wi-Fi radio integration: credentials provisioned through the local UI;
+  secure provisioning portal hardening comes with it.
+- OTA flashing: decision layer shipped; signing of release payloads should
+  be added before fleet rollouts.
+- Node-side request throttling: transport currently trusts LAN isolation;
+  revisit once exposed beyond the pilot network.
 
-## Principios que ya se aplican y no se negociarán
+## Non-negotiables already applied
 
-1. Ningún secreto en texto plano en flash.
-2. Ninguna entrada externa sin validar contra esquema.
-3. Falla cerrada: componente inválido → rechazo explícito + log, no
-   comportamiento indefinido.
-4. Privacidad: solo datos ambientales y telemetría del propio nodo. No se
-   recolectan identificadores personales ni MACs de usuarios.
+1. No secrets in plaintext flash.
+2. No unvalidated external input.
+3. Fail closed: invalid component → explicit rejection + log.
+4. Privacy: environmental telemetry and node identifiers only; no personal
+   data, no user MACs, nothing in URLs beyond ids/timestamps.

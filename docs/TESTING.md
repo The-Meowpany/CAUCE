@@ -1,69 +1,58 @@
-# Testing CAUCE
+# CAUCE Testing
 
-## Ejecutar
+## Run
 
 ```powershell
 cd firmware
-pio test -e native
+pio test -e native          # 97 tests on PC (Unity), no board needed
+cd ..\backend
+python -m pytest tests -q   # 22 backend tests
+..\scripts\run-e2e.ps1      # node C++ ↔ FastAPI ↔ SQLite, 4 phases
 ```
 
-Esperado: `42 test cases: 42 succeeded`. Los tests corren en el PC (no
-requieren placa) usando dobles de la HAL: `ManualClock`, `ScriptedI2cBus`,
-`MemoryFileSystem`.
-
-Requisitos Windows: MinGW-w64 (GCC ≥ 9) en PATH. Linux: `gcc` estándar.
+Requirements: MinGW-w64 (GCC ≥9) on PATH for the `native` env; Linux CI uses
+stock gcc. Host doubles: `ManualClock`, `ScriptedI2cBus`,
+`MemoryFileSystem`, scripted network/sync fakes.
 
 ## Suites (firmware/test/)
 
-| Archivo | Cubre |
+| File | Covers |
 |---|---|
-| `test_validation.cpp` (9) | Rango físico, no-finito, rate-of-change, congelado, duplicado, incertidumbre temporal |
-| `test_codec.cpp` (5) | CRC32 vector conocido, roundtrip completo, detección de bit volteado, magic/version/len |
-| `test_storage.cpp` (6) | Append+query, paginación con skip, recuperación tras reinicio, **aislamiento de cola corrupta con sellado**, rotación, retención |
-| `test_config.cpp` (9) | Defaults, roundtrip KV, geo NAN, umbrales, save/load, restauración desde backup, validaciones, entrada basura |
-| `test_security.cpp` (3) | SHA-256 contra vectores NIST ("", "abc", multiblock) |
-| `test_bme280.cpp` (5) | Temperatura vs ejemplo del datasheet, presión entera vs espejo float, humedad ambos modelos, lectura I2C completa con bus simulado, sensor desconectado |
-| `test_scheduler_integration.cpp` (5) | Ciclo completo medir→validar→almacenar, continuidad de secuencia entre "reinicios", MISSING ante desconexión y recuperación, falla de storage sin crash (`FailingFileSystem`), tiempo incierto durante apagón |
-| `test_export.cpp` (6) | CSV cabecera+filas+ISO-8601, escapes RFC4180, JSON array tipado y cerrado, `[]` vacío, chunking equivalente a single-shot, filtro de rango temporal |
-| `test_metrics.cpp` (8) | Stats con vectores conocidos (media/mediana/desv. muestral/percentiles), filtro por variable+calidad+NaN, agregación por ventanas con capacidad acotada, exposición térmica |
-| `test_network.cpp` (7) | FSM completa: disabled, conexión, retry con backoff 5s/10s, fallback AP tras N intentos, timeout, degraded↔connected por RSSI, AP sin credenciales |
-| `test_sync.cpp` (8) | Watermark persistida, reanudación **sin duplicados** tras fallo de red parcial, pérdida de watermark→reenvío idempotente, auth-backoff, halt ante rechazo, gating por red, formato del payload |
+| `test_validation.cpp` (9) | Physical range, non-finite, rate-of-change, frozen sensor, duplicates, time uncertainty |
+| `test_codec.cpp` (5) | CRC32 known vector, full roundtrip, bit-flip detection, magic/version/length |
+| `test_storage.cpp` (6) | Append+query, paginated skip, reboot recovery, **corrupt-tail isolation with sealing**, rotation, retention |
+| `test_config.cpp` (9) | Defaults, KV roundtrip, geo NAN, thresholds, save/load, backup restore, validations, garbage input |
+| `test_security.cpp` (4) | SHA-256 NIST vectors + constant-time compare |
+| `test_bme280.cpp` (5) | Datasheet temperature vector, integer-vs-mirror pressure/humidity agreement, full I2C read with simulated bus, disconnected sensor |
+| `test_scheduler_integration.cpp` (5) | Full measure→validate→store cycle, sequence continuity across reboots, MISSING on disconnect + recovery, storage failure without crash (`FailingFileSystem`), time uncertainty during outage |
+| `test_export.cpp` (6) | CSV header+rows+ISO-8601, RFC4180 escapes, typed closed JSON array, empty `[]`, chunking ≡ single-shot, time-range filter |
+| `test_metrics.cpp` (8) | Known-vector stats, variable/quality/NaN filtering, windowed aggregation with capacity bounds, exposure hours |
+| `test_network.cpp` (7) | Full FSM: disabled, connect, retry backoff 5s/10s, AP fallback after N attempts, timeout, degraded↔connected by RSSI, AP without credentials |
+| `test_sync.cpp` (8) | Persisted watermark, resume **without duplicates**, watermark loss → idempotent resend, auth backoff, halt-on-reject, network gating, payload format |
+| `test_ota.cpp` (10) | Semver pairs, streaming sha256 ≡ one-shot, happy path (single catalog fetch), hash mismatch abort, size exceeded, same version skip, no release, installer rejection, heap gate, battery gate |
 
-## Integración extremo a extremo (nodo real ↔ servidor real)
+## Backend suites (backend/tests/test_api.py)
+
+Ingestion idempotency/resume/atomicity · token auth (constant-time path,
+fail-closed) · rate limiting incl. bounded memory · nodes/measurements
+filters · analytics vectors (summary/compare/before-after/period/
+heat-events) · dashboard localization via Accept-Language · CSV export.
+
+## End-to-end integration
 
 ```powershell
 .\scripts\run-e2e.ps1
 ```
 
-Levanta el backend FastAPI real en un puerto efímero, ejecuta el binario
-`integration` (el `SyncManager` C++ compilado para host con transporte
-HTTP por sockets reales) y verifica directamente en SQLite:
+Starts a real FastAPI server on an ephemeral port, runs the `integration`
+binary — the actual C++ `SyncManager` with real socket HTTP — and verifies
+directly in SQLite: initial batch (50), incremental (+5), full idempotent
+replay after watermark deletion, then `rows == distinct == 55`. This E2E has
+already caught one real protocol bug (zero-padded `batch_size`).
 
-1. **Inicial**: 50 mediciones → lotes encadenados → ack=50
-2. **Incremental**: +5 nuevas → ack=55 sin reenviar las anteriores
-3. **Reenvío idempotente**: watermark eliminada → retransmite todo → el
-   servidor deduplica (`node_id+sequence`)
-4. **SQLite**: `rows == distinct == 55`, `max_seq=55`, ≥2 registros en
-   `sync_batches`
+## Philosophy
 
-Este E2E ya detectó y corrigió un bug real: `"batch_size"` se serializaba
-con ceros a la izquierda (JSON inválido) — el servidor rechazó y el cliente
-aplicó halt exactamente como diseñado.
-
-## Filosofía
-
-- Todo lo que pueda fallar en campo tiene un test de fallo: sensor caído,
-  storage lleno/corrupto, reinicio, tiempo perdido, red intermitente.
-- El BME280 se valida con **dos implementaciones independientes** (entera
-  del datasheet y espejo float) más el vector oficial — detecta errores de
-  transcripción de fórmulas.
-- La simulación de escenarios (`pio run -e native && .pio\build\native\program.exe`)
-  complementa los tests: eventos largos (congelamiento sostenido,
-  desconexión + recuperación) observables en logs estructurados, con
-  estadísticas y vista previa CSV al final.
-
-## Pendiente declarado (ver STATUS.md)
-
-- Hardware-in-the-loop real (placa + sensor físico).
-- Tests de LittleFS real y apagón físico.
-- CI remoto (los comandos anteriores son exactamente los que debe correr).
+- Everything that can fail in the field has a failure test.
+- BME280 math validated by two independent implementations plus the vendor
+  vector.
+- Scenario simulation complements tests for long-running behaviors.

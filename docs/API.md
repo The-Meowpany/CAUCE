@@ -1,74 +1,70 @@
-# API embebida CAUCE — v1
+# CAUCE Embedded API — v1
 
-Base: `http://<ip-del-nodo>/api/v1`
+Base: `http://<node-ip>/api/v1`
 
-Transporte: HTTP servido por el propio nodo (sin dependencias externas).
-La lógica vive en `ApiRouter` (portable y testeada en host); la capa
-Arduino/`WebServer` es solo transporte (`Esp32ApiServer`, verificado por
-compilación — sin placa aún).
+Transport: HTTP served by the node itself. Logic lives in `ApiRouter`
+(portable, host-tested); Arduino `WebServer` is transport only
+(`Esp32ApiServer`).
 
 ## Endpoints
 
-| Método | Ruta | Descripción |
+| Method | Path | Description |
 |---|---|---|
-| GET | `/node` | Identidad del nodo, versiones firmware/protocolo/hardware, ubicación declarada |
-| GET | `/status` | Estado de máquina (nodo/red), validez temporal, uptime, última medición |
-| GET | `/measurements/latest` | Última medición almacenada (404 si no hay) |
-| GET | `/measurements?from=&to=` | Serie histórica como JSON array **en streaming** |
-| GET | `/health` | Telemetría completa del sistema (contadores, storage, fallos) |
-| GET | `/config` | Configuración activa. **Nunca** expone secretos (`wifi_password: null`) |
-| POST | `/config` | Aplicar configuración (cuerpo KV igual al archivo). Requiere token admin |
-| GET | `/export?format=csv\|json&from=&to=` | Exportación CSV (RFC4180) o JSON en streaming |
+| GET | `/node` | Node identity, firmware/protocol/hardware versions, declared location |
+| GET | `/status` | Node/network FSM states, time validity, uptime, latest measurement |
+| GET | `/measurements/latest` | Last stored measurement (404 if none) |
+| GET | `/measurements?from=&to=` | Historical series as streaming JSON array |
+| GET | `/health` | Full system telemetry (counters, storage, failures) |
+| GET | `/config` | Active config. **Never exposes secrets** (`wifi_password: null`) |
+| POST | `/config` | Apply configuration (KV body). Requires admin token |
+| GET | `/export?format=csv\|json&from=&to=` | CSV (RFC4180) or JSON streaming export |
 
-## Parámetros temporales
+Also served: `/` (localized dashboard SPA), `/favicon.ico` (204).
 
-`from`/`to` aceptan epoch milisegundos (`1787356860000`) o ISO-8601 UTC.
-Los caracteres especiales deben venir percent-encoded
-(`:` → `%3A`), estándar en query strings.
+## Time parameters
 
-```
-GET /api/v1/export?format=csv&from=2026-08-22T00%3A00%3A00Z
-```
+`from`/`to` accept epoch milliseconds or ISO-8601 UTC. Both ends are
+INCLUSIVE. Percent-encode special characters (`:` → `%3A`).
 
-## Autenticación administrativa
+## Admin authentication
 
-- Solo `POST /config` requiere autorización; las lecturas son públicas.
-- Header esperado: `Authorization: Bearer <token>`.
-- El nodo almacena **solo** SHA-256 del token (`admin_token_sha256`);
-  la comparación es constante-tiempo (`secureEquals`).
-- **Fail-closed**: sin token configurado, POST /config responde `503
-  admin_not_configured`. Token incorrecto → `401 unauthorized`.
+- Only `POST /config` requires authorization; reads are public.
+- Header: `Authorization: Bearer <token>`.
+- The node stores only the SHA-256 of the token; comparison is
+  constant-time.
+- **Fail-closed**: with no token configured, POST responds `503`.
+  Wrong token → `401`.
 
-## Códigos de respuesta
+## Status codes
 
-| Código | Significado |
+| Code | Meaning |
 |---|---|
-| 200 | OK (streaming: múltiples chunks hasta completar) |
-| 400 | Parámetro/cuerpo malformado (`bad_from`, `bad_format`, …) |
-| 401 | Token inválido |
-| 404 | Ruta desconocida o sin mediciones aún |
-| 405 | Método no permitido |
-| 422 | Config parseada pero inválida → `{"errors":[...]}` con mensajes |
-| 503 | Administración no configurada |
+| 200 | OK (streams may span multiple chunks) |
+| 400 | Malformed parameter/body |
+| 401 | Invalid token |
+| 404 | Unknown route or no measurements yet |
+| 405 | Method not allowed |
+| 422 | Config parsed but invalid → `{"errors":[...]}` |
+| 503 | Administration not configured |
 
-## Contrato de streaming
+## Streaming contract
 
-Las respuestas grandes (`/measurements`, `/export`) se sirven en chunks:
-la primera respuesta ya contiene bytes; el transporte repite lectura hasta
-`streamDone`. Mínimo de buffer por chunk: **384 B** (recomendado ≥512).
-Un solo stream activo por nodo; una petición nueva cancela el anterior.
+Large responses stream in chunks; minimum buffer **384 B**
+(recommended ≥512). One active stream per node; a new request cancels the
+previous one. Public UI strings are localized client-side (ES/EN switch);
+domain values remain language-neutral codes.
 
-## Ejemplos
+## Examples
 
 ```bash
 curl http://192.168.4.1/api/v1/status
-curl "http://192.168.4.1/api/v1/export?format=json" > nodo.json
+curl "http://192.168.4.1/api/v1/export?format=json" > node.json
 curl -X POST http://192.168.4.1/api/v1/config \
      -H "Authorization: Bearer $CAUCE_TOKEN" \
-     --data-binary @nueva-config.conf
+     --data-binary @new-config.conf
 ```
 
-Respuesta 422 ejemplo:
+422 example:
 
 ```json
 {"errors":["sampling_interval_s out of [10..3600]"]}

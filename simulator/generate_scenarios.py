@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generador de escenarios simulados CAUCE (§42).
+"""CAUCE scenario generator (master plan §42).
 
-Produce CSVs con el mismo esquema del export del nodo, o los envía
-directamente al backend central vía /v1/sync (--sync-url).
+Emits CSV files using the exact node export schema, or pushes them
+straight to the central backend through /v1/sync (--sync-url).
 
-Uso:
+Usage:
   python generate_scenarios.py --outdir data/sim --days 3
   python generate_scenarios.py --sync-url http://localhost:8000/v1/sync --days 2
 """
@@ -17,7 +17,7 @@ import math
 import os
 import random
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 VARIABLES = [
     ("air_temperature", "C"),
@@ -31,7 +31,7 @@ BASE_TS = 1787356800000
 
 
 def iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -56,7 +56,7 @@ class Series:
                  quality: str = "VALID", reason: int = 0,
                  time_uncertain: bool = False) -> list[list]:
         out = []
-        for value, (var, unit) in zip([temp, hum], VARIABLES):
+        for value, (var, unit) in zip([temp, hum], VARIABLES, strict=False):
             self.seq += 1
             out.append([
                 self.node_id, self.sensor_id, self.seq, ms, iso(ms),
@@ -212,7 +212,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--node-prefix", default="CAUCE-SIM")
     parser.add_argument("--sync-url", default=None,
-                        help="si se indica, envia al backend en vez de escribir CSV")
+                        help="when set, pushes batches to the backend instead of writing CSVs")
     args = parser.parse_args()
 
     exit_code = 0
@@ -220,12 +220,12 @@ def main() -> int:
         node_id = f"{args.node_prefix}-{index:03d}"
         series = Series(node_id, f"SIM-{index:02d}", args.seed + index)
         rows = fn(series, max(1, args.days))
-        print(f"{name}: {len(rows)} filas ({len(rows)//2} mediciones)")
+        print(f"{name}: {len(rows)} rows ({len(rows)//2} measurements)")
         if args.sync_url:
             try:
                 sync_rows(args.sync_url, rows)
             except Exception as exc:
-                print(f"  ERROR sincronizando {name}: {exc}")
+                print(f"  ERROR syncing {name}: {exc}")
                 exit_code = 1
         else:
             write_csv(os.path.join(args.outdir, f"{name}.csv"), rows)

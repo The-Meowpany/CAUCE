@@ -1,47 +1,47 @@
-# Calibración CAUCE
+# CAUCE Calibration
 
-## Modelo (definido, aplicación en runtime pendiente)
+## Model (defined; runtime application pending)
 
 ```
-valor_calibrado = valor_crudo × escala + offset
+calibrated_value = raw_value × scale + offset
 ```
 
-Metadata asociada por sensor (a persistir en fase de calibración):
+Per-sensor metadata to persist during the calibration phase:
 
 - sensor_id, model, serial
 - installation_date, calibration_date
 - calibration_method, calibration_reference
 - calibration_status
 
-## Lo que el sistema afirma y lo que NO
+## What the system claims and does NOT
 
-**NO afirma:**
+**Does NOT claim:**
 
-- Exactitud meteorológica profesional ni trazabilidad metrológica.
-- Precisión absoluta de fábrica verificada experimentalmente.
+- Professional meteorological accuracy or metrological traceability.
+- Factory precision verified experimentally by this project.
 
-**Sí soporta hoy:**
+**Does support today:**
 
-- Comparación **relativa entre nodos** co-instalados en el mismo contexto.
-- Detección de anomalías de comportamiento (congelamiento, saltos,
-  fuera de rango) mediante el pipeline de validación.
+- **Relative comparison between nodes** co-installed in the same context.
+- Behavioral anomaly detection (freezing, jumps, out-of-range) through the
+  validation pipeline.
 
-## Distinciones obligatorias al reportar datos
+## Mandatory distinctions when reporting data
 
-| Término | En BME280 (datasheet, no verificado por nosotros) |
+| Term | BME280 (datasheet, not verified by us) |
 |---|---|
-| Resolución | 0.01 °C / 0.01 %RH |
-| Exactitud de sensor | ±0.5 °C / ±3 %RH |
-| Exactitud de sistema | **No medida aún** — incluye carcasa, autocalentamiento, exposición |
-| Incertidumbre de calibración | **No existe aún** — no hay proceso formal |
+| Resolution | 0.01 °C / 0.01 %RH |
+| Sensor accuracy | ±0.5 °C / ±3 %RH |
+| System accuracy | **Not measured yet** — includes enclosure, self-heating, exposure |
+| Calibration uncertainty | **Does not exist yet** — no formal process |
 
-Regla para el proyecto: cualquier afirmación científica que requiera
-validación externa se marca como **pendiente**, no como resultado.
+Project rule: any scientific claim requiring external validation is marked
+**pending**, never presented as a result.
 
-## Plan mínimo recomendado (cuando haya ≥2 nodos físicos)
+## Minimal recommended plan (once ≥2 physical nodes exist)
 
-1. Co-locar todos los nodos 48 h en el mismo punto → calcular offsets
-   relativos nodo-a-nodo.
-2. Registrar esos offsets como calibración `method=co-location-relative`.
-3. Repetir cada cambio estacional o tras mantenimiento.
-4. Documentar cada evento en maintenance_events (fase backend).
+1. Co-locate all nodes for 48 h at the same point → compute relative
+   node-to-node offsets.
+2. Record offsets as `method=co-location-relative` calibrations.
+3. Repeat each season change or after maintenance.
+4. Log every event into maintenance_events (backend phase).
