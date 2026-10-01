@@ -5,6 +5,7 @@
 #include <new>
 #include <cstring>
 
+#include "cauce/app/FieldDiagnostics.h"
 #include "cauce/app/NetworkManager.h"
 #include "cauce/app/WebAssets.h"
 #include "cauce/core/SecurityUtils.h"
@@ -299,6 +300,36 @@ ApiRouter::Response ApiRouter::routeGet(const char* path, const char* query, cha
     if (n < 0 || static_cast<size_t>(n) >= sizeof(body))
       return respondError(500, "{\"error\":\"internal\"}", out, capacity);
     return respond(200, body, static_cast<size_t>(n), out, capacity);
+  }
+
+  if (pathEquals(path, "/api/v1/diagnostics")) {
+    DiagnosticsInput diag;
+    const NodeConfig& cfg = config_.current();
+    diag.nodeId = cfg.nodeId;
+    diag.siteId = cfg.siteId;
+    diag.firmwareVersion = health_.firmwareVersion;
+    diag.nodeState = nodeStateName(health_.nodeState);
+    diag.netState = netStateName(health_.netState);
+    diag.uptimeMs = health_.uptimeMs;
+    diag.clockValid = clock_.utcTimeValid();
+    diag.rssiDbm = health_.rssiDbm;
+    diag.batteryVoltageV = health_.batteryVoltageV;
+    diag.measurementCount = health_.measurementCount;
+    diag.storedCount = health_.storedCount;
+    diag.invalidCount = health_.invalidCount;
+    diag.suspectCount = health_.suspectCount;
+    diag.readFailures = health_.readFailures;
+    diag.storageFailures = health_.storageFailures;
+    diag.corruptedFrames = health_.corruptedFrames;
+    diag.storageRecords = health_.storageRecords;
+    diag.storageBytes = health_.storageBytes;
+    diag.lastSuccessUtcMs = health_.lastSuccessUtcMs;
+    diag.sampleIntervalS = cfg.samplingIntervalS;
+    char body[1200];
+    const size_t len = buildDiagnosticsJson(body, sizeof(body), diag);
+    if (len == 0)
+      return respondError(500, "{\"error\":\"internal\"}", out, capacity);
+    return respond(200, body, len, out, capacity);
   }
 
   if (pathEquals(path, "/api/v1/config")) {

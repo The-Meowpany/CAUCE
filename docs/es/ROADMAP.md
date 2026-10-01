@@ -91,9 +91,28 @@ reales de link, y un runbook de operación que no sea ficción.
 
 ## M5 — Endurecimiento operativo
 
-Terminación TLS, retención de `measurements` + `VACUUM`, paginación por
-cursor, el mapa central, FSM OTA asíncrona, calibración runtime
-(`CALIBRATION.md`), CSV por nodo ya entregado.
+Terminación TLS, paginación por cursor, el mapa central, calibración runtime
+(`CALIBRATION.md`). El CSV por nodo ya está entregado, y también lo que
+decide si un despliegue en campo es sobrevivible:
+
+- Retención de `measurements` + `VACUUM`, ahora en un scheduler además del
+  endpoint, con la última corrida visible en `/system`.
+- Contabilidad de cobertura (`/v1/nodes/{id}/coverage`, la variante de
+  sitio, CSV) para poder contrastar un before/after con cuánta datos llegó
+  de verdad.
+- Sitios de control y `difference_in_differences` en `before-after`.
+- Bundles de diagnóstico de campo, ingeridos en el central, más
+  `/v1/fleet` respondiendo qué nodo necesita visita.
+- `simulator/load_pilot.py` para ensayar el volumen del piloto.
+
+Sigue abierto acá:
+
+- **Rollback de OTA en hardware.** La FSM de decisión y la política de
+  rollback están testeadas en host y la tabla de particiones de dos slots
+  viene en el repo, pero nadie ha flasheado una placa, marcado una imagen
+  como válida, ni visto cómo una imagen mala hace rollback. Hasta que pase,
+  las actualizaciones necesitan acceso físico.
+- Terminación TLS, paginación por cursor, OTA asíncrona.
 
 ## No-objetivos por ahora
 

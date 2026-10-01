@@ -12,6 +12,12 @@ class Settings:
         self.protocol_version = 1
         self.telegram_bot_token = os.environ.get("CAUCE_TELEGRAM_BOT_TOKEN", "")
         self.ota_releases_path = os.environ.get("CAUCE_OTA_RELEASES", "")
+        self.retention_enabled = os.environ.get("CAUCE_RETENTION_ENABLED", "1") == "1"
+        self.retention_days = int(os.environ.get("CAUCE_RETENTION_DAYS", "365"))
+        self.retention_interval_h = int(
+            os.environ.get("CAUCE_RETENTION_INTERVAL_H", "24")
+        )
+        self.vacuum_interval_h = int(os.environ.get("CAUCE_VACUUM_INTERVAL_H", "24"))
 
 
 settings = Settings()

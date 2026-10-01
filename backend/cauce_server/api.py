@@ -11,6 +11,7 @@ from .analytics import summary_stats
 from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
+from .retention import purge_older_than, read_state
 from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
@@ -380,19 +381,31 @@ def run_retention(
     days = payload.get("older_than_days", 90)
     if not isinstance(days, int) or not 1 <= days <= 3650:
         raise HTTPException(status_code=422, detail="invalid_retention_days")
-    cutoff = int(time.time() * 1000) - days * 86400000
-    with transaction() as conn:
-        gone_m = conn.execute(
-            "DELETE FROM measurements WHERE timestamp_utc_ms<?",
-            (cutoff,)).rowcount
-        gone_a = conn.execute(
-            "DELETE FROM agg_hourly WHERE hour_ts<?",
-            (cutoff,)).rowcount
-    engine().execute("VACUUM")
-    engine().commit()
-    return {"status": "retained", "older_than_days": days,
-            "deleted_measurements": gone_m, "deleted_buckets": gone_a,
-            "vacuumed": True}
+    state = purge_older_than(days)
+    return {
+        "status": "retained",
+        "older_than_days": days,
+        "deleted_measurements": state.get("deleted_measurements", 0),
+        "deleted_buckets": state.get("deleted_buckets", 0),
+        "vacuumed": bool(state.get("vacuumed")),
+    }
+
+
+@router.get("/maintenance/retention")
+def retention_state(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    state = read_state()
+    return {
+        "enabled": settings.retention_enabled,
+        "retention_days": settings.retention_days,
+        "retention_interval_h": settings.retention_interval_h,
+        "vacuum_interval_h": settings.vacuum_interval_h,
+        **state,
+    }
 
 
 @router.get("/analytics/summary")

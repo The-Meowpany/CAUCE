@@ -129,7 +129,7 @@ bool SyncManager::syncOneBatch() {
   escapeJsonString(nodeId_, nodeIdJson, sizeof(nodeIdJson));
   used += static_cast<size_t>(std::snprintf(
       payload + used, payloadCapacity - used,
-      "{\"protocol_version\":%u,\"node_id\":\"%s\",\"batch_size\":",
+      "{\"protocol_version\":%u,\"node_id\":%s,\"batch_size\":",
       Versions::kProtocol, nodeIdJson));
   const size_t batchSizePos = used;
   std::memcpy(payload + used, "00000", 5);

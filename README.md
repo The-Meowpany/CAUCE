@@ -26,13 +26,20 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 112 host tests (Unity)
+pio test -e native          # 132 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 68 tests
-..\scripts\run-e2e.ps1      # C++ node ↔ FastAPI ↔ SQLite (3 phases)
+python -m pytest tests -q   # 88 tests
+..\scripts\run-e2e.ps1      # C++ node → FastAPI → SQLite (3 phases)
 ..\scripts\verify-all.ps1   # everything above in one gate
+```
+
+To size the pilot before you field it:
+
+```powershell
+python simulator\load_pilot.py --nodes 8 --days 60 --dry-run
+python simulator\load_pilot.py --nodes 8 --days 60 --sync-url http://localhost:8000/v1/sync
 ```
 
 To see the node UI, join its Wi-Fi and open `http://192.168.4.1/`
@@ -55,6 +62,8 @@ GET  /status                       FSM states, clock, uptime, latest
 GET  /measurements/latest          last stored measurement
 GET  /measurements?from=&to=       streaming JSON series (INCLUSIVE ends)
 GET  /health                       counters, storage, failures
+GET  /diagnostics                  field bundle (cauce.diag/1), signed and
+                                   POST-able to the central for triage
 GET  /config                       active config (secrets never exposed)
 POST /config                       KV body, admin token required
 GET  /export?format=csv|json       streaming export
@@ -66,13 +75,19 @@ GET  /export?format=csv|json       streaming export
 POST /provision                    admin-gated device-key registration
 POST /sync                         idempotent batch ingest (transport: wifi|lora)
 GET  /nodes  /nodes/{id}           list / detail + latest
-GET  /nodes/{id}/measurements      filterable series (limit≤10000)
+GET  /nodes/{id}/measurements      filterable series (limit…10000)
+GET  /nodes/{id}/coverage          expected vs received, gaps with reasons
+GET  /nodes/{id}/diagnostics       last field bundle (POST to ingest one)
 POST /v1/sites  PUT /nodes/{id}/site
+PUT /v1/sites/{id}/control         flag an untreated control site
 POST /v1/interventions             registry (end_before_start→422)
 GET  /analytics/summary|compare|before-after|period-compare|heat-events|summary-fast
 POST /nodes/{id}/time-reconstruct  backfill time-uncertain records (flagged, caveated)
+GET  /fleet                        per-node state, flags and needs_visit
+GET  /maintenance/retention        retention config + last run
 GET  /export-all.csv               full-history stream
-GET  /                             localized dashboard
+GET  /system                       fleet triage, coverage, retention state
+GET  /                            localized dashboard
 ```
 
 ## Known limitations
@@ -87,10 +102,14 @@ We'd rather list these here than have you trip over them:
   them in the field, and whole-system accuracy is unmeasured.
 - Eight spread-out nodes produce a smooth interpolated field, not street
   resolution. The map says its effective resolution out loud.
-- Firmware updates still need physical access until the ESP32 installer
-  is wired up.
-- Old measurements are never purged yet; only `sync_batches` is capped
-  (5000 rows).
+- Firmware updates need physical access on a board provisioned with the
+  Arduino default partition table; the two-slot table with rollback
+  (`firmware/partitions.csv`) is what new boards get, and switching an
+  existing board over requires a full erase.
+- Retention is automatic by default (365 days). Raw rows older than the
+  window are gone; take `/v1/maintenance/backup` if you need the history.
+- The LoRa path and the rollback FSM are host-tested only. Neither has
+  run on hardware yet, and both say so.
 
 ## Layout
 

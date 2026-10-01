@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from .analytics import summary_stats
 from .api import analytics_heat_events
 from .config import settings
-from .db import query
+from .db import engine, query
 from .ratelimit import check_rate
 from .security import require_bearer_token
 
@@ -47,7 +47,15 @@ _LABELS = {
            "max_seen": "Highest recorded",
            "uptime": "Uptime", "database": "Database", "version": "Version",
            "dtable": "Table", "drows": "Rows", "per_node": "Per node", "zin": "Zoom in", "zout": "Zoom out", "zreset": "Reset view",
-           "sys_status": "System status",},
+            "sys_status": "System status",
+            "firmware": "Firmware", "flags": "Flags", "visit": "Visit",
+            "no_visit": "no visit needed", "coverage": "Coverage",
+            "gaps": "Gaps", "fleet": "Fleet", "retention": "Retention",
+            "last_run": "Last run", "expected": "Expected", "received": "Received",
+            "longest_gap": "Longest gap", "worst_node": "Worst node",
+            "reason": "Reason", "no_gaps": "No gaps above the sampling interval.",
+            "fleet_hint": "A visit is needed when a node is offline, its clock is unset, storage is nearly full or frames are corrupted.",
+            "yes": "yes", "no": "no",},
     "es": {"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · se actualiza cada 60 segundos",
            "node": "Nodo", "site": "Sitio", "last": "Última medición (UTC)", "variable": "Variable",
            "value": "Valor", "quality": "Calidad", "total": "Total", "api": "API",
@@ -77,7 +85,15 @@ _LABELS = {
            "max_seen": "Máximo registrado",
            "uptime": "Uptime", "database": "Base", "version": "Versión",
            "dtable": "Tabla", "drows": "Filas", "per_node": "Por nodo", "zin": "Acercar", "zout": "Alejar", "zreset": "Ver todo",
-           "sys_status": "Estado del sistema",},
+            "sys_status": "Estado del sistema",
+            "firmware": "Firmware", "flags": "Señales", "visit": "Visita",
+            "no_visit": "sin visita pendiente", "coverage": "Cobertura",
+            "gaps": "Brechas", "fleet": "Flota", "retention": "Retención",
+            "last_run": "Última corrida", "expected": "Esperadas", "received": "Recibidas",
+            "longest_gap": "Brecha máx", "worst_node": "Peor nodo",
+            "reason": "Motivo", "no_gaps": "Sin brechas por encima del intervalo de muestreo.",
+            "fleet_hint": "Hace falta visita cuando un nodo está caído, su reloj no está fijado, el almacenamiento se llena o hay tramas corruptas.",
+            "yes": "sí", "no": "no",},
 
     "pt": {"title": "CAUCE Central", "subtitle": "Leituras microclimáticas ao vivo da rede comunitária · atualiza a cada 60 segundos",
            "node": "Nó", "site": "Local", "last": "Última medição (UTC)", "variable": "Variável",
@@ -108,7 +124,15 @@ _LABELS = {
            "max_seen": "Máximo registrado",
            "uptime": "Uptime", "database": "Banco", "version": "Versão",
            "dtable": "Tabela", "drows": "Linhas", "per_node": "Por nó", "zin": "Aproximar", "zout": "Afastar", "zreset": "Ver tudo",
-           "sys_status": "Estado do sistema",},
+            "sys_status": "Estado do sistema",
+            "firmware": "Firmware", "flags": "Sinais", "visit": "Visita",
+            "no_visit": "sem visita pendente", "coverage": "Cobertura",
+            "gaps": "Lacunas", "fleet": "Frota", "retention": "Retenção",
+            "last_run": "Última execução", "expected": "Esperadas", "received": "Recebidas",
+            "longest_gap": "Maior lacuna", "worst_node": "Pior nó",
+            "reason": "Motivo", "no_gaps": "Sem lacunas acima do intervalo de amostragem.",
+            "fleet_hint": "É preciso visitar quando um nó está offline, o relógio não está ajustado, o armazenamento está cheio ou há quadros corrompidos.",
+            "yes": "sim", "no": "não",},
 
 }
 
@@ -909,6 +933,47 @@ def node_events_page(node_id: str, request: Request,
     return HTMLResponse(_with_legal(page, labels, code))
 
 
+_CSV_HEADER = ("node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,"
+               "variable,value,unit,quality,reason_bits,time_uncertain\n")
+
+_CSV_SELECT = """
+    SELECT node_id, COALESCE(sensor_id,''), sequence, timestamp_utc_ms,
+           strftime('%Y-%m-%dT%H:%M:%SZ', timestamp_utc_ms/1000, 'unixepoch'),
+           variable, value, COALESCE(unit,''), quality, reason_bits,
+           time_uncertain
+    FROM measurements
+    """
+
+_CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}\n")
+_CSV_CHUNK_LINES = 500
+
+
+def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
+    """Formats rows in SQL and streams them in blocks, so a 60-day export
+    does not spend its time in Python datetime formatting nor in one HTTP
+    chunk per row."""
+    yield _CSV_HEADER
+    cursor = engine().execute(sql, params)
+    block: list[str] = []
+    try:
+        while True:
+            rows = cursor.fetchmany(size)
+            if not rows:
+                break
+            for r in rows:
+                value = "" if r[6] is None else f"{r[6]}"
+                block.append(_CSV_ROW.format(r[0], r[1], r[2], r[3], r[4],
+                                             r[5], value, r[7], r[8], r[9],
+                                             r[10]))
+                if len(block) >= _CSV_CHUNK_LINES:
+                    yield "".join(block)
+                    block = []
+        if block:
+            yield "".join(block)
+    finally:
+        cursor.close()
+
+
 @router.get("/v1/export-all.csv")
 def export_all_csv(
     request: Request,
@@ -916,21 +981,10 @@ def export_all_csv(
 ) -> StreamingResponse:
     check_rate(request)
     require_bearer_token(authorization, settings.api_token)
-
-    def gen():
-        yield ("node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,"
-               "variable,value,unit,quality,reason_bits,time_uncertain\n")
-        for r in query("SELECT * FROM measurements ORDER BY node_id, sequence"):
-            iso = datetime.fromtimestamp(
-                r["timestamp_utc_ms"] / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            val = "" if r["value"] is None else f"{r['value']}"
-            yield (f"{r['node_id']},{r['sensor_id'] or ''},{r['sequence']},"
-                   f"{r['timestamp_utc_ms']},{iso},{r['variable']},{val},"
-                   f"{r['unit'] or ''},{r['quality']},{r['reason_bits']},"
-                   f"{r['time_uncertain']}\n")
-
-    return StreamingResponse(gen(), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=cauce-all.csv"})
+    return StreamingResponse(
+        _csv_chunks(_CSV_SELECT + " ORDER BY node_id, sequence"),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=cauce-all.csv"})
 
 
 @router.get("/v1/nodes/{node_id}/export.csv")
@@ -944,23 +998,56 @@ def export_node_csv(
     safe_node_id = "".join(
         c for c in node_id if c.isalnum() or c in ("-", "_")
     ) or "node"
+    return StreamingResponse(
+        _csv_chunks(_CSV_SELECT + " WHERE node_id=? ORDER BY sequence",
+                    (node_id,)),
+        media_type="text/csv",
+        headers={"Content-Disposition":
+                 f"attachment; filename={safe_node_id}.csv"})
+
+
+@router.get("/v1/nodes/{node_id}/coverage.csv")
+def export_node_coverage_csv(
+    node_id: str,
+    request: Request,
+    variable: str = "air_temperature",
+    from_utc_ms: int | None = None,
+    to_utc_ms: int | None = None,
+    expected_interval_ms: int | None = None,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    from .coverage import _interval, _window, node_coverage
+
+    if not query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)):
+        raise HTTPException(status_code=404, detail="node_not_found")
+    from_ms, to_ms = _window(from_utc_ms, to_utc_ms)
+    cov = node_coverage(node_id, variable, from_ms, to_ms,
+                        _interval(expected_interval_ms))
+    safe_node_id = "".join(
+        c for c in node_id if c.isalnum() or c in ("-", "_")
+    ) or "node"
 
     def gen():
-        yield ("node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,"
-               "variable,value,unit,quality,reason_bits,time_uncertain\n")
-        for r in query("SELECT * FROM measurements WHERE node_id=? ORDER BY sequence",
-                       (node_id,)):
-            iso = datetime.fromtimestamp(
-                r["timestamp_utc_ms"] / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            val = "" if r["value"] is None else f"{r['value']}"
-            yield (f"{r['node_id']},{r['sensor_id'] or ''},{r['sequence']},"
-                   f"{r['timestamp_utc_ms']},{iso},{r['variable']},{val},"
-                   f"{r['unit'] or ''},{r['quality']},{r['reason_bits']},"
-                   f"{r['time_uncertain']}\n")
+        yield ("node_id,variable,from_utc_ms,to_utc_ms,expected_interval_ms,"
+               "expected_samples,received_samples,usable_samples,coverage_pct,"
+               "longest_gap_ms,uncertain_samples,reconstructed_samples\n")
+        yield (f"{node_id},{variable},{from_ms},{to_ms},"
+               f"{cov['expected_interval_ms']},{cov['expected_samples']},"
+               f"{cov['received_samples']},{cov['usable_samples']},"
+               f"{cov['coverage_pct']},{cov['longest_gap_ms']},"
+               f"{cov['uncertain_samples']},{cov['reconstructed_samples']}\n")
+        yield ("\nstart_utc_ms,end_utc_ms,duration_ms,missing_samples,reason\n")
+        for gap in cov["gaps"]:
+            yield (f"{gap['start_utc_ms']},{gap['end_utc_ms']},"
+                   f"{gap['duration_ms']},{gap['missing_samples']},"
+                   f"{gap['reason']}\n")
 
-    return StreamingResponse(gen(), media_type="text/csv",
-                             headers={"Content-Disposition":
-                                      f"attachment; filename={safe_node_id}.csv"})
+    return StreamingResponse(
+        gen(), media_type="text/csv",
+        headers={"Content-Disposition":
+                 f"attachment; filename={safe_node_id}-coverage.csv"})
 
 
 @router.get("/alerts", response_class=HTMLResponse)
@@ -1462,9 +1549,16 @@ a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
 {tablerows}
 </table></div>
 <h2>{h_nodes}</h2>
-<div class="tbl"><table><tr><th>{h_node}</th><th>{h_site}</th><th>{h_last}</th><th>{h_total}</th></tr>
+<p class="mut">{fleet_hint}</p>
+<div class="tbl"><table><tr><th>{h_node}</th><th>{h_site}</th><th>{h_last}</th><th>{firmware}</th><th>{flags}</th><th>{visit}</th></tr>
 {noderows}
 </table></div>
+<h2>{coverage}</h2>
+<div class="tbl"><table><tr><th>{h_node}</th><th>{expected}</th><th>{received}</th><th>{coverage}</th><th>{longest_gap}</th></tr>
+{coveragerows}
+</table></div>
+<h2>{retention}</h2>
+<div class="tbl"><table>{retentionrows}</table></div>
 <p class="mut">{disclaimer}</p></main></body></html>"""
 
 _STAT2 = ("<div class=\"stat\"><div class=\"u\">{label}</div>"
@@ -1475,7 +1569,10 @@ _STAT2 = ("<div class=\"stat\"><div class=\"u\">{label}</div>"
 def system_page(request: Request):
     check_rate(request)
     code, labels = _pick(request)
+    from .coverage import DEFAULT_INTERVAL_MS, node_coverage
     from .db import engine
+    from .fleet import fleet_snapshot
+    from .retention import read_state
     health_nodes = query("SELECT COUNT(*) AS c FROM nodes")[0]["c"]
     health_meas = query("SELECT COUNT(*) AS c FROM measurements")[0]["c"]
     tables = []
@@ -1506,18 +1603,54 @@ def system_page(request: Request):
     tablerows = "".join(
         f"<tr><td>{html.escape(str(name))}</td><td>{val}</td></tr>"
         for name, val in tables)
-    noderows = "".join(
-        f"<tr><td><a href=\"/nodes/{html.escape(r['node_id'])}\">"
-        f"{html.escape(r['node_id'])}</a></td>"
-        f"<td>{html.escape(r['site_id'] or labels['none'])}</td>"
-        f"<td>{_fmt_utc(r['ts'])}</td><td>{r['cnt'] or 0}</td></tr>"
-        for r in query(
-            """SELECT n.node_id, n.site_id,
-                      (SELECT COUNT(*) FROM measurements m
-                       WHERE m.node_id=n.node_id) AS cnt,
-                      (SELECT MAX(timestamp_utc_ms) FROM measurements m
-                       WHERE m.node_id=n.node_id) AS ts
-               FROM nodes n ORDER BY n.node_id"""))
+    noderows = ""
+    coveragerows = ""
+    now_ms = int(_time.time() * 1000)
+    window_from = now_ms - 7 * 86400000
+    for r in fleet_snapshot(None)["nodes"]:
+        nid = r["node_id"]
+        flags = "".join(
+            f"<span class=\"q-INVALID\">{html.escape(f)}</span> "
+            for f in r["flags"]
+        ) or "—"
+        visit = ("<strong>" + labels["visit"] + "</strong>"
+                 if r["needs_visit"] else labels["no_visit"])
+        noderows += (
+            f"<tr><td><a href=\"/nodes/{html.escape(nid)}\">"
+            f"{html.escape(nid)}</a></td>"
+            f"<td>{html.escape(r['site_id'] or labels['none'])}</td>"
+            f"<td>{_fmt_utc(r['last_seen_utc_ms'])}</td>"
+            f"<td>{html.escape(str(r['firmware_version'] or '—'))}</td>"
+            f"<td>{flags}</td><td>{visit}</td></tr>"
+        )
+        cov = node_coverage(
+            nid, "air_temperature", window_from, now_ms, DEFAULT_INTERVAL_MS
+        )
+        pct = "—" if cov["coverage_pct"] is None else f"{cov['coverage_pct']}%"
+        gap_ms = cov["longest_gap_ms"]
+        gap_txt = "—" if not gap_ms else f"{gap_ms // 60000} min"
+        coveragerows += (
+            f"<tr><td><a href=\"/nodes/{html.escape(nid)}\">"
+            f"{html.escape(nid)}</a></td>"
+            f"<td>{cov['expected_samples']}</td>"
+            f"<td>{cov['received_samples']}</td>"
+            f"<td>{pct}</td><td>{gap_txt}</td></tr>"
+        )
+    if not noderows:
+        noderows = f"<tr><td colspan=\"6\">{labels['no_data']}</td></tr>"
+    if not coveragerows:
+        coveragerows = f"<tr><td colspan=\"5\">{labels['no_data']}</td></tr>"
+
+    state = read_state()
+    retentionrows = (
+        f"<tr><th>{labels['enabled']}</th><td>"
+        f"{labels['yes'] if settings.retention_enabled else labels['no']}</td></tr>"
+        f"<tr><th>{labels['retention']}</th><td>{settings.retention_days} d</td></tr>"
+        f"<tr><th>{labels['last_run']}</th><td>"
+        f"{_fmt_utc(state.get('last_run_utc_ms')) if state.get('last_run_utc_ms') else '—'}</td></tr>"
+        f"<tr><th>{labels['total']}</th><td>"
+        f"{state.get('deleted_measurements', 0)}</td></tr>"
+    )
     page = (_SYSTEM_PAGE.replace("{lang}", code)
             .replace("{title}", labels["title"])
             .replace("{h_sys}", labels["sys_status"])
@@ -1532,7 +1665,18 @@ def system_page(request: Request):
             .replace("{h_site}", labels["site"])
             .replace("{h_last}", labels["last"])
             .replace("{h_total}", labels["total"])
-            .replace("{noderows}", noderows or
-                     f"<tr><td colspan=\"4\">{labels['no_data']}</td></tr>")
+            .replace("{firmware}", labels["firmware"])
+            .replace("{flags}", labels["flags"])
+            .replace("{visit}", labels["visit"])
+            .replace("{fleet_hint}", labels["fleet_hint"])
+            .replace("{coverage}", labels["coverage"])
+            .replace("{expected}", labels["expected"])
+            .replace("{received}", labels["received"])
+            .replace("{longest_gap}", labels["longest_gap"])
+            .replace("{retention}", labels["retention"])
+            .replace("{last_run}", labels["last_run"])
+            .replace("{coveragerows}", coveragerows)
+            .replace("{retentionrows}", retentionrows)
+            .replace("{noderows}", noderows)
             .replace("{disclaimer}", labels["disclaimer"]))
     return HTMLResponse(_with_legal(page, labels, code))

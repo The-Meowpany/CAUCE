@@ -15,6 +15,7 @@ layer (`Esp32ApiServer`). That split is why 14 router tests run on a PC.
 | GET | `/measurements/latest` | Last stored measurement (404 if the store is empty) |
 | GET | `/measurements?from=&to=` | History as a streaming JSON array |
 | GET | `/health` | Full telemetry: counters, storage, failures |
+| GET | `/diagnostics` | Field bundle (`cauce.diag/1`): identity, health, sync counters, radio, last error. POST it to the central to open a field ticket |
 | GET | `/config` | Active config. **Secrets never come out** (`wifi_password: null`) |
 | POST | `/config` | Apply configuration (KV body). Admin token required |
 | GET | `/export?format=csv\|json&from=&to=` | CSV (RFC4180) or JSON, streamed |
@@ -48,6 +49,32 @@ characters (`:` → `%3A`).
 | 405 | Method not allowed |
 | 422 | Config parsed but invalid → `{"errors":[...]}` with every problem listed |
 | 503 | Administration not configured |
+
+## Field diagnostics
+
+`GET /api/v1/diagnostics` returns one JSON object meant to be copied,
+not parsed by a human:
+
+```json
+{"schema":"cauce.diag/1",
+ "identity":{"node_id":"CAUCE-001","site_id":"canelones-centro",
+             "firmware":"1.4.0","hardware":""},
+ "health":{"node_state":"Sampling","net_state":"Connected","uptime_ms":123456,
+           "utc_time_valid":true,"rssi_dbm":-63,"battery_v":3.92,
+           "stored":1150,"corrupted_frames":2,"sample_interval_s":60, "...":"..."},
+ "sync":{"attempts":20,"failures":2},
+ "radio":{"lora_enabled":false,"rssi_dbm":0,"snr_db":0,"sf":0},
+ "errors":{"last":""}}
+```
+
+The node signs it with the same device key it uses for batches
+(HMAC-SHA256 over the exact bytes) and POSTs it to
+`/v1/nodes/{id}/diagnostics`; the central keeps the last five per node.
+That is the whole point: when a node in the field misbehaves, the
+diagnosis is one HTTP call instead of a serial cable, and it lands in
+the database where `/v1/fleet` can flag it. Strings are escaped and
+the response is refused rather than truncated if the buffer is too
+small, so the signature always covers exactly what was sent.
 
 ## Streaming contract
 

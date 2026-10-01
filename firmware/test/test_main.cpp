@@ -13,7 +13,9 @@ void registerNetworkTests();
 void registerApiTests();
 void registerSyncTests();
 void registerOtaTests();
+void registerOtaRollbackTests();
 void registerLoRaTests();
+void registerDiagnosticsTests();
 
 int main() {
   UNITY_BEGIN();
@@ -30,6 +32,8 @@ int main() {
   registerApiTests();
   registerSyncTests();
   registerOtaTests();
+  registerOtaRollbackTests();
   registerLoRaTests();
+  registerDiagnosticsTests();
   return UNITY_END();
 }

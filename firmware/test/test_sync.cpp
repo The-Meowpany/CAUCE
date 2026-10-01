@@ -1,4 +1,4 @@
-﻿#include <cstdlib>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -252,6 +252,13 @@ void test_payload_contains_protocol_and_node() {
   TEST_ASSERT_TRUE(payload.find("\"protocol_version\":1") != std::string::npos);
   TEST_ASSERT_TRUE(payload.find("\"node_id\":\"CAUCE-001\"") != std::string::npos);
   TEST_ASSERT_TRUE(payload.find("\"measurements\":[") != std::string::npos);
+  const std::string expected_prefix =
+      "{\"protocol_version\":1,\"node_id\":\"CAUCE-001\",\"batch_size\":";
+  TEST_ASSERT_TRUE_MESSAGE(payload.rfind(expected_prefix, 0) == 0,
+                           payload.substr(0, 80).c_str());
+  TEST_ASSERT_TRUE_MESSAGE(payload.find(":\"\"") == std::string::npos,
+                           payload.substr(0, 80).c_str());
+  TEST_ASSERT_TRUE_MESSAGE(payload.back() == '}', "envelope not closed");
 }
 
 void test_network_lost_gates_syncing() {
@@ -343,8 +350,13 @@ void test_node_id_escaped_in_sync_envelope() {
   rig.manager.onNetworkConnected();
   rig.manager.tick();
   TEST_ASSERT_FALSE(rig.transport.calls.empty());
-  TEST_ASSERT_TRUE(rig.transport.calls.front().find("A\\\"B") !=
-                   std::string::npos);
+  const std::string& payload = rig.transport.calls.front();
+  TEST_ASSERT_TRUE(payload.find("A\\\"B") != std::string::npos);
+  TEST_ASSERT_TRUE_MESSAGE(
+      payload.rfind("{\"protocol_version\":1,\"node_id\":\"A\\\"B\",", 0) == 0,
+      payload.substr(0, 80).c_str());
+  TEST_ASSERT_TRUE_MESSAGE(payload.find(":\"\"") == std::string::npos,
+                           payload.substr(0, 80).c_str());
 }
 
 void registerSyncTests() {

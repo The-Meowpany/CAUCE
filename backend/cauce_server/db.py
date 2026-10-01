@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS sites (
     name TEXT,
     notes TEXT,
     lat REAL,
-    lon REAL
+    lon REAL,
+    is_control INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS interventions (
@@ -66,6 +67,8 @@ CREATE TABLE IF NOT EXISTS sync_batches (
     received_at_utc_ms INTEGER NOT NULL,
     transport TEXT NOT NULL DEFAULT 'wifi'
 );
+
+CREATE INDEX IF NOT EXISTS idx_sync_node_ts ON sync_batches(node_id, received_at_utc_ms);
 
 CREATE TABLE IF NOT EXISTS agg_hourly (
     node_id TEXT NOT NULL,
@@ -101,6 +104,35 @@ CREATE TABLE IF NOT EXISTS alert_log (
     message TEXT NOT NULL DEFAULT '',
     delivered INTEGER NOT NULL DEFAULT 0,
     attempts INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS node_diagnostics (
+    diag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL,
+    received_at_utc_ms INTEGER NOT NULL,
+    firmware_version TEXT,
+    uptime_ms INTEGER,
+    node_state TEXT,
+    net_state TEXT,
+    rssi_dbm INTEGER,
+    clock_valid INTEGER NOT NULL DEFAULT 0,
+    battery_v REAL,
+    storage_bytes INTEGER,
+    stored_count INTEGER,
+    invalid_count INTEGER,
+    read_failures INTEGER,
+    storage_failures INTEGER,
+    corrupted_frames INTEGER,
+    last_success_utc_ms INTEGER,
+    bundle_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_diag_node ON node_diagnostics(node_id, diag_id);
+
+CREATE TABLE IF NOT EXISTS maintenance_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_utc_ms INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -161,6 +193,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE alert_log ADD COLUMN attempts INTEGER "
             "NOT NULL DEFAULT 0"
+        )
+    if scols and "is_control" not in scols:
+        conn.execute(
+            "ALTER TABLE sites ADD COLUMN is_control INTEGER NOT NULL DEFAULT 0"
         )
 
 

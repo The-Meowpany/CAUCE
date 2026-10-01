@@ -3,10 +3,16 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (112 firmware + 68 backend tests, E2E green)
+## Implemented and verified (132 firmware + 88 backend tests, E2E green)
 | **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 5 pruebas nuevas (firmware HMAC RFC4231 x2 + matriz backend valida/firma-mala/sin-firma + device-secret signing x2) |
 
 | Component | Evidence |
+| **Data coverage accounting**: expected vs received, longest gap, gap reasons (`no_data` / `measured_not_delivered` / `clock_uncertain`), node + site + CSV | 8 backend tests |
+| **Control sites and difference-in-differences** in `before-after`, with distance to the treated site and automatic exclusion of under-sampled controls | 2 backend tests + `haversine_m`/`difference_in_differences` unit-covered |
+| **Fleet triage** (`/v1/fleet`): firmware spread, last sync, storage, flags, `needs_visit`; `/system` renders it in en/es/pt | 3 backend tests + dashboard render test |
+| **Scheduled retention**: daily purge + throttled VACUUM, state persisted in `maintenance_state`, visible on `/system` | 2 backend tests |
+| **Pilot-scale load rehearsal** (`simulator/load_pilot.py`): 8 nodes x N days, injected outages, optional site/control/intervention seeding, throughput and size report | run against a live central: 110k rows at 12.4k rows/s
+
 |---|---|
 | HAL interfaces `IClock`, `II2cBus`, `IFileSystem`, `INetworkController`, `ISyncTransport` | Compiles on host and ESP32; native doubles + ESP32 impls |
 | Normalized `Measurement` model (node, sequence, timestamp, variable, value, quality, reason bits) | Codec roundtrip tests |
@@ -40,6 +46,12 @@ not. It overrides any aspirational claim elsewhere.
 - OTA actual flash write (`Esp32Ota` on `Update`, cross-compiled) +
   boot-counter rollback confirmation (both unrun on hardware).
 - NTP time source.
+- LoRa sync transport (`LoRaSyncTransport` behind `ILoRaRadio`).
+- OTA rollback: two-slot partition table (`firmware/partitions.csv`),
+  `OtaRollbackGuard` policy (mark valid / retry / roll back) and
+  `Esp32OtaControl`. Policy is host-tested; the flash path is not.
+- Field diagnostics bundle (`GET /api/v1/diagnostics`, signed) and its
+  central ingest at `POST /v1/nodes/{id}/diagnostics`.
 
 ## Not implemented yet
 
@@ -47,6 +59,8 @@ not. It overrides any aspirational claim elsewhere.
   the dependency-free 2D schematic SVG map with IDW field and shared-scale
   co-location overlays instead.
 - Deep sleep application (policy evaluator shipped; application requires bench).
+- TLS termination in front of the central (see `deployment/` and
+  `docs/en/DEPLOYMENT.md`).
 
 ## Known technical debt / backlog (prioritized)
 
@@ -60,8 +74,26 @@ not. It overrides any aspirational claim elsewhere.
 | 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) ✅ **increased to 512 B** | Long messages | ? Done |
 | 7 | LOW | Unity single binary — cross-suite isolation via dedicated data dirs | — | — |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | — |
+| 9 | LOW | `LogStorageRepository` / coverage queries scan rows in Python for very long windows | Windows > 90 days on a node | Coverage caps windows at 400 days and gaps at 20; still row-bound |
 
 ### Closed this round
+
+- **Sync envelope emitted invalid JSON.** `SyncManager` wrapped the already-escaped
+  node id in a second pair of quotes, so the wire payload was
+  `"node_id":""CAUCE-E2E""`. The central answered `400 invalid_json` and
+  the E2E gate was red on arrival. The unit test missed it because
+  `"node_id":"CAUCE-001"` also appears inside every record, so the
+  assertion was satisfied by the array, not the envelope. Fixed the
+  format string and tightened both tests to assert the envelope
+  prefix and to reject `:""`.
+- **CSV export streamed one HTTP chunk per row**: 3.3 s for 14.4k rows,
+  which extrapolates to minutes over a 60-day pilot. Now formatted in
+  SQL and yielded in 500-line blocks: 109 ms for the same export.
+- **Field diagnostics JSON had the same double-quoting bug** as the sync
+  envelope, plus a missing NUL terminator that leaked stack bytes into
+  the `%s` expansion. Caught by a new known-answer test.
+
+
 - Sync batch payload buffer moved from caller stack to manager member
   (4 KB off loopTask stack).
 - Per-request shared statics removed (ApiRouter route buffer,

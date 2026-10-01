@@ -1104,3 +1104,337 @@ def test_map_zoom_controls_present(client):
     assert 'id="zin"' in r.text and 'id="zreset"' in r.text
     assert 'aria-label' in r.text
 
+
+
+def _series(node_id, start_ms, count, step_ms=60000, base=20.0, ramp=0.0,
+            start_seq=1):
+    recs = []
+    for i in range(count):
+        recs.append(make_record(start_seq + i, start_ms + i * step_ms,
+                                base + ramp * i))
+    for r in recs:
+        r['node_id'] = node_id
+    return recs
+
+
+def test_coverage_counts_expected_versus_received(client):
+    start = BASE_TS
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', start, 10)))
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={start + 540000}')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['expected_samples'] == 10
+    assert body['received_samples'] == 10
+    assert body['coverage_pct'] == 100.0
+    assert body['longest_gap_ms'] == 0
+    assert body['gaps'] == []
+
+
+def test_coverage_window_ends_are_inclusive(client):
+    start = BASE_TS
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', start, 10)))
+    body = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                      f'&to_utc_ms={start + 600000}').json()
+    assert body['expected_samples'] == 11
+    assert body['received_samples'] == 10
+    assert body['coverage_pct'] == round(1000 / 11, 2)
+    assert body['longest_gap_ms'] == 0
+
+
+
+def test_coverage_reports_long_gap_with_reason(client):
+    start = BASE_TS
+    recs = _series('CAUCE-001', start, 3)
+    recs += _series('CAUCE-001', start + 3600000, 3, start_seq=4)
+    client.post('/v1/sync', json=sync_payload(recs))
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={start + 3600000 + 180000}')
+    body = r.json()
+    assert body['gap_count_reported'] >= 1
+    longest = body['gaps'][0]
+    assert longest['duration_ms'] == 3480000
+    assert longest['reason'] in ('no_data', 'measured_not_delivered',
+                                 'clock_uncertain')
+    assert body['coverage_pct'] < 100
+
+
+def test_coverage_unknown_node_404_and_bad_window_422(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 2)))
+    assert client.get('/v1/nodes/nope/coverage').status_code == 404
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={BASE_TS}'
+                   f'&to_utc_ms={BASE_TS - 1000}')
+    assert r.status_code == 422
+    assert client.get('/v1/nodes/CAUCE-001/coverage?expected_interval_ms=1'
+                      ).status_code == 422
+    assert client.get('/v1/sites/ghost/coverage').status_code == 404
+
+
+def test_site_coverage_pools_nodes_and_names_the_worst(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 10), node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-002', BASE_TS, 4), node_id='CAUCE-002'))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1'")
+    r = client.get(f'/v1/sites/s1/coverage?from_utc_ms={BASE_TS}'
+                   f'&to_utc_ms={BASE_TS + 600000}')
+    body = r.json()
+    assert body['node_count'] == 2
+    assert body['received_samples'] == 14
+    assert body['expected_samples'] == 22
+    assert body['worst_node'] == 'CAUCE-002'
+
+
+def test_control_site_flag_roundtrip(client):
+    r = client.post('/v1/sites', json={'site_id': 'ctl', 'control': True})
+    assert r.json()['is_control'] is True
+    r = client.put('/v1/sites/ctl/control', json={'control': False})
+    assert r.json()['is_control'] is False
+    listing = client.get('/v1/sites').json()['sites']
+    assert listing[0]['is_control'] == 0
+    assert client.put('/v1/sites/ghost/control',
+                      json={'control': True}).status_code == 404
+    assert client.post('/v1/sites', json={'site_id': 'x', 'control': 'yes'}
+                       ).status_code == 422
+
+
+def test_before_after_reports_difference_in_differences(client):
+    client.post('/v1/sites', json={'site_id': 'treated'})
+    client.post('/v1/sites', json={'site_id': 'ctl', 'control': True})
+    client.put('/v1/sites/treated/location', json={'lat': -34.9, 'lon': -56.16})
+    client.put('/v1/sites/ctl/location', json={'lat': -34.9, 'lon': -56.17})
+    split = BASE_TS + 30 * 60000
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 30, base=20.0), node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', split, 30, base=20.0, start_seq=31),
+        node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-002', BASE_TS, 30, base=20.0, ramp=0.1),
+        node_id='CAUCE-002'))
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-002', split, 30, base=23.0, ramp=0.1, start_seq=31),
+        node_id='CAUCE-002'))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='treated' WHERE node_id='CAUCE-001'")
+        conn.execute("UPDATE nodes SET site_id='ctl' WHERE node_id='CAUCE-002'")
+    r = client.post('/v1/interventions', json={
+        'site_id': 'treated', 'kind': 'shade', 'start_utc_ms': split})
+    iv = r.json()['intervention_id']
+    r = client.get(f'/v1/analytics/before-after?intervention_id={iv}'
+                   f'&node_id=CAUCE-001&variable=air_temperature'
+                   f'&before_window_days=1')
+    body = r.json()
+    group = body['control_group']
+    assert group['control_node_count'] == 1
+    control = group['controls'][0]
+    assert control['site_id'] == 'ctl'
+    assert control['included'] is True
+    assert control['distance_m'] > 0
+    assert group['difference_in_differences'] is not None
+    assert body['mean_shift'] == 0.0
+    assert group['difference_in_differences'] < 0
+
+
+def test_before_after_without_controls_says_so(client):
+    client.post('/v1/sites', json={'site_id': 'solo'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 30, base=20.0)))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='solo'")
+    r = client.post('/v1/interventions', json={
+        'site_id': 'solo', 'kind': 'shade', 'start_utc_ms': BASE_TS + 60000})
+    iv = r.json()['intervention_id']
+    body = client.get(f'/v1/analytics/before-after?intervention_id={iv}'
+                      f'&node_id=CAUCE-001&variable=air_temperature'
+                      f'&before_window_days=1').json()
+    assert body['control_group']['control_node_count'] == 0
+    assert body['control_group']['difference_in_differences'] is None
+    assert 'no control group' in body['note']
+
+
+def test_diagnostics_ingest_and_retrieval(client):
+    bundle = {'health': {'firmware': '1.2.3', 'uptime_ms': 1234,
+                         'node_state': 'Sampling', 'net_state': 'Connected',
+                         'rssi_dbm': -61, 'utc_time_valid': True,
+                         'battery_v': 3.9, 'storage_bytes': 4096,
+                         'stored': 12, 'invalid': 1, 'read_failures': 0,
+                         'storage_failures': 0, 'corrupted_frames': 0,
+                         'last_success_utc_ms': BASE_TS},
+              'errors': []}
+    r = client.post('/v1/nodes/CAUCE-001/diagnostics', json=bundle)
+    assert r.status_code == 200
+    r = client.get('/v1/nodes/CAUCE-001/diagnostics')
+    assert r.status_code == 200
+    latest = r.json()['latest']
+    assert latest['firmware_version'] == '1.2.3'
+    assert latest['rssi_dbm'] == -61
+    assert latest['clock_valid'] == 1
+    assert client.get('/v1/nodes/ghost/diagnostics').status_code == 404
+
+
+def test_diagnostics_rejects_bundle_without_health(client):
+    r = client.post('/v1/nodes/CAUCE-001/diagnostics', json={'errors': []})
+    assert r.status_code == 422
+
+
+def test_diagnostics_keeps_only_last_five(client):
+    for i in range(7):
+        client.post('/v1/nodes/CAUCE-001/diagnostics', json={
+            'health': {'firmware': f'1.0.{i}', 'utc_time_valid': True}})
+    from cauce_server import db as _db
+    kept = _db.query('SELECT COUNT(*) AS c FROM node_diagnostics')[0]['c']
+    assert kept == 5
+    latest = client.get('/v1/nodes/CAUCE-001/diagnostics').json()['latest']
+    assert latest['firmware_version'] == '1.0.6'
+
+
+def test_fleet_flags_a_node_that_never_synced(client):
+    r = client.get('/v1/fleet')
+    assert r.status_code == 200
+    assert r.json()['node_count'] == 0
+    client.post('/v1/sync', json=sync_payload([make_record(1, BASE_TS, 21.0)]))
+    body = client.get('/v1/fleet').json()
+    assert body['node_count'] == 1
+    node = body['nodes'][0]
+    assert 'no_diagnostics' in node['flags']
+    assert node['needs_visit'] is False
+    assert body['firmware_uniform'] is True
+
+
+def test_fleet_marks_nodes_that_need_a_visit(client):
+    client.post('/v1/sync', json=sync_payload([make_record(1, BASE_TS, 21.0)]))
+    client.post('/v1/nodes/CAUCE-001/diagnostics', json={'health': {
+        'firmware': '1.0.0', 'utc_time_valid': False, 'corrupted_frames': 3,
+        'stored': 10}})
+    body = client.get('/v1/fleet?storage_capacity_bytes=11').json()
+    node = body['nodes'][0]
+    assert 'clock_unset' in node['flags']
+    assert 'corrupted_frames' in node['flags']
+    assert 'storage_nearly_full' in node['flags']
+    assert node['storage_pct'] == 90.9
+    assert node['needs_visit'] is True
+    assert body['visits_needed'] == 1
+
+
+def test_fleet_reports_firmware_spread(client):
+    client.post('/v1/sync', json=sync_payload([make_record(1, BASE_TS, 21.0)],
+                                              node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload([make_record(1, BASE_TS, 21.0)],
+                                              node_id='CAUCE-002'))
+    client.post('/v1/nodes/CAUCE-001/diagnostics', json={
+        'health': {'firmware': '1.0.0', 'utc_time_valid': True}})
+    client.post('/v1/nodes/CAUCE-002/diagnostics', json={
+        'health': {'firmware': '0.9.0', 'utc_time_valid': True}})
+    body = client.get('/v1/fleet').json()
+    assert body['firmware_uniform'] is False
+    assert {f['version'] for f in body['firmware_spread']} == {'0.9.0', '1.0.0'}
+
+
+def test_retention_get_reports_configuration_and_state(client):
+    r = client.get('/v1/maintenance/retention')
+    assert r.status_code == 200
+    body = r.json()
+    assert 'retention_days' in body
+    assert body.get('runs', 0) == 0
+
+
+def test_retention_post_purges_and_records_state(client):
+    old = BASE_TS
+    now = int(__import__('time').time() * 1000)
+    client.post('/v1/sync', json=sync_payload([make_record(1, old, 21.0)]))
+    client.post('/v1/sync', json=sync_payload([make_record(2, now, 22.0)]))
+    r = client.post('/v1/maintenance/retention', json={'older_than_days': 1})
+    assert r.status_code == 200
+    assert r.json()['deleted_measurements'] == 1
+    state = client.get('/v1/maintenance/retention').json()
+    assert state['runs'] == 1
+    assert state['last_run_utc_ms'] is not None
+    left = client.get('/v1/nodes/CAUCE-001/measurements').json()['total']
+    assert left == 1
+
+
+def test_system_page_shows_fleet_coverage_and_retention(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 5)))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1'")
+    r = client.get('/system?lang=en')
+    assert r.status_code == 200
+    assert 'CAUCE-001' in r.text
+    assert 'Retention' in r.text
+    assert 'Coverage' in r.text
+    assert 'no visit needed' in r.text
+    r = client.get('/system?lang=es')
+    assert 'Cobertura' in r.text
+    assert 'Retenci' in r.text
+
+def test_coverage_csv_export_summarises_and_lists_gaps(client):
+    start = BASE_TS
+    recs = _series('CAUCE-001', start, 3)
+    recs += _series('CAUCE-001', start + 3600000, 3, start_seq=4)
+    client.post('/v1/sync', json=sync_payload(recs))
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage.csv?from_utc_ms={start}'
+                   f'&to_utc_ms={start + 3780000}')
+    assert r.status_code == 200
+    assert 'text/csv' in r.headers['content-type']
+    assert 'CAUCE-001-coverage.csv' in r.headers['content-disposition']
+    lines = [l for l in r.text.strip().splitlines() if l]
+    assert lines[0].startswith('node_id,variable,from_utc_ms')
+    assert lines[1].startswith('CAUCE-001,air_temperature,')
+    assert lines[1].endswith(',64,6,6,9.38,3480000,0,0')
+    assert lines[2] == 'start_utc_ms,end_utc_ms,duration_ms,missing_samples,reason'
+    assert len(lines) == 4
+    assert lines[3].endswith(('no_data', 'measured_not_delivered',
+                              'clock_uncertain'))
+
+
+def test_csv_export_format_survives_blocked_streaming(client):
+    recs = _series('CAUCE-001', BASE_TS, 700)
+    client.post('/v1/sync', json=sync_payload(recs, node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload(
+        [make_record(1, BASE_TS, 19.5)], node_id='CAUCE-002'))
+    r = client.get('/v1/nodes/CAUCE-001/export.csv')
+    assert r.status_code == 200
+    lines = r.text.strip().splitlines()
+    assert lines[0] == ('node_id,sensor_id,sequence,timestamp_utc_ms,'
+                        'timestamp_iso,variable,value,unit,quality,'
+                        'reason_bits,time_uncertain')
+    assert len(lines) == 701
+    first = lines[1].split(',')
+    assert first[0] == 'CAUCE-001'
+    assert first[1] == 'BME280-1'
+    assert first[2] == '1'
+    assert first[3] == str(BASE_TS)
+    assert first[4] == '2026-08-22T00:00:00Z'
+    assert first[5] == 'air_temperature'
+    assert first[6] == '20.0'
+    assert first[7] == 'C'
+    assert first[8] == 'VALID'
+    assert first[10] == '0'
+    last = lines[-1].split(',')
+    assert last[2] == '700'
+    assert last[4] == '2026-08-22T11:39:00Z'
+
+    every = client.get('/v1/export-all.csv').text.strip().splitlines()
+    assert every[0] == lines[0]
+    assert len(every) == 702
+    assert every[1].startswith('CAUCE-001,')
+    assert every[-1].startswith('CAUCE-002,')
+    assert 'CAUCE-001-coverage.csv' not in r.headers.get(
+        'content-disposition', '') + client.get(
+            '/v1/export-all.csv').headers.get('content-disposition', '')
+
+
+def test_coverage_csv_404_for_unknown_node(client):
+    assert client.get('/v1/nodes/ghost/coverage.csv').status_code == 404

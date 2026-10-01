@@ -11,7 +11,7 @@ pio run -e esp32dev         # compila el firmware objetivo
 
 ```bash
 cd backend
-python -m pytest tests -q   # 68 tests de backend
+python -m pytest tests -q   # 88 tests de backend
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ```
 

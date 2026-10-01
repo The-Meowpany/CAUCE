@@ -26,13 +26,19 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 112 tests en host (Unity)
+pio test -e native          # 132 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 68 tests
+python -m pytest tests -q   # 88 tests
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ..\scripts\verify-all.ps1   # todo lo anterior en un gate
+```
+Para dimensionar el piloto antes de mandarlo a campo:
+
+```powershell
+python simulator\load_pilot.py --nodes 8 --days 60 --dry-run
+python simulator\load_pilot.py --nodes 8 --days 60 --sync-url http://localhost:8000/v1/sync
 ```
 
 Para ver la UI del nodo, unirse a su Wi-Fi y abrir
@@ -55,6 +61,8 @@ GET  /status                       estados FSM, reloj, uptime, última
 GET  /measurements/latest          última medición guardada
 GET  /measurements?from=&to=       serie JSON en streaming (extremos INCLUSIVOS)
 GET  /health                       contadores, storage, fallos
+GET  /diagnostics                  bundle de campo (cauce.diag/1), firmado y
+                                   posteable al central para triaje
 GET  /config                       config activa (secretos nunca expuestos)
 POST /config                       cuerpo KV, requiere token admin
 GET  /export?format=csv|json       exportación en streaming
@@ -66,12 +74,18 @@ GET  /export?format=csv|json       exportación en streaming
 POST /provision                    registro de device-key (gated por admin)
 POST /sync                         ingesta idempotente (transport: wifi|lora)
 GET  /nodes  /nodes/{id}           listado / detalle + última
-GET  /nodes/{id}/measurements      serie filtrable (limit≤10000)
+GET  /nodes/{id}/measurements      serie filtrable (limit…10000)
+GET  /nodes/{id}/coverage          esperado vs recibido, brechas con motivo
+GET  /nodes/{id}/diagnostics       último bundle de campo (POST para ingerir)
 POST /v1/sites  PUT /nodes/{id}/site
+PUT /v1/sites/{id}/control         marcar un sitio control sin tratamiento
 POST /v1/interventions             registro (end_before_start→422)
 GET  /analytics/summary|compare|before-after|period-compare|heat-events|summary-fast
 POST /nodes/{id}/time-reconstruct  rellena records con tiempo incierto (marcados, con caveat)
+GET  /fleet                        estado por nodo, señales y needs_visit
+GET  /maintenance/retention        config de retención + última corrida
 GET  /export-all.csv               stream de historia completa
+GET  /system                       triaje de flota, cobertura, estado de retención
 GET  /                             dashboard localizado
 ```
 
@@ -89,10 +103,15 @@ Preferimos listarlas acá antes de que te las encuentres a la mala:
 - Ocho nodos dispersos producen un campo interpolado suave, no
   resolución a nivel de calle. El mapa dice su resolución efectiva en voz
   alta.
-- Los updates de firmware todavía requieren acceso físico hasta que se
-  cablee el installer ESP32.
-- Las mediciones viejas nunca se purgan aún; solo `sync_batches` está
-  acotado (5000 filas).
+- Los updates de firmware necesitan acceso físico en una placa provisionada
+  con la tabla de particiones default de Arduino; la tabla de dos slots con
+  rollback (`firmware/partitions.csv`) es lo que llevan las placas nuevas, y
+  pasar una placa existente requiere un borrado completo.
+- La retención es automática por defecto (365 días). Las filas crudas más
+  viejas que la ventana ya no están; sacá `/v1/maintenance/backup` si
+  necesitás la historia.
+- El camino LoRa y la FSM de rollback están testeados solo en host. Ninguno
+  corrió todavía en hardware, y ambos lo dicen.
 
 ## Layout
 

@@ -7,9 +7,12 @@ from . import db
 from .alerts import router as alerts_router
 from .api import router
 from .config import settings
+from .coverage import router as coverage_router
 from .dashboard import router as dashboard_router
 from .evaluation import router as evaluation_router
+from .fleet import router as fleet_router
 from .legal import router as legal_router
+from .retention import RetentionScheduler
 
 _STARTED_MONO = time.monotonic()
 
@@ -17,8 +20,13 @@ _STARTED_MONO = time.monotonic()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.engine()
+    scheduler = RetentionScheduler()
+    scheduler.start()
     print("cauce-central listo | db:", settings.db_path, flush=True)
-    yield
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 app = FastAPI(
@@ -62,3 +70,5 @@ app.include_router(alerts_router)
 app.include_router(evaluation_router)
 app.include_router(dashboard_router)
 app.include_router(legal_router)
+app.include_router(coverage_router)
+app.include_router(fleet_router)

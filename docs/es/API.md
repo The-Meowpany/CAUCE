@@ -16,6 +16,7 @@ corren en una PC.
 | GET | `/measurements/latest` | Última medición guardada (404 si el store está vacío) |
 | GET | `/measurements?from=&to=` | Historia como arreglo JSON en streaming |
 | GET | `/health` | Telemetría completa: contadores, storage, fallos |
+| GET | `/diagnostics` | Bundle de campo (`cauce.diag/1`): identidad, salud, contadores de sync, radio, último error. Se firma y se postea al central para triaje |
 | GET | `/config` | Config activa. **Los secretos nunca salen** (`wifi_password: null`) |
 | POST | `/config` | Aplica configuración (cuerpo KV). Requiere token admin |
 | GET | `/export?format=csv\|json&from=&to=` | CSV (RFC4180) o JSON, en streaming |
@@ -50,6 +51,32 @@ caracteres incómodos (`:` → `%3A`).
 | 405 | Método no permitido |
 | 422 | Config parseada pero inválida → `{"errors":[...]}` con cada problema listado |
 | 503 | Administración no configurada |
+
+## Diagnóstico de campo
+
+`GET /api/v1/diagnostics` devuelve un objeto JSON pensado para copiarse, no
+para que un humano lo lea:
+
+```json
+{"schema":"cauce.diag/1",
+ "identity":{"node_id":"CAUCE-001","site_id":"canelones-centro",
+             "firmware":"1.4.0","hardware":""},
+ "health":{"node_state":"Sampling","net_state":"Connected","uptime_ms":123456,
+           "utc_time_valid":true,"rssi_dbm":-63,"battery_v":3.92,
+           "stored":1150,"corrupted_frames":2,"sample_interval_s":60, "...":"..."},
+ "sync":{"attempts":20,"failures":2},
+ "radio":{"lora_enabled":false,"rssi_dbm":0,"snr_db":0,"sf":0},
+ "errors":{"last":""}}
+```
+
+El nodo lo firma con la misma device key que usa para los lotes
+(HMAC-SHA256 sobre los bytes exactos) y lo postea a
+`/v1/nodes/{id}/diagnostics`; el central guarda los últimos cinco por nodo.
+Ese es el punto: cuando un nodo en campo se porta mal, el diagnóstico es una
+llamada HTTP en vez de un cable serial, y aterriza en la base donde
+`/v1/fleet` puede marcarlo. Los strings van escapados y la respuesta se
+rechaza en vez de truncarse si el buffer queda corto, así que la firma
+siempre cubre exactamente lo que se envió.
 
 ## Contrato de streaming
 

@@ -89,9 +89,27 @@ ops runbook that isn't fiction.
 
 ## M5 — Operations hardening
 
-TLS termination, `measurements` retention + `VACUUM`, cursor
-pagination, the central map, async OTA FSM, runtime calibration
-(`CALIBRATION.md`), per-node CSV already shipped.
+TLS termination, cursor pagination, the central map, runtime
+calibration (`CALIBRATION.md`). Per-node CSV already shipped, and so
+did the pieces that decide whether a field deployment is survivable:
+
+- `measurements` retention + `VACUUM`, now on a scheduler as well as
+  an endpoint, with the last run visible on `/system`.
+- Coverage accounting (`/v1/nodes/{id}/coverage`, site variant, CSV)
+  so a before/after can be checked against how much data actually
+  arrived.
+- Control sites and `difference_in_differences` in `before-after`.
+- Field diagnostics bundles, ingested centrally, plus `/v1/fleet`
+  answering which node needs a visit.
+- `simulator/load_pilot.py` to rehearse pilot volume.
+
+Still open here:
+
+- **OTA rollback on hardware.** The decision FSM and the rollback
+  policy are host-tested and the two-slot partition table ships, but
+  nobody has flashed a board, marked an image valid, or watched a bad
+  image roll back. Until that happens, updates need physical access.
+- TLS termination, cursor pagination, async OTA.
 
 ## Non-goals for now
 

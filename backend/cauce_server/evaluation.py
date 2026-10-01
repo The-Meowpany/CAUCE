@@ -4,7 +4,11 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from .analytics import summary_stats
+from .analytics import (
+    difference_in_differences,
+    haversine_m,
+    summary_stats,
+)
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
@@ -24,6 +28,7 @@ def create_site(
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
+    is_control = _control_flag(payload.get("control"))
     with transaction() as conn:
         existing = conn.execute(
             "SELECT 1 FROM sites WHERE site_id=?", (site_id,)
@@ -31,10 +36,39 @@ def create_site(
         if existing:
             raise HTTPException(status_code=409, detail="site_exists")
         conn.execute(
-            "INSERT INTO sites(site_id, name, notes) VALUES(?,?,?)",
-            (site_id, payload.get("name"), payload.get("notes")),
+            "INSERT INTO sites(site_id, name, notes, is_control) VALUES(?,?,?,?)",
+            (site_id, payload.get("name"), payload.get("notes"), is_control),
         )
-    return {"status": "created", "site_id": site_id}
+    return {"status": "created", "site_id": site_id, "is_control": bool(is_control)}
+
+
+def _control_flag(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int) and value in (0, 1):
+        return value
+    raise HTTPException(status_code=422, detail="invalid_control_flag")
+
+
+@router.put("/sites/{site_id}/control")
+def set_site_control(
+    site_id: str,
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    flag = _control_flag(payload.get("control"))
+    with transaction() as conn:
+        cur = conn.execute(
+            "UPDATE sites SET is_control=? WHERE site_id=?", (flag, site_id)
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="site_not_found")
+    return {"status": "updated", "site_id": site_id, "is_control": bool(flag)}
 
 
 @router.get("/sites")
@@ -45,12 +79,13 @@ def list_sites(
     check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     rows = query(
-        """SELECT s.site_id, s.name, s.notes, s.lat, s.lon,
+        """SELECT s.site_id, s.name, s.notes, s.lat, s.lon, s.is_control,
                   (SELECT COUNT(*) FROM nodes n WHERE n.site_id=s.site_id) AS node_count,
                   (SELECT COUNT(*) FROM interventions i WHERE i.site_id=s.site_id) AS intervention_count
            FROM sites s ORDER BY s.site_id"""
     )
     return {"sites": [dict(r) for r in rows]}
+
 
 
 @router.put("/sites/{site_id}/location")
@@ -167,10 +202,13 @@ def analytics_before_after(
     node_id: str,
     variable: str,
     request: Request,
+    before_window_days: int | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
     require_bearer_token(authorization, settings.api_token)
+    if before_window_days is not None and not 1 <= before_window_days <= 3650:
+        raise HTTPException(status_code=422, detail="invalid_before_window_days")
 
     rows = query(
         "SELECT * FROM interventions WHERE intervention_id=?",
@@ -181,6 +219,9 @@ def analytics_before_after(
     iv = rows[0]
     start = iv["start_utc_ms"]
     end = iv["end_utc_ms"] or int(time.time() * 1000)
+    before_from = 0
+    if before_window_days is not None and start > 0:
+        before_from = max(0, start - before_window_days * 86400000)
 
     def values(lo: int, hi: int) -> list[float]:
         raw = query(
@@ -192,7 +233,7 @@ def analytics_before_after(
         )
         return [r["value"] for r in raw]
 
-    before = summary_stats(values(0, start - 1) if start > 0 else [])
+    before = summary_stats(values(before_from, start - 1) if start > 0 else [])
     after = summary_stats(values(start, end))
 
     mean_shift = None
@@ -201,13 +242,29 @@ def analytics_before_after(
 
     sufficient = before["count"] >= 30 and after["count"] >= 30
 
+    controls = _control_group(iv["site_id"], variable, before_from, start, end, start)
+    control_deltas = [c["mean_shift"] for c in controls if c["included"]]
+    did = difference_in_differences(mean_shift, control_deltas)
+
+    notes = [
+        "descriptive comparison; does not imply causality.",
+        "sufficient samples" if sufficient
+        else "INSUFFICIENT SAMPLES (<30 per period): interpret with caution",
+    ]
+    if did is None:
+        notes.append(
+            "no control group available: difference-in-differences not computed, "
+            "so regional weather is not subtracted from the shift"
+        )
+    else:
+        notes.append(
+            f"difference-in-differences over {len(control_deltas)} control node(s); "
+            "controls are unmatched, so check distance and land cover yourself"
+        )
+
     return {
         "metric_type": "derived_before_after",
-        "note": (
-            "descriptive comparison; does not imply causality. "
-            + ("sufficient samples" if sufficient
-               else "INSUFFICIENT SAMPLES (<30 per period): interpret with caution")
-        ),
+        "note": " ".join(notes),
         "sufficient_sample": sufficient,
         "intervention": {
             "id": intervention_id,
@@ -218,7 +275,90 @@ def analytics_before_after(
         },
         "node_id": node_id,
         "variable": variable,
+        "windows": {
+            "before_start_utc_ms": before_from,
+            "before_end_utc_ms": start - 1,
+            "after_start_utc_ms": start,
+            "after_end_utc_ms": end,
+        },
         "before": before,
         "after": after,
         "mean_shift": mean_shift,
+        "control_group": {
+            "control_node_count": len(control_deltas),
+            "excluded_node_count": len(controls) - len(control_deltas),
+            "control_mean_shift": (
+                round(sum(control_deltas) / len(control_deltas), 3)
+                if control_deltas else None
+            ),
+            "difference_in_differences": did,
+            "controls": controls,
+        },
     }
+
+
+CONTROL_MIN_SAMPLES = 30
+
+
+def _control_group(
+    site_id: str,
+    variable: str,
+    before_from: int,
+    start: int,
+    end: int,
+    start_ms: int,
+) -> list[dict]:
+    treated = query("SELECT lat, lon FROM sites WHERE site_id=?", (site_id,))[0]
+    rows = query(
+        """SELECT n.node_id, s.site_id, s.lat, s.lon
+           FROM nodes n JOIN sites s ON s.site_id=n.site_id
+           WHERE s.is_control=1 AND s.site_id<>? ORDER BY s.site_id, n.node_id""",
+        (site_id,),
+    )
+    group: list[dict] = []
+    for row in rows:
+        before = summary_stats(
+            _window_values(row["node_id"], variable, before_from, start_ms - 1)
+        )
+        after = summary_stats(
+            _window_values(row["node_id"], variable, start_ms, end)
+        )
+        shift = None
+        if before["count"] and after["count"]:
+            shift = round(after["mean"] - before["mean"], 3)
+        entry = {
+            "node_id": row["node_id"],
+            "site_id": row["site_id"],
+            "lat": row["lat"],
+            "lon": row["lon"],
+            "distance_m": (
+                haversine_m(treated["lat"], treated["lon"], row["lat"], row["lon"])
+                if treated["lat"] is not None and row["lat"] is not None else None
+            ),
+            "before_count": before["count"],
+            "after_count": after["count"],
+            "before_mean": before["mean"],
+            "after_mean": after["mean"],
+            "mean_shift": shift,
+            "included": shift is not None
+            and before["count"] >= CONTROL_MIN_SAMPLES
+            and after["count"] >= CONTROL_MIN_SAMPLES,
+        }
+        if not entry["included"]:
+            entry["excluded_reason"] = "insufficient_samples"
+        group.append(entry)
+    return group
+
+
+def _window_values(node_id: str, variable: str, lo: int, hi: int) -> list[float]:
+    if hi < lo:
+        return []
+    rows = query(
+        """SELECT value FROM measurements
+           WHERE node_id=? AND variable=? AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?
+             AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')
+             AND value IS NOT NULL""",
+        (node_id, variable, lo, hi),
+    )
+    return [r["value"] for r in rows]
+
