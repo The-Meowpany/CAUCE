@@ -41,6 +41,7 @@ class MeasurementScheduler {
   void setNodeId(const char* nodeId);
   void setSamplingInterval(uint32_t intervalS);
   void setSequenceStart(uint32_t lastKnownSequence);
+  void setRetentionBudget(uint32_t maxTotalBytes);
   void beginAllSensors();
   void tick();
 
@@ -68,6 +69,8 @@ class MeasurementScheduler {
   uint32_t samplingIntervalMs_{60000};
   uint64_t nextSampleAtMonotonicMs_{0};
   uint32_t sequenceCounter_{0};
+  uint32_t retentionBudgetBytes_{0};
+  uint64_t lastRetentionMonotonicMs_{0};
   SchedulerCounters counters_{};
   PerVariableState variableState_[kVariableCount][kMaxSensors]{};
   NodeState state_{NodeState::Boot};

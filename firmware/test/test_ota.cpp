@@ -4,6 +4,7 @@
 
 #include <unity.h>
 
+#include "cauce/app/OtaJson.h"
 #include "cauce/app/OtaManager.h"
 #include "cauce/core/SecurityUtils.h"
 #include "cauce/core/Sha256Stream.h"
@@ -305,11 +306,12 @@ void test_manifest_signature_gate() {
   rig.manager.tick();
   TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
 
-  // firma valida sobre "version|url|totalSize" -> descarga y aplica
+  // firma valida sobre "version|sha256|url|totalSize" -> descarga y aplica
   fillRelease(rig.catalog.release, fw);
-  char canonical[160];
-  std::snprintf(canonical, sizeof(canonical), "%s|%s|%u",
-                rig.catalog.release.version, rig.catalog.release.url,
+  char canonical[256];
+  std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u",
+                rig.catalog.release.version, rig.catalog.release.sha256Hex,
+                rig.catalog.release.url,
                 static_cast<unsigned>(rig.catalog.release.totalSize));
   uint8_t mac[32];
   cauce::hmacSha256(key, sizeof(key),
@@ -330,6 +332,11 @@ void test_manifest_signature_gate() {
   TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
 }
 
+void test_manifest_json_full_parse();
+void test_manifest_json_missing_sha_rejected();
+void test_manifest_json_truncated_rejected();
+void test_manifest_json_rejects_short_sha_and_non_http_url();
+
 void registerOtaTests() {
   UNITY_BEGIN();
   RUN_TEST(test_compare_semver_pairs);
@@ -343,5 +350,52 @@ void registerOtaTests() {
   RUN_TEST(test_safety_gate_blocks_before_download);
   RUN_TEST(test_low_battery_blocks_update);
   RUN_TEST(test_manifest_signature_gate);
+  RUN_TEST(test_manifest_json_full_parse);
+  RUN_TEST(test_manifest_json_missing_sha_rejected);
+  RUN_TEST(test_manifest_json_truncated_rejected);
+  RUN_TEST(test_manifest_json_rejects_short_sha_and_non_http_url);
   UNITY_END();
+}
+
+void test_manifest_json_full_parse() {
+  OtaRelease out{};
+  const char* json =
+      "{\"version\":\"1.2.3\","
+      "\"sha256\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\","
+      "\"url\":\"http://x/fw.bin\",\"total_size\":12345,"
+      "\"hmac\":\"0011223344556677\"}";
+  TEST_ASSERT_TRUE(parseOtaManifestJson(json, out));
+  TEST_ASSERT_EQUAL_STRING("1.2.3", out.version);
+  TEST_ASSERT_EQUAL_STRING(
+      "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      out.sha256Hex);
+  TEST_ASSERT_EQUAL_STRING("http://x/fw.bin", out.url);
+  TEST_ASSERT_EQUAL_UINT32(12345, out.totalSize);
+  TEST_ASSERT_EQUAL_STRING("0011223344556677", out.manifestHmacHex);
+}
+
+void test_manifest_json_missing_sha_rejected() {
+  OtaRelease out{};
+  const char* json =
+      "{\"version\":\"1.2.3\",\"url\":\"http://x/fw.bin\",\"total_size\":10}";
+  TEST_ASSERT_FALSE(parseOtaManifestJson(json, out));
+}
+
+void test_manifest_json_truncated_rejected() {
+  OtaRelease out{};
+  TEST_ASSERT_FALSE(parseOtaManifestJson("{\"version\":\"1.2.3\"", out));
+  TEST_ASSERT_FALSE(parseOtaManifestJson(nullptr, out));
+}
+
+void test_manifest_json_rejects_short_sha_and_non_http_url() {
+  OtaRelease out{};
+  const char* shortSha =
+      "{\"version\":\"1.2.3\",\"sha256\":\"abcdef\","
+      "\"url\":\"http://x/fw.bin\",\"total_size\":10}";
+  TEST_ASSERT_FALSE(parseOtaManifestJson(shortSha, out));
+  const char* fileUrl =
+      "{\"version\":\"1.2.3\","
+      "\"sha256\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\","
+      "\"url\":\"file:///etc/fw.bin\",\"total_size\":10}";
+  TEST_ASSERT_FALSE(parseOtaManifestJson(fileUrl, out));
 }

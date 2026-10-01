@@ -15,14 +15,21 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <esp_task_wdt.h>
+#include <time.h>
 
 #include "cauce/app/ApiRouter.h"
 #include "cauce/app/Esp32ApiServer.h"
 #include "cauce/app/Esp32CaptivePortal.h"
+#include "cauce/app/Esp32Ota.h"
+#include "cauce/app/NetworkManager.h"
+#include "cauce/app/OtaManager.h"
 #include "cauce/app/SyncManager.h"
 #include "cauce/hal/Esp32HttpSyncTransport.h"
+#include "cauce/hal/Esp32WifiController.h"
 #include "cauce/app/SerialLogSink.h"
 #include "cauce/core/ConfigManager.h"
+#include "cauce/core/SecurityUtils.h"
 #include "cauce/hal/Esp32Hal.h"
 
 static cauce::hal::Esp32LittleFs g_fs;
@@ -42,10 +49,28 @@ static cauce::app::Esp32ApiServer* g_apiServer = nullptr;
 static cauce::hal::Esp32HttpSyncTransport* g_syncTransport = nullptr;
 static cauce::app::SyncManager* g_syncManager = nullptr;
 static cauce::app::Esp32CaptivePortal* g_portal = nullptr;
+static cauce::hal::Esp32WifiController* g_netController = nullptr;
+static cauce::app::NetworkManager* g_networkManager = nullptr;
+static cauce::app::Esp32ManifestSource* g_otaCatalog = nullptr;
+static cauce::app::Esp32FirmwareReader* g_otaReader = nullptr;
+static cauce::app::Esp32FirmwareInstaller* g_otaInstaller = nullptr;
+static cauce::app::OtaManager* g_otaManager = nullptr;
+static bool g_ntpConfigured = false;
+static cauce::NodeConfig g_activeConfig{};
+
+namespace {
+
+uint32_t freeHeapBytes() { return ESP.getFreeHeap(); }
+
+void espRestartNow() { ESP.restart(); }
+
+}  // namespace
 
 void setup() {
   Serial.begin(115200);
   delay(200);
+  esp_task_wdt_init(30, true);
+  esp_task_wdt_add(NULL);
 
   if (!g_fs.mount()) {
     Serial.println("ERROR STORAGE_MOUNT_FAILED fs=littlefs");
@@ -60,6 +85,7 @@ void setup() {
 
   cauce::NodeConfig config;
   const auto status = g_configManager->load(config);
+  g_activeConfig = config;
   g_logger->eventf(cauce::LogLevel::Info, "CONFIG_LOADED", "status=%d node=%s",
                    static_cast<int>(status), config.nodeId);
 
@@ -98,7 +124,30 @@ void setup() {
                                               g_clock, *g_logger, g_fs,
                                               "/state/sync_state");
   g_syncManager->setNodeId(config.nodeId);
+  g_syncManager->configureEndpoint(config.syncServerUrl, "");
+  g_syncManager->setDeviceSecret(config.syncDeviceKey);
   g_syncManager->loadState();
+
+  g_netController = new cauce::hal::Esp32WifiController();
+  g_networkManager = new cauce::app::NetworkManager(
+      *g_netController, g_clock, *g_logger, config, config.nodeId);
+
+  g_otaCatalog = new cauce::app::Esp32ManifestSource();
+  g_otaCatalog->configure(config.otaManifestUrl, config.nodeId);
+  g_otaReader = new cauce::app::Esp32FirmwareReader();
+  g_otaInstaller = new cauce::app::Esp32FirmwareInstaller();
+  g_otaManager = new cauce::app::OtaManager(*g_otaCatalog, *g_otaReader,
+                                            *g_otaInstaller, g_clock,
+                                            *g_logger);
+  g_otaManager->setFirmwareVersion(cauce::Versions::kFirmware);
+  g_otaManager->setSafetyHooks(&freeHeapBytes, nullptr);
+  g_otaManager->setRebootHook(&espRestartNow);
+  if (config.syncDeviceKey[0] != '\0') {
+    uint8_t manifestKey[32];
+    cauce::sha256(reinterpret_cast<const uint8_t*>(config.syncDeviceKey),
+                  std::strlen(config.syncDeviceKey), manifestKey);
+    g_otaManager->setManifestKey(manifestKey);
+  }
 
   g_logger->eventf(cauce::LogLevel::Info, "BOOT_COMPLETE",
                    "firmware=%s node=%s api=80", cauce::Versions::kFirmware,
@@ -106,6 +155,10 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
+  g_networkManager->tick();
+  g_health.netState = g_networkManager->state();
+  g_health.rssiDbm = g_netController->rssiDbm();
   g_scheduler->tick();
   const auto& counters = g_scheduler->counters();
   g_health.uptimeMs = g_clock.monotonicMs();
@@ -119,12 +172,22 @@ void loop() {
   g_health.lastSuccessUtcMs = counters.lastSuccessUtcMs;
   g_health.storageRecords = g_store->totalRecords();
   g_health.storageBytes = g_store->totalBytes();
-  if (g_health.netState == cauce::app::NetState::Connected) {
+  const bool linkUp =
+      (g_health.netState == cauce::app::NetState::Connected ||
+       g_health.netState == cauce::app::NetState::Degraded);
+  if (linkUp) {
+    if (!g_ntpConfigured) {
+      configTime(static_cast<long>(g_activeConfig.timezoneOffsetMin) * 60L, 0,
+                 g_activeConfig.ntpServer);
+      g_ntpConfigured = true;
+    }
     g_syncManager->onNetworkConnected();
     g_syncManager->tick();
   } else {
     g_syncManager->onNetworkLost();
   }
+  g_otaManager->tick();
+  g_portal->begin();
   g_portal->processNextRequest();
   g_apiServer->handleClient();
 }

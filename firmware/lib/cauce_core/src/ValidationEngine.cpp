@@ -51,6 +51,11 @@ ValidationResult ValidationEngine::evaluate(const Measurement& candidate,
   ValidationResult result;
   result.timeUncertain =
       candidate.timeUncertain || !context.timeValid || candidate.timestampUtcMs == 0;
+  if (context.timeValid && context.nowUtcMs != 0 &&
+      candidate.timestampUtcMs >
+          context.nowUtcMs + static_cast<uint64_t>(thresholds_.maxFutureSkewMs)) {
+    result.timeUncertain = true;
+  }
   uint8_t bits = candidate.reasonBits;
   Quality quality = Quality::Valid;
 

@@ -27,7 +27,13 @@ void MeasurementScheduler::setNodeId(const char* nodeId) {
 }
 
 void MeasurementScheduler::setSamplingInterval(uint32_t intervalS) {
+  if (intervalS < 10) intervalS = 10;
+  if (intervalS > 3600) intervalS = 3600;
   samplingIntervalMs_ = intervalS * 1000u;
+}
+
+void MeasurementScheduler::setRetentionBudget(uint32_t maxTotalBytes) {
+  retentionBudgetBytes_ = maxTotalBytes;
 }
 
 void MeasurementScheduler::setSequenceStart(uint32_t lastKnownSequence) {
@@ -49,12 +55,18 @@ void MeasurementScheduler::beginAllSensors() {
   }
   state_ = NodeState::Ready;
   nextSampleAtMonotonicMs_ = clock_.monotonicMs();
+  lastRetentionMonotonicMs_ = nextSampleAtMonotonicMs_;
 }
 
 void MeasurementScheduler::tick() {
   if (state_ != NodeState::Ready && state_ != NodeState::Storing) return;
 
   const uint32_t nowMs = clock_.monotonicMs();
+  if (retentionBudgetBytes_ != 0 &&
+      nowMs - lastRetentionMonotonicMs_ >= 3600000u) {
+    lastRetentionMonotonicMs_ = nowMs;
+    store_.applyRetentionPolicy(retentionBudgetBytes_);
+  }
   if (nowMs < nextSampleAtMonotonicMs_) return;
   nextSampleAtMonotonicMs_ = nowMs + samplingIntervalMs_;
   state_ = NodeState::Measuring;
@@ -110,6 +122,7 @@ void MeasurementScheduler::processSensor(drivers::ISensorDriver* sensor) {
     context.identicalStreak = varState.identicalStreak;
     context.streakValue = varState.streakValue;
     context.timeValid = clock_.utcTimeValid();
+    context.nowUtcMs = clock_.utcMs();
     context.hasLastSequence = false;
 
     const ValidationResult result = validator_.evaluate(candidate, context);

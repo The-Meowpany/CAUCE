@@ -18,7 +18,7 @@ class Logger {
  public:
   explicit Logger(ILogSink& sink) : sink_(sink) {}
 
-  void eventf(LogLevel level, const char* event, const char* detailsFormat, ...);
+  bool eventf(LogLevel level, const char* event, const char* detailsFormat, ...);
   void event(LogLevel level, const char* event);
 
   static constexpr size_t kMaxLineLength = 512;

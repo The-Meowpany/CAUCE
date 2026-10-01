@@ -9,7 +9,7 @@
 namespace cauce {
 
 struct SegmentInfo {
-  char path[64]{};
+  char path[80]{};
   uint32_t bytes{0};
   uint32_t records{0};
   uint64_t firstTimestampMs{UINT64_MAX};
@@ -75,7 +75,7 @@ class LogStorageRepository final : public IStorageRepository {
   static bool parseSegmentName(const char* fileName, uint32_t& indexOut);
 
   hal::IFileSystem& fs_;
-  char directory_[48];
+  char directory_[64];
   uint32_t segmentMaxBytes_;
   std::vector<SegmentInfo> segments_;
   uint32_t nextSegmentIndex_{1};

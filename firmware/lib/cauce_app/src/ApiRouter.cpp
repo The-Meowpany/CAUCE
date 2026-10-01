@@ -72,17 +72,6 @@ bool parseEpochParam(const char* value, uint64_t& outMs) {
   return parseIso8601Utc(value, outMs);
 }
 
-void appendJsonText(char*& c, size_t& rem, const char* text) {
-  if (rem <= 1) return;
-  const int written = std::snprintf(c, rem, "%s", text);
-  if (written <= 0) return;
-  const size_t use = static_cast<size_t>(written) < rem
-                         ? static_cast<size_t>(written)
-                         : rem - 1;
-  c += use;
-  rem -= use;
-}
-
 }  // namespace
 
 ApiRouter::ApiRouter(IStorageRepository& store, ConfigManager& config,
@@ -381,13 +370,14 @@ ApiRouter::Response ApiRouter::routePostConfig(const Request& req, char* out,
   if (!req.body || req.bodyLen == 0)
     return respondError(400, "{\"error\":\"empty_body\"}", out, capacity);
 
-  NodeConfig candidate{};
   char text[2048];
-  size_t copyLen = req.bodyLen < sizeof(text) - 1 ? req.bodyLen
-                                                  : sizeof(text) - 1;
+  if (req.bodyLen > sizeof(text) - 1)
+    return respondError(413, "{\"error\":\"body_too_large\"}", out, capacity);
+  const size_t copyLen = req.bodyLen;
   std::memcpy(text, req.body, copyLen);
   text[copyLen] = '\0';
 
+  NodeConfig candidate{};
   if (!parseConfig(text, candidate))
     return respondError(400, "{\"error\":\"unparsable_body\"}", out, capacity);
 
@@ -439,7 +429,6 @@ ApiRouter::Response ApiRouter::handle(const Request& request, char* out,
   const char* query = nullptr;
   const char* qmark = std::strchr(path, '?');
   if (qmark) {
-    const size_t qlen = std::strlen(qmark + 1);
     copyString(queryBuf, sizeof(queryBuf), qmark + 1);
     query = queryBuf;
     const size_t plen = static_cast<size_t>(qmark - path) <

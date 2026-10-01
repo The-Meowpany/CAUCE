@@ -291,12 +291,10 @@ void test_device_secret_signs_batches() {
   const std::string& sig = rig.transport.signatures.front();
   TEST_ASSERT_TRUE(sig.size() == 64);
 
-  uint8_t key[32];
   const char* asciiSecret = "device-secret-01";
-  cauce::sha256(reinterpret_cast<const uint8_t*>(asciiSecret),
-                static_cast<size_t>(strlen(asciiSecret)), key);
   uint8_t mac[32];
-  cauce::hmacSha256(key, sizeof(key),
+  cauce::hmacSha256(reinterpret_cast<const uint8_t*>(asciiSecret),
+                    std::strlen(asciiSecret),
                     reinterpret_cast<const uint8_t*>(body.data()),
                     body.size(), mac);
   char expected[65];
@@ -320,6 +318,35 @@ void test_no_device_secret_sends_unsigned() {
   TEST_ASSERT_TRUE(rig.transport.signatures.front().empty());
 }
 
+void test_sync_interval_setter_clamps_and_applies() {
+  wipeSyncData();
+  Rig rig;
+  rig.manager.setSyncIntervalS(10);
+  rig.store.append(makeM(1, 1787356800000ULL));
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1, static_cast<int>(rig.transport.calls.size()));
+  rig.store.append(makeM(2, 1787356860000ULL));
+  syncClock.advanceMs(59000);
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1, static_cast<int>(rig.transport.calls.size()));
+  syncClock.advanceMs(1000);
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(2, static_cast<int>(rig.transport.calls.size()));
+}
+
+void test_node_id_escaped_in_sync_envelope() {
+  wipeSyncData();
+  Rig rig;
+  rig.manager.setNodeId("A\"B");
+  rig.store.append(makeM(1, 1787356800000ULL));
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_FALSE(rig.transport.calls.empty());
+  TEST_ASSERT_TRUE(rig.transport.calls.front().find("A\\\"B") !=
+                   std::string::npos);
+}
+
 void registerSyncTests() {
   UNITY_BEGIN();
   RUN_TEST(test_idle_when_disconnected_or_empty);
@@ -332,5 +359,7 @@ void registerSyncTests() {
   RUN_TEST(test_network_lost_gates_syncing);
   RUN_TEST(test_device_secret_signs_batches);
   RUN_TEST(test_no_device_secret_sends_unsigned);
+  RUN_TEST(test_sync_interval_setter_clamps_and_applies);
+  RUN_TEST(test_node_id_escaped_in_sync_envelope);
   UNITY_END();
 }

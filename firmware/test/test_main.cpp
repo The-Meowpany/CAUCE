@@ -13,6 +13,7 @@ void registerNetworkTests();
 void registerApiTests();
 void registerSyncTests();
 void registerOtaTests();
+void registerLoRaTests();
 
 int main() {
   UNITY_BEGIN();
@@ -29,5 +30,6 @@ int main() {
   registerApiTests();
   registerSyncTests();
   registerOtaTests();
+  registerLoRaTests();
   return UNITY_END();
 }

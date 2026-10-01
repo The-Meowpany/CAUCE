@@ -9,7 +9,7 @@ Two formats coexist by design:
 
 ## 1. At-rest binary record (`meas_NNNNNN.clog`)
 
-Append-only file of fixed **72-byte** frames:
+Append-only file of fixed **68-byte** frames (4 B header + 60 B payload + 4 B CRC):
 
 ```
 offset  size  field
@@ -43,11 +43,11 @@ offset  size  field
 ```
 
 Enums, reason bits and the JSON payload shape are specified in full in
-docs/DATA_MODEL.md and docs/API.md respectively.
+docs/en/DATA_MODEL.md and docs/en/API.md respectively.
 
 ## 2. JSON exchange payload (API/sync v1)
 
-See docs/SYNC.md for the batch envelope and docs/DATA_MODEL.md for the
+See docs/en/SYNC.md for the batch envelope and docs/en/DATA_MODEL.md for the
 measurement object schema (`timestamp_utc_ms` included for lossless
 roundtrips).
 
@@ -57,3 +57,16 @@ roundtrips).
   unknown versions without corrupting state.
 - JSON fields evolve additively; consumers must ignore unknown keys.
 - `node_id + sequence` uniquely identifies a measurement (sync idempotency).
+
+## Annex: Test vector (hex dump)
+
+Payload example (`node_id="CAUCE-001"`, `sequence=1`, `timestamp=0`, `value=0.0`, `variable=0`, `quality=5`, `reason=0`, `time_uncertain=1`):
+
+```
+0000: ca 01 3c 00 01 00 00 00 00 00 00 00 00 00 00 00
+0010: 00 00 00 00 00 05 00 01 43 41 55 43 45 2d 30 30
+0020: 31 00 00 00 00 00 00 00 42 4d 45 32 38 30 2d 31
+0030: 00 00 00 00 00 00 00 00 00 00 00 00 a3 8f 12 4e
+```
+
+Frame CRC (`a3 8f 12 4e` big-endian `4e128fa3`) computed over bytes `0x00..0x3f` with `crc32()` (`RecordCodec.cpp:12`).

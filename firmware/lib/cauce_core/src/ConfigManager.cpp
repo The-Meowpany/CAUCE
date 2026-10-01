@@ -8,6 +8,17 @@ namespace cauce {
 
 namespace {
 constexpr size_t kMaxConfigText = 8192;
+constexpr size_t kCopyChunk = 1024;
+
+bool validNodeIdChars(const char* id) {
+  for (const char* p = id; *p; ++p) {
+    const char c = *p;
+    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!ok) return false;
+  }
+  return true;
+}
 }
 
 ConfigManager::ConfigManager(hal::IFileSystem& fileSystem, const char* configPath)
@@ -26,13 +37,13 @@ bool ConfigManager::readTextFile(const char* path, char* buffer, size_t capacity
 }
 
 ConfigLoadStatus ConfigManager::load(NodeConfig& outConfig) {
-  static char text[kMaxConfigText];
-
-  if (readTextFile(path_, text, kMaxConfigText) && parseConfig(text, outConfig)) {
+  if (readTextFile(path_, scratch_, sizeof(scratch_)) &&
+      parseConfig(scratch_, outConfig)) {
     current_ = outConfig;
     return ConfigLoadStatus::Loaded;
   }
-  if (readTextFile(backupPath_, text, kMaxConfigText) && parseConfig(text, outConfig)) {
+  if (readTextFile(backupPath_, scratch_, sizeof(scratch_)) &&
+      parseConfig(scratch_, outConfig)) {
     current_ = outConfig;
     return ConfigLoadStatus::RestoredFromBackup;
   }
@@ -42,21 +53,35 @@ ConfigLoadStatus ConfigManager::load(NodeConfig& outConfig) {
 }
 
 bool ConfigManager::save(const NodeConfig& config) {
-  static char text[kMaxConfigText];
-  if (!serializeConfig(config, text, kMaxConfigText)) return false;
+  static_assert(sizeof(scratch_) >= kMaxConfigText, "scratch too small");
+  if (!serializeConfig(config, scratch_, kMaxConfigText)) return false;
 
   if (fs_.exists(path_)) {
     const size_t size = fs_.fileSize(path_);
     if (size > 0 && size < kMaxConfigText) {
-      static uint8_t previous[kMaxConfigText];
-      if (fs_.readRange(path_, 0, previous, size)) {
-        fs_.writeWholeFile(backupPath_, previous, size);
+      fs_.removeFile(backupPath_);
+      size_t copied = 0;
+      bool backupOk = true;
+      while (copied < size && backupOk) {
+        size_t chunk = size - copied;
+        if (chunk > kCopyChunk) chunk = kCopyChunk;
+        if (!fs_.readRange(path_, copied, backupScratch_, chunk)) {
+          backupOk = false;
+          break;
+        }
+        if (!fs_.appendBytes(backupPath_, backupScratch_, chunk)) {
+          backupOk = false;
+          break;
+        }
+        copied += chunk;
       }
+      if (!backupOk) fs_.removeFile(backupPath_);
     }
   }
   current_ = config;
-  const size_t textLen = std::strlen(text);
-  return fs_.writeWholeFile(path_, reinterpret_cast<const uint8_t*>(text), textLen);
+  const size_t textLen = std::strlen(scratch_);
+  return fs_.writeWholeFile(path_,
+                            reinterpret_cast<const uint8_t*>(scratch_), textLen);
 }
 
 ConfigValidation ConfigManager::validate(const NodeConfig& config) {
@@ -65,6 +90,8 @@ ConfigValidation ConfigManager::validate(const NodeConfig& config) {
   if (config.nodeId[0] == '\0') result.addError("node_id must not be empty");
   if (std::strlen(config.nodeId) >= sizeof(config.nodeId))
     result.addError("node_id too long");
+  if (!validNodeIdChars(config.nodeId))
+    result.addError("node_id charset is [A-Za-z0-9_-]");
 
   if (config.samplingIntervalS < 10 || config.samplingIntervalS > 3600)
     result.addError("sampling_interval_s out of [10..3600]");
@@ -97,6 +124,14 @@ ConfigValidation ConfigManager::validate(const NodeConfig& config) {
   if (config.adminTokenSha256[0] != '\0' &&
       std::strlen(config.adminTokenSha256) != 64)
     result.addError("admin_token_sha256 must be 64 hex chars");
+  if (config.syncServerUrl[0] != '\0' &&
+      std::strlen(config.syncServerUrl) >= 128)
+    result.addError("sync_server_url too long");
+  if (config.otaManifestUrl[0] != '\0' &&
+      std::strlen(config.otaManifestUrl) >= 160)
+    result.addError("ota_manifest_url too long");
+  if (config.loraSyncIntervalS < 60 || config.loraSyncIntervalS > 86400)
+    result.addError("lora_sync_interval_s out of [60..86400]");
 
   return result;
 }

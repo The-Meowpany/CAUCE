@@ -27,20 +27,22 @@ void Logger::event(LogLevel level, const char* event) {
   sink_.writeLine(line);
 }
 
-void Logger::eventf(LogLevel level, const char* event, const char* detailsFormat,
+bool Logger::eventf(LogLevel level, const char* event, const char* detailsFormat,
                     ...) {
   char line[Logger::kMaxLineLength];
   int used = std::snprintf(line, sizeof(line), "%s %s ", levelName(level), event);
   if (used < 0 || static_cast<size_t>(used) >= sizeof(line)) {
     sink_.writeLine(levelName(level));
-    return;
+    return true;
   }
   va_list args;
   va_start(args, detailsFormat);
-  std::vsnprintf(line + used, sizeof(line) - static_cast<size_t>(used),
-                 detailsFormat, args);
+  const int vs = std::vsnprintf(line + used, sizeof(line) - static_cast<size_t>(used),
+                                detailsFormat, args);
   va_end(args);
+  const bool truncated = vs < 0 || static_cast<size_t>(vs) >= sizeof(line) - static_cast<size_t>(used);
   sink_.writeLine(line);
+  return truncated;
 }
 
 }  // namespace cauce

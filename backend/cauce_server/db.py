@@ -37,7 +37,9 @@ CREATE INDEX IF NOT EXISTS idx_meas_var ON measurements(variable, timestamp_utc_
 CREATE TABLE IF NOT EXISTS sites (
     site_id TEXT PRIMARY KEY,
     name TEXT,
-    notes TEXT
+    notes TEXT,
+    lat REAL,
+    lon REAL
 );
 
 CREATE TABLE IF NOT EXISTS interventions (
@@ -61,7 +63,8 @@ CREATE TABLE IF NOT EXISTS sync_batches (
     batch_size INTEGER NOT NULL,
     first_sequence INTEGER,
     last_sequence INTEGER,
-    received_at_utc_ms INTEGER NOT NULL
+    received_at_utc_ms INTEGER NOT NULL,
+    transport TEXT NOT NULL DEFAULT 'wifi'
 );
 
 CREATE TABLE IF NOT EXISTS agg_hourly (
@@ -74,6 +77,30 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     min_v REAL,
     max_v REAL,
     PRIMARY KEY (node_id, variable, hour_ts)
+);
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+    rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    threshold REAL,
+    min_duration_min INTEGER NOT NULL DEFAULT 0,
+    stale_min INTEGER NOT NULL DEFAULT 60,
+    channel TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    cooldown_min INTEGER NOT NULL DEFAULT 60,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_fired_utc_ms INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS alert_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id INTEGER NOT NULL,
+    node_id TEXT NOT NULL,
+    fired_utc_ms INTEGER NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    delivered INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -107,6 +134,32 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if mcols and "ts_reconstructed" not in mcols:
         conn.execute(
             "ALTER TABLE measurements ADD COLUMN ts_reconstructed INTEGER "
+            "NOT NULL DEFAULT 0"
+        )
+    bcols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(sync_batches)").fetchall()
+    }
+    if bcols and "transport" not in bcols:
+        conn.execute(
+            "ALTER TABLE sync_batches ADD COLUMN transport TEXT NOT NULL "
+            "DEFAULT 'wifi'"
+        )
+    scols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(sites)").fetchall()
+    }
+    if scols and "lat" not in scols:
+        conn.execute("ALTER TABLE sites ADD COLUMN lat REAL")
+    if scols and "lon" not in scols:
+        conn.execute("ALTER TABLE sites ADD COLUMN lon REAL")
+    lcols = {
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(alert_log)").fetchall()
+    }
+    if lcols and "attempts" not in lcols:
+        conn.execute(
+            "ALTER TABLE alert_log ADD COLUMN attempts INTEGER "
             "NOT NULL DEFAULT 0"
         )
 

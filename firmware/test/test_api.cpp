@@ -352,6 +352,38 @@ void test_root_serves_dashboard_html_in_chunks() {
   TEST_ASSERT_TRUE(all.find("api/v1/measurements") != std::string::npos);
 }
 
+void test_post_config_oversized_body_rejected_413() {
+  netClockReset();
+  wipeDirApi();
+  Rig rig;
+
+  NodeConfig initial{};
+  char tokenHash[65];
+  sha256Hex("tok413", tokenHash);
+  copyString(initial.adminTokenSha256, sizeof(initial.adminTokenSha256),
+             tokenHash);
+  rig.config.save(initial);
+
+  static char bigBody[3000];
+  std::memset(bigBody, 'x', sizeof(bigBody) - 1);
+  bigBody[sizeof(bigBody) - 1] = '\0';
+
+  char out[512];
+  ApiRouter::Request req;
+  req.method = "POST";
+  req.target = "/api/v1/config";
+  req.body = bigBody;
+  req.bodyLen = sizeof(bigBody) - 1;
+  req.authorization = "Bearer tok413";
+
+  const auto r = rig.router.handle(req, out, sizeof(out));
+  TEST_ASSERT_EQUAL_UINT16(413, r.statusCode);
+
+  NodeConfig unchanged{};
+  rig.config.load(unchanged);
+  TEST_ASSERT_EQUAL_UINT32(60, unchanged.samplingIntervalS);
+}
+
 void test_favicon_returns_204() {
   netClockReset();
   wipeDirApi();
@@ -376,6 +408,7 @@ void registerApiTests() {
   RUN_TEST(test_post_config_with_valid_token_applies);
   RUN_TEST(test_post_config_wrong_token_401);
   RUN_TEST(test_post_config_invalid_values_422_with_errors);
+  RUN_TEST(test_post_config_oversized_body_rejected_413);
   RUN_TEST(test_measurements_from_filter_iso8601);
   RUN_TEST(test_root_serves_dashboard_html_in_chunks);
   RUN_TEST(test_favicon_returns_204);

@@ -14,7 +14,7 @@ enum class Variable : uint8_t {
   Unknown = 255,
 };
 
-inline constexpr uint8_t kVariableCount = 5;
+static constexpr uint8_t kVariableCount = 5;
 
 enum class Quality : uint8_t {
   Valid = 0,

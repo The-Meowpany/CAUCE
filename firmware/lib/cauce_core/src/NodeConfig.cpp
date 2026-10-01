@@ -107,7 +107,13 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("wifi_ssid=%s\n", config.wifiSsid);
   c.write("wifi_password=%s\n", config.wifiPassword);
   c.write("ntp_server=%s\n", config.ntpServer);
+  c.write("sync_server_url=%s\n", config.syncServerUrl);
   c.write("sync_device_key=%s\n", config.syncDeviceKey);
+  c.write("ota_manifest_url=%s\n", config.otaManifestUrl);
+  c.write("lora_enabled=%d\n", config.loraEnabled ? 1 : 0);
+  c.write("lora_sync_interval_s=%lu\n",
+          static_cast<unsigned long>(config.loraSyncIntervalS));
+  c.write("lora_region=%s\n", config.loraRegion);
   c.write("storage_max_bytes=%lu\n",
           static_cast<unsigned long>(config.storageMaxBytes));
   c.write("segment_max_bytes=%lu\n",
@@ -192,8 +198,20 @@ bool parseConfig(const char* text, NodeConfig& out) {
         copyString(cfg.wifiPassword, sizeof(cfg.wifiPassword), valueText);
       } else if (std::strcmp(key, "ntp_server") == 0) {
         copyString(cfg.ntpServer, sizeof(cfg.ntpServer), valueText);
+      } else if (std::strcmp(key, "sync_server_url") == 0) {
+        copyString(cfg.syncServerUrl, sizeof(cfg.syncServerUrl), valueText);
+      } else if (std::strcmp(key, "ota_manifest_url") == 0) {
+        copyString(cfg.otaManifestUrl, sizeof(cfg.otaManifestUrl), valueText);
       } else if (std::strcmp(key, "sync_device_key") == 0) {
         copyString(cfg.syncDeviceKey, sizeof(cfg.syncDeviceKey), valueText);
+      } else if (std::strcmp(key, "lora_enabled") == 0 &&
+                 parseInt(valueText, intValue)) {
+        cfg.loraEnabled = intValue != 0;
+      } else if (std::strcmp(key, "lora_sync_interval_s") == 0 &&
+                 parseInt(valueText, intValue)) {
+        cfg.loraSyncIntervalS = static_cast<uint32_t>(intValue);
+      } else if (std::strcmp(key, "lora_region") == 0) {
+        copyString(cfg.loraRegion, sizeof(cfg.loraRegion), valueText);
       } else if (std::strcmp(key, "storage_max_bytes") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.storageMaxBytes = static_cast<uint32_t>(intValue);

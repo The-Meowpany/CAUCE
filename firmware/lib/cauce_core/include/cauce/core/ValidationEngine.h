@@ -49,6 +49,7 @@ struct ValidationContext {
   uint32_t identicalStreak{0};
   float streakValue{0.0f};
   bool timeValid{false};
+  uint64_t nowUtcMs{0};
   uint32_t lastSeenSequence{0};
   bool hasLastSequence{false};
 };

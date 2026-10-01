@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from .analytics import summary_stats
 from .config import settings
 from .db import query, transaction
+from .ratelimit import check_rate
 from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
@@ -18,6 +19,7 @@ def create_site(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
@@ -36,15 +38,43 @@ def create_site(
 
 
 @router.get("/sites")
-def list_sites(authorization: str | None = Header(default=None)) -> dict:
+def list_sites(
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     rows = query(
-        """SELECT s.site_id, s.name, s.notes,
+        """SELECT s.site_id, s.name, s.notes, s.lat, s.lon,
                   (SELECT COUNT(*) FROM nodes n WHERE n.site_id=s.site_id) AS node_count,
                   (SELECT COUNT(*) FROM interventions i WHERE i.site_id=s.site_id) AS intervention_count
            FROM sites s ORDER BY s.site_id"""
     )
     return {"sites": [dict(r) for r in rows]}
+
+
+@router.put("/sites/{site_id}/location")
+def set_site_location(
+    site_id: str,
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    lat = payload.get("lat")
+    lon = payload.get("lon")
+    if not isinstance(lat, (int, float)) or not -90.0 <= lat <= 90.0:
+        raise HTTPException(status_code=422, detail="invalid_lat")
+    if not isinstance(lon, (int, float)) or not -180.0 <= lon <= 180.0:
+        raise HTTPException(status_code=422, detail="invalid_lon")
+    with transaction() as conn:
+        cur = conn.execute("UPDATE sites SET lat=?, lon=? WHERE site_id=?",
+                           (float(lat), float(lon), site_id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="site_not_found")
+    return {"status": "located", "site_id": site_id,
+            "lat": float(lat), "lon": float(lon)}
 
 
 @router.put("/nodes/{node_id}/site")
@@ -54,6 +84,7 @@ def assign_node_site(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
@@ -79,6 +110,7 @@ def create_intervention(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     site_id = payload.get("site_id")
     kind = payload.get("kind")
@@ -114,9 +146,11 @@ def create_intervention(
 
 @router.get("/interventions")
 def list_interventions(
+    request: Request,
     site_id: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     sql = "SELECT * FROM interventions"
     params: list = []
@@ -135,6 +169,7 @@ def analytics_before_after(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict:
+    check_rate(request)
     require_bearer_token(authorization, settings.api_token)
 
     rows = query(
@@ -150,14 +185,14 @@ def analytics_before_after(
     def values(lo: int, hi: int) -> list[float]:
         raw = query(
             """SELECT value FROM measurements
-               WHERE node_id=? AND variable=? AND timestamp_utc_ms>=? AND timestamp_utc_ms<?
+               WHERE node_id=? AND variable=? AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?
                  AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')
                  AND value IS NOT NULL""",
             (node_id, variable, lo, hi),
         )
         return [r["value"] for r in raw]
 
-    before = summary_stats(values(0, start))
+    before = summary_stats(values(0, start - 1) if start > 0 else [])
     after = summary_stats(values(start, end))
 
     mean_shift = None

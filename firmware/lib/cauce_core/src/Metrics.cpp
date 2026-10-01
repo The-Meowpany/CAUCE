@@ -86,6 +86,13 @@ uint32_t aggregateBuckets(const Measurement* measurements, uint32_t count,
                           Variable variable, uint32_t windowSeconds,
                           AggregateBucket* out, uint32_t capacity) {
   if (!measurements || !out || capacity == 0 || windowSeconds == 0) return 0;
+#ifndef NDEBUG
+  for (uint32_t i = 1; i < count; ++i) {
+    if (measurements[i].timestampUtcMs < measurements[i - 1].timestampUtcMs) {
+      return 0;
+    }
+  }
+#endif
   const uint64_t windowMs = static_cast<uint64_t>(windowSeconds) * 1000ULL;
   uint32_t bucketCount = 0;
   bool open = false;

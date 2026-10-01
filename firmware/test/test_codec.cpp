@@ -74,6 +74,18 @@ void test_truncated_frame_rejected() {
                     decodeFrame(frame, kFrameSize - 1, out));
 }
 
+void test_unterminated_node_id_is_terminated_on_decode() {
+  const Measurement original = sampleMeasurement();
+  uint8_t payload[kMeasurementPayloadSize];
+  encodePayload(original, payload);
+  std::memset(payload + 20, 'A', 16);
+
+  Measurement decoded{};
+  TEST_ASSERT_EQUAL(DecodeStatus::Ok, decodePayload(payload, decoded));
+  TEST_ASSERT_EQUAL('\0', decoded.nodeId[15]);
+  TEST_ASSERT_EQUAL(0, std::strncmp(decoded.nodeId, "AAAAAAAAAAAAAAA", 15));
+}
+
 void registerCodecTests() {
 
   RUN_TEST(test_crc32_known_vector);
@@ -81,4 +93,5 @@ void registerCodecTests() {
   RUN_TEST(test_flipped_bit_detected_by_crc);
   RUN_TEST(test_bad_magic_rejected);
   RUN_TEST(test_truncated_frame_rejected);
+  RUN_TEST(test_unterminated_node_id_is_terminated_on_decode);
 }

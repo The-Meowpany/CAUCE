@@ -148,9 +148,10 @@ void OtaManager::runCheck() {
   }
 
   if (hasManifestKey_) {
-    char canonical[192];
-    std::snprintf(canonical, sizeof(canonical), "%s|%s|%u", release.version,
-                  release.url, static_cast<unsigned>(release.totalSize));
+    char canonical[256];
+    std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", release.version,
+                  release.sha256Hex, release.url,
+                  static_cast<unsigned>(release.totalSize));
     uint8_t mac[32];
     hmacSha256(manifestKey_, sizeof(manifestKey_),
                reinterpret_cast<const uint8_t*>(canonical),
@@ -206,7 +207,10 @@ bool OtaManager::startDownload() {
 
 bool OtaManager::pumpChunk() {
   uint8_t chunk[512];
-  const size_t n = reader_.read(chunk, tuning_.chunkSize);
+  const size_t readSize = tuning_.chunkSize < sizeof(chunk)
+                              ? tuning_.chunkSize
+                              : sizeof(chunk);
+  const size_t n = reader_.read(chunk, readSize);
   if (n == 0) return true;  // EOF
   if (downloadReceived_ + n > pendingRelease_.totalSize) {
     abortDownload("OTA_SIZE_EXCEEDED", OtaState::VerifyFailed, LogLevel::Error);

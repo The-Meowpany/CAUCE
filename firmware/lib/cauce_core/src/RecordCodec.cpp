@@ -99,6 +99,7 @@ DecodeStatus decodePayload(const uint8_t (&data)[kMeasurementPayloadSize],
   m.reasonBits = *c++;
   m.timeUncertain = *c++ != 0;
   std::memcpy(m.nodeId, c, sizeof(m.nodeId));
+  m.nodeId[sizeof(m.nodeId) - 1] = '\0';
   c += sizeof(m.nodeId);
   m.sensorId[23] = '\0';
   std::memcpy(m.sensorId, c, sizeof(m.sensorId) - 1);

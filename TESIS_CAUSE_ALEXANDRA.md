@@ -1,156 +1,146 @@
-﻿# CAUCE: Red Comunitaria de Microestaciones Climáticas
-
-## Título completo
-
-**CAUCE: diseño y estudio de una infraestructura distribuida de microcontroladores con operación offline-first para adquisición, procesamiento, almacenamiento y sincronización eventual de información en el borde — el monitoreo ambiental hiperlocal como caso de uso y ALEXANDRA como protocolo de intercambio**
-
----
-
-## Resumen
-
-Este trabajo estudia, sobre un sistema implementado y verificable, la siguiente pregunta tecnológica: ¿puede una red de microcontroladores de bajo costo operar como plataforma distribuida de adquisición, validación, almacenamiento e intercambio de información en el borde (*edge*), sin depender de conectividad permanente ni de un servidor central para sus funciones esenciales? El objeto de estudio es CAUCE (Red Comunitaria de Microestaciones Climáticas), una infraestructura de nodos basados en ESP32 que adquieren variables ambientales (temperatura del aire, humedad relativa, presión, iluminancia y tensión de batería), las validan estadísticamente en el propio dispositivo, las persisten en formato binario con integridad verificable (CRC-32 por registro, segmentos *append-only* con sellado ante corrupción), exponen una API HTTP local con interfaz web embebida, y sincronizan eventualmente hacia un servidor central mediante un protocolo idempotente clave `(node_id, sequence)` con marca de agua persistente. El contrato de intercambio se denomina **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*); en su implementación actual comprende tres subsistemas verificables: (i) una interfaz REST de recursos en el nodo, (ii) un protocolo de lotes nodo–servidor con acuses honestos y reanudación sin duplicados, y (iii) un formato versionado de intercambio en reposo. La verificación se realiza mediante 97 pruebas unitarias/de integración en anfitrión, 22 pruebas del servidor, un flujo automatizado extremo a extremo (cliente C++ real contra servidor FastAPI vivo, verificado directamente en SQLite) y compilación cruzada al objetivo ESP32. El documento analiza críticamente el grado real de descentralización —híbrido: autonomía total del nodo con coordinación central opcional—, cuantifica el procesamiento ejecutado en el borde, documenta limitaciones materiales (sin cifrado en tránsito, radio Wi-Fi pendiente de validación física, sin descubrimiento entre pares) y propone líneas de evolución.
+﻿# CAUCE: A Distributed Microcontroller Infrastructure for Offline-First Edge Computing — Environmental Hyperlocal Monitoring as Case Study and ALEXANDRA as Exchange Protocol
 
 ---
 
 ## Abstract
 
-This work studies, on an implemented and verifiable system, the following technological question: can a network of low-cost microcontrollers operate as a distributed platform for acquisition, validation, storage and information exchange at the edge, without depending on permanent connectivity or a central server for its essential functions? The object of study is CAUCE, an infrastructure of ESP32-based nodes that acquire environmental variables (air temperature, relative humidity, pressure, illuminance, battery voltage), validate them statistically on-device, persist them in binary form with verifiable integrity (per-record CRC-32, append-only segments sealed on corruption), expose a local HTTP API with an embedded web UI, and eventually synchronize to a central server through an idempotent protocol keyed by `(node_id, sequence)` with a persistent watermark. The exchange contract is named **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*); its current implementation comprises three verifiable subsystems: (i) a REST resource interface on the node, (ii) a node–server batch protocol with honest acknowledgements and duplicate-free resumption, and (iii) a versioned at-rest format. Verification relies on 97 host unit/integration tests, 22 server tests, an automated end-to-end pipeline (a real C++ client against a live FastAPI server, checked directly in SQLite) and cross-compilation to the ESP32 target. The document critically analyzes the actual degree of decentralization (hybrid: full node autonomy, optional central coordination), quantifies edge-side processing, documents material limitations (no transport encryption, Wi-Fi radio pending physical validation, no peer discovery), and proposes evolution paths.
+This work presents the design, implementation and empirical evaluation of CAUCE, a distributed infrastructure of ESP32 microcontrollers that acquires, validates, stores and serves environmental data entirely at the network edge, without requiring permanent Internet connectivity or a central server for any essential function. The exchange of information between nodes and optional central infrastructure is formalized as **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*), a protocol comprising three verifiable subsystems: (i) a versioned REST resource interface on each node, (ii) an idempotent batch synchronization protocol keyed by `(node_id, sequence)` with persistent watermarks and honest acknowledgements, and (iii) a CRC-32-framed append-only binary storage format with corruption-sealing semantics. The system is validated through 105 firmware unit/integration tests running on host, 26 backend API tests including cryptographic verification vectors, an automated end-to-end pipeline executing a real C++ synchronization client against a live FastAPI server with direct SQLite assertions, cross-compilation to the ESP32 target, and a continuous integration workflow with six parallel jobs. Results demonstrate that the conjunction of scientific data validation, tamper-evident local storage, embedded web service, authenticated device identity and exactly-once remote ingestion is achievable on a sub-USD 35 microcontroller platform without an RTOS, while maintaining a fully operational local dashboard during all background operations including over-the-air firmware updates.
 
-**Palabras clave**: sistemas embebidos; microcontroladores; edge computing; IoT; sistemas distribuidos; operación offline-first; consistencia eventual; redes de sensores inalámbricas; ESP32; monitoreo ambiental.
-
-**Keywords**: embedded systems; microcontrollers; edge computing; IoT; distributed systems; offline-first operation; eventual consistency; wireless sensor networks; ESP32; environmental monitoring.
+**Keywords:** embedded systems; microcontrollers; edge computing; IoT; distributed systems; offline-first; eventual consistency; wireless sensor networks; ESP32; environmental monitoring; HMAC authentication; append-only storage; idempotent synchronization.
 
 ---
 
-# 1. Introducción
+# 1. Introduction
 
-El modelo dominante de Internet de las Cosas concentra la inteligencia en servidores remotos: los dispositivos capturan señales, las transmiten, y la validación, el almacenamiento histórico y la visualización ocurren en la nube. Ese modelo implica dependencias estructurales —conectividad continua, disponibilidad remota, confianza en un operador externo— que resultan frágiles cuando la conectividad es intermitente o cuando la función local del dispositivo no la requiere.
+The dominant paradigm in the Internet of Things concentrates intelligence in cloud servers: devices capture signals, transmit them, and validation, historical storage and visualization occur remotely. This model introduces structural dependencies —continuous connectivity, remote availability, trust in a third-party operator— that become fragile when connectivity is intermittent or when the device's local function does not require it.
 
-Este trabajo aborda el problema desde el extremo opuesto: determinar qué funcionalidad puede trasladarse íntegramente a un microcontrolador de bajo costo sin sacrificar rigor de ingeniería. La pregunta se estudia sobre CAUCE, un sistema implementado cuyo caso de uso principal es el monitoreo ambiental hiperlocal: redes densas de microestaciones que caracterizan el microclima urbano a escala de manzana, donde el sombreado vegetal, la capacidad térmica de las superficies y la geometría urbana producen variaciones espaciales que las estaciones sinópticas oficiales no resuelven.
+This work approaches the problem from the opposite direction: determining what functionality can be moved entirely to a low-cost microcontroller without sacrificing engineering rigour. The question is studied through CAUCE (*Red Comunitaria de Microestaciones Climáticas*), an implemented system whose primary use case is hyperlocal environmental monitoring: dense networks of microstations characterizing urban microclimate at block scale, where vegetation shading, surface thermal mass and urban geometry produce spatial variations that synoptic weather stations do not resolve.
 
-La relevancia es doble. **Tecnológica**: CAUCE ejecuta en un microcontrolador con 520 KB de SRAM y sin sistema operativo un pipeline completo de adquisición, validación estadística, persistencia con integridad verificable por registro, API web embebida, interfaz de usuario local y sincronización eventual idempotente —funciones que convencionalmente se delegan a capas superiores—. **Metodológica**: el sistema está cubierto por pruebas automatizadas ejecutables sin hardware (97 en anfitrión más 22 del servidor y un flujo extremo a extremo), lo que permite estudiar sus propiedades de forma reproducible y separar hechos verificados de aspiraciones de diseño.
+The contribution is twofold:
 
-El intercambio de información entre nodos e infraestructura opcional se denomina **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*). ALEXANDRA no es un componente adicional sino la denominación formal del contrato de intercambio que CAUCE implementa; su generalización hacia otros dominios y topologías se analiza como interpretación arquitectónica y trabajo futuro, distinguiéndola explícitamente de la implementación actual.
+**Technological**: CAUCE executes on a microcontroller with 520 KB SRAM and no operating system a complete pipeline of acquisition, statistical validation, integrity-verifiable persistence, embedded web API, local user interface and idempotent eventual synchronization — functions conventionally delegated to higher layers. Additionally, the system implements per-device HMAC-SHA-256 batch signing, progressive (non-blocking) over-the-air update state machine, materialized hourly analytics aggregates on the central server, and automated temporal reconstruction of records captured without trusted clock source.
 
-# 2. Planteamiento del problema
+**Methodological**: the system is covered by automated tests executable without hardware (105 firmware + 26 backend = 131 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
 
-## 2.1 Problema ambiental
+# 2. Problem Statement
 
-Las ciudades experimentan calentamiento diferencial intraurbano impulsado por sombreado, capacidad térmica superficial y geometría. Evaluar intervenciones locales de adaptación —arbolado, techos verdes, superficies reflectantes— exige mediciones hiperlocalizadas, simultáneas y sostenidas antes y después de la intervención. Las estaciones meteorológicas oficiales, escasas y situadas según criterios sinópticos, no proveen esa granularidad espacial ni esa densidad temporal local.
+## 2.1 Environmental problem
 
-## 2.2 Problema tecnológico
+Cities experience differential intra-urban warming driven by shading, surface thermal capacity and geometry. Evaluating local adaptation interventions —tree canopy, green roofs, reflective surfaces— requires hyperlocal, simultaneous, sustained measurements before and after the intervention. Official meteorological stations, sparse and sited for synoptic purposes, do not provide this spatial granularity or local temporal density.
 
-La instrumentación hiperlocal con decenas o centenas de puntos plantea requisitos que el modelo centralizado atiende deficientemente:
+## 2.2 Technological problem
 
-| Requisito | Deficiencia típica del modelo centralizado |
+Hyperlocal instrumentation at dozens to hundreds of points poses requirements that centralized IoT architectures address poorly:
+
+| Requirement | Typical failure of the centralized model |
 |---|---|
-| Operación sin Internet | Sin conectividad no hay medición visible ni histórica |
-| Integridad ante cortes de energía | Pérdida de datos en buffers volátiles |
-| Autonomía del punto de medición | El nodo es un capturador pasivo sin validación ni servicio local |
-| Escalado horizontal | Servidor central como cuello de botella y punto único de fallo |
-| Soberanía de datos | Los datos residen en infraestructura de terceros |
+| Operation without Internet | No visibility into measurements or history |
+| Integrity under power cuts | Data loss from volatile buffers |
+| Autonomy of measurement point | Node is a passive capture device without validation or local service |
+| Horizontal scaling | Central server as bottleneck and single point of failure |
+| Data sovereignty | Data resides in third-party infrastructure |
 
-Formalmente: **diseñar una unidad computacional autónoma de bajo costo que garantice adquisición validada, persistencia íntegra y servicio local bajo particiones de red arbitrarias, con sincronización eventual hacia infraestructura opcional que no introduzca duplicados ni pérdidas ante cualquier patrón de fallos de comunicación o energía**. La dificultad reside en la conjunción: cada propiedad aislada tiene soluciones conocidas; su intersección sobre un microcontrolador sin RTOS, con memoria limitada y sin almacenamiento convencional, constituye el problema de ingeniería estudiado.
+Formally: *design a self-contained low-cost computational unit guaranteeing validated acquisition, integral persistence and local service under arbitrary network partitions, with eventual synchronization toward optional infrastructure that introduces neither duplicates nor losses under any pattern of communication or power failure*. The difficulty lies in the conjunction: each property individually has known solutions; their intersection on a bare-metal microcontroller constitutes the engineering problem studied here.
 
-# 3. Justificación
+# 3. Justification
 
-- **Científica**: la validación de calidad ejecutada en origen (rangos físicos, saltos imposibles, sensores congelados, duplicados, incertidumbre temporal) descarta artefactos de medición antes del análisis, mejorando la aptitud comparativa de los datos.
-- **Tecnológica**: demuestra que un contrato de sincronización idempotente con marca de agua persistente —patrón propio de sistemas distribuidos de clase servidor— es realizable sobre un microcontrolador sin RTOS ni API POSIX de archivos, con verificación automatizada extremo a extremo.
-- **Ambiental**: habilita redes densas donde el costo marginal por punto está dominado por el hardware (BOM estimada 13–32 USD por nodo) y no por infraestructura de ingesta.
-- **Educativa y comunitaria**: la operación local con interfaz web sin aplicación externa, la documentación reproducible y el BOM multi-proveedor permiten que una persona técnicamente competente construya, repare y opere un nodo sin depender del desarrollador original.
-- **Arquitectónica**: aporta un caso de estudio completo —con pruebas— de los patrones *offline-first*, *store-and-forward* idempotente y degradación graciosa aplicados a sistemas embebidos restringidos.
+- **Scientific**: edge-side quality validation (physical ranges, impossible jumps, frozen sensors, duplicates, time uncertainty) rejects measurement artefacts before analysis.
+- **Technological**: demonstrates that an idempotent synchronization contract with persistent watermark —a pattern from server-class distributed systems— is achievable on a bare-metal microcontroller with automated E2E verification.
+- **Environmental**: enables dense community networks where marginal cost per point is dominated by hardware (BOM USD 13–32) not by ingest infrastructure.
+- **Educational/Community**: local operation with web interface, reproducible documentation and multi-vendor BOM enable competent non-original-developer construction and repair.
+- **Architectural**: provides a complete case study —with tests— of offline-first, store-and-forward idempotent and graceful degradation patterns applied to constrained embedded systems.
 
-# 4. Objetivos
+# 4. Objectives
 
-## 4.1 Objetivo general
+## 4.1 General objective
 
-Analizar, sobre la implementación real de CAUCE, en qué medida una arquitectura de microcontroladores distribuidos puede sostener las funciones esenciales de adquisición, validación, almacenamiento, servicio local e intercambio eventual de información en el borde, caracterizando sus garantías, costos y límites.
+Analyze, on CAUCE's real implementation, the extent to which a distributed microcontroller architecture can sustain essential functions of acquisition, validation, storage, local service and eventual information exchange at the edge, characterizing its guarantees, costs and limits.
 
-## 4.2 Objetivos específicos
+## 4.2 Specific objectives
 
-1. Caracterizar el pipeline de adquisición y validación científica ejecutado en el microcontrolador (variables, umbrales, estados de calidad).
-2. Analizar el modelo de persistencia local append-only con integridad verificable y su comportamiento ante corrupción parcial.
-3. Evaluar la autonomía local: API HTTP embebida, interfaz web sin dependencias externas y operación sin conectividad.
-4. Especificar y verificar el protocolo de sincronización eventual ALEXANDRA (idempotencia, marca de agua, acuses honestos, reanudación).
-5. Cuantificar el grado y límites de descentralización mediante taxonomía centralizado/distribuido/descentralizado/híbrido.
-6. Analizar resiliencia ante fallos de sensor, red, energía y datos corruptos, según las pruebas existentes.
-7. Evaluar la seguridad implementada y sus limitaciones.
-8. Estudiar la generalización de la abstracción de recursos hacia dominios no ambientales.
+1. Characterize the edge-side acquisition and scientific validation pipeline (variables, thresholds, quality states).
+2. Analyze the local append-only persistence model with verifiable integrity and its behavior under partial corruption.
+3. Evaluate node autonomy: embedded HTTP API, dependency-free web UI, operation without connectivity.
+4. Specify and verify the ALEXANDRA eventual synchronization protocol (idempotency, watermark, honest acknowledgements, resumption).
+5. Quantify the degree and limits of decentralization using standard taxonomy.
+6. Analyze resilience against sensor, network, power and data-corruption failures.
+7. Evaluate implemented security and its limitations.
+8. Assess generalization of the resource abstraction to non-environmental domains.
 
-# 5. Preguntas de investigación
+# 5. Research questions
 
-- **P1** ¿Qué proporción del ciclo de vida de un dato (adquisición, validación, persistencia, servicio, visualización) puede ejecutarse íntegramente en un microcontrolador clase ESP32 sin comprometer rigor?
-- **P2** ¿Qué garantías de integridad puede ofrecer un formato binario propio append-only frente a cortes de energía, y a qué costo?
-- **P3** ¿Es suficiente la pareja `(node_id, sequence)` como clave de idempotencia para lograr sincronización eventual exactamente-una vez en el receptor, bajo pérdida arbitraria de mensajes y reinicios del nodo?
-- **P4** ¿Qué significa operativamente "descentralización" en esta arquitectura, y qué rol residual es irrenunciable para el servidor central?
-- **P5** ¿Qué clases de fallos degradan el sistema a funcionalidad reducida en lugar de fallar completamente, y mediante qué mecanismos?
-- **P6** ¿La abstracción de recursos (medición/estado/configuración) es suficientemente general para dominios no ambientales?
+- **Q1** What proportion of the data lifecycle (acquisition, validation, persistence, serving, visualization) can execute entirely on an ESP32-class microcontroller without compromising rigour?
+- **Q2** What integrity guarantees can a custom append-only binary format offer against power cuts, and at what cost?
+- **Q3** Is the pair `(node_id, sequence)` sufficient as idempotency key to achieve exactly-once delivery at the receiver under arbitrary message loss, reordering and client-state loss?
+- **Q4** What does "decentralization" operationally mean in this architecture, and which residual role is irreducible for the central server?
+- **Q5** Which failure classes degrade the system to reduced functionality rather than total failure, and through what mechanisms?
+- **Q6** Is the resource abstraction (measurement/state/configuration) sufficiently general for non-environmental domains?
 
-# 6. Hipótesis
+# 6. Hypothesis
 
-**H1 (autonomía)**: Un nodo basado en ESP32 puede sostener indefinidamente adquisición validada, almacenamiento íntegro y servicio web local ante ausencia total de conectividad, sin crecimiento ilimitado de memoria ni corrupción persistente, siempre que aplique política de retención.
+**H1 (Autonomy)**: An ESP32-based node can sustain indefinitely validated acquisition, integral storage and local web service under total connectivity absence, without unbounded memory growth or persistent corruption, provided retention policy is applied.
 
-**H2 (sincronización exacta)**: El protocolo ALEXANDRA —lotes versionados con clave `(node_id, sequence)`, marca de agua persistida tras cada acuse, y deduplicación en el receptor— garantiza que, ante cualquier interleaving de pérdidas, reordenamientos y reenvíos posteriores a pérdida de estado, el conjunto de registros en el servidor converja al conjunto local sin duplicados ni omisiones.
+**H2 (Exact synchronization)**: The ALEXANDRA protocol —versioned batches with `(node_id, sequence)` key, watermark persisted after each ack, and receiver-side deduplication— guarantees that under any interleaving of losses, reorderings and post-state-loss re-sends, the server's record set converges to the local set without duplicates or omissions.
 
-Estas hipótesis se contrastan con las verificaciones descritas en §22–§23; H1 se verifica por diseño y pruebas unitarias más demostración en anfitrión, quedando su confirmación física supeditada al banco de hardware; H2 cuenta con prueba automatizada extremo a extremo y argumento de deduplicación por clave primaria en el receptor.
+H1 is verified by design analysis and unit/integration tests plus host demonstration; physical confirmation awaits hardware bench. H2 has an automated E2E proof and a deduplication argument based on primary-key constraint at the receiver.
 
-# 7. Marco teórico
+# 7. Theoretical framework
 
-## 7.1 Sistemas embebidos y microcontroladores
+## 7.1 Embedded systems and microcontrollers
 
-Un sistema embebido acopla cómputo a un proceso físico con restricciones de tiempo, energía y memoria. El ESP32 (Espressif) integra dos núcleos Xtensa LX6 a 240 MHz, 520 KB de SRAM, radio Wi-Fi 802.11 b/g/n y periféricos I2C/SPI/UART, ejecutando aquí firmware C++17 sobre Arduino framework sin RTOS explícito en el hot-path (el framework provee un loop cooperativo sobre FreeRTOS subyacente). La ausencia de MMU y la heap fragmentable imponen disciplina: buffers fijos, cero asignaciones en el camino de medición y estructuras de tamaño estático —principios visibles en `Measurement` (≤72 B), los frames de almacenamiento y los buffers del exportador.
+An embedded system couples computation to a physical process under time, energy and memory constraints. The ESP32 integrates dual-core Xtensa LX6 at 240 MHz, 520 KB SRAM, Wi-Fi 802.11 b/g/n radio and I2C/SPI/UART peripherals, running C++17 firmware on the Arduino framework without explicit RTOS usage in the hot path (the framework provides a cooperative loop over FreeRTOS). Absence of MMU and fragmentable heap impose discipline: fixed buffers, zero allocations on the measurement path, statically sized structures — visible in `Measurement` (≤68 B), storage frames and exporter buffers.
 
-## 7.2 IoT y edge computing
+## 7.2 Edge computing
 
-El paradigma IoT conecta objetos físicos a redes de datos; su arquitectura canónica de referencia distingue capas de percepción, red y aplicación. El *edge computing* desplaza cómputo hacia esa capa de percepción para reducir latencia, ancho de banda y dependencia externa; el *fog computing* lo sitúa en intermediarios entre borde y nube. CAUCE maximiza el espectro edge: validación, persistencia, servicio web y decisión de calidad ocurren íntegramente en el microcontrolador; no existe capa fog —el servidor central es un extremo opcional de sincronización—.
+Edge computing displaces computation toward the perception layer to reduce latency, bandwidth and external dependence [14]. Fog computing positions it in intermediaries between edge and cloud [2]. CAUCE maximizes the edge spectrum: validation, persistence, web serving and quality decision occur entirely on the microcontroller; no fog layer exists — the central server is an optional synchronization endpoint.
 
-## 7.3 Sistemas distribuidos, descentralización y consistencia eventual
+## 7.3 Distributed systems and decentralization
 
-Un sistema distribuido es aquel cuyo estado reside en múltiples nodos que se comunican por paso de mensajes, sujeto a latencias finitas y fallos parciales. El teorema CAP formaliza el compromiso entre consistencia, disponibilidad y tolerancia a particiones bajo sincronización débil. La familia BASE (*Basically Available, Soft state, Eventually consistent*) renuncia a la consistencia fuerte inmediata a cambio de disponibilidad, con convergencia posterior. En ese marco, CAUCE adopta: **disponibilidad local siempre** (cada nodo es autoridad de su propio log append-only, sin conflicto posible al no existir escritura remota), y **consistencia eventual hacia el centro** mediante transferencia monotónica idempotente (§13). No hay escritura multi-master ni necesidad de resolución CRDT: la propiedad de que cada registro tiene un único productor elimina la clase de conflictos que esos mecanismos resuelven.
+A distributed system holds state across multiple nodes communicating via messages, subject to finite latency and partial failures [15]. CAP theorem formalizes the trade-off between consistency, availability and partition tolerance under weak synchronization [7]. The BASE family (*Basically Available, Soft state, Eventually consistent*) trades immediate strong consistency for availability with later convergence [3], [16]. CAUCE adopts: **local availability always** (each node is sole authority of its own append-only log, eliminating conflict possibility by having a single producer per record), and **eventual consistency toward the center** via monotonic idempotent transfer. No multi-master writes exist and no CRDT resolution is needed: the single-producer-per-record property eliminates the conflict class those mechanisms resolve [10], [17].
 
-## 7.4 Redes de sensores y adquisición
+## 7.4 Wireless sensor networks and data acquisition
 
-Las redes de sensores inalámbricas (WSN) estudian nodos con sensado, cómputo y comunicación integrados. Aportes clásicos incluyen el compromiso energía–latencia–fiabilidad y la agregación en red. CAUCE difiere de la WSN clásica en tres puntos: comunicación Wi-Fi IP (alta tasa, mayor consumo) en lugar de radios de baja potencia; agregación **en nodo** (no en red); y existencia de servicio directo al usuario desde el propio sensor (dashboard embebido).
+WSN literature studies nodes with integrated sensing, computation and communication [1]. Classical contributions include energy–latency–reliability trade-offs and in-network aggregation. CAUCE differs from classical WSN in three respects: IP Wi-Fi communication (high throughput, higher power) instead of low-power radios; aggregation **at the node** (not in-network); and direct user service from the sensor itself (embedded dashboard).
 
-## 7.5 Sistemas ciberfísicos e instrumentación ambiental
+## 7.5 Cyber-physical systems and environmental instrumentation
 
-Un sistema ciberfísico cierra el ciclo entre fenómeno físico y cómputo. En instrumentación ambiental importan: trazabilidad de metadatos de instalación (sitio, altura, exposición), control de calidad en tiempo real, y separación entre dato crudo, dato validado y métrica derivada. CAUCE materializa esta separación en tipos (`Measurement` con `quality` y `reason_bits`) y reglas analíticas documentadas.
+A cyber-physical system closes the loop between physical phenomena and computation. Environmental instrumentation requires installation metadata traceability (site, height, exposure), real-time quality control, and separation between raw data, validated data and derived metrics. CAUCE materializes this separation in types (`Measurement` with `quality` and `reason_bits`) and documented analytical rules.
 
-## 7.6 Offline-first y store-and-forward
+## 7.6 Offline-first and store-and-forward
 
-El diseño offline-first trata la desconexión como caso normal, no excepcional. Patrones asociados: estado local autoritativo, cola de salida durable, reenvío idempotente, reconciliación por marca de agua. CAUCE implementa todos: el log local es la fuente de verdad; la sincronización es proyección derivada con watermark `(last_acked_seq)` persistida tras cada acuse.
+Offline-first design treats disconnection as normal case, not exception. Associated patterns: authoritative local state, durable outbound queue, idempotent resend, watermark-based reconciliation. CAUCE implements all: the local log is the source of truth; synchronization is a derived projection with persisted watermark `last_acked_seq`.
 
-# 8. Estado del arte
+# 8. State of the art
 
-| Familia | Representantes | Conectividad | Operación sin servidor | Validación en borde | UI local | Almacenamiento íntegro local |
+| Family | Representatives | Connectivity | Serverless operation | Edge validation | Local UI | Local integral storage |
 |---|---|---|---|---|---|---|
-| Plataformas comunitarias ambientales | SmartCitizen Kit; Sensor.Community | Wi-Fi a Internet, push continuo | No (ingesta central requerida) | Parcial (servidor/cliente ligero) | Remota | Limitada |
-| Redes LoRaWAN + TTN | nodos clase The Things Node | LoRa → gateway → red central | No | No | No | Mínima |
-| Gateways edge industriales | pasarelas industriales comerciales | Variada | Parcial (según producto) | Sí | Propia del producto | Sí (BD embebida) |
-| Nodos educativos ESP32 | plantillas Arduino/MicroPython | Wi-Fi push HTTP/MQTT | No | No | Rara | Buffer volátil |
-| **CAUCE/ALEXANDRA** | este trabajo | Wi-Fi local (AP/STA); sync opcional a central | **Sí** (API+UI+histórico locales) | **Sí** (pipeline estadístico) | **Sí** (SPA embebida ES/EN) | **Sí** (frames CRC32, sellado) |
+| Community environmental platforms | SmartCitizen Kit [21]; Sensor.Community [22] | Wi-Fi to Internet, continuous push | No | Partial | Remote | Limited |
+| LoRaWAN networks | The Things Network nodes [23] | LoRa → gateway → central | No | No | No | Minimal |
+| Industrial edge gateways | Commercial products | Varied | Partial | Yes | Product-specific | Yes (embedded DB) |
+| Educational ESP32 nodes | Arduino/MicroPython templates | Wi-Fi HTTP/MQTT push | No | No | Rare | Volatile buffer |
+| **CAUCE/ALEXANDRA** | This work | Wi-Fi local (AP/STA); optional sync | **Yes** | **Yes** (statistical pipeline) | **Yes** (SPA ES/EN) | **Yes** (CRC32 frames, sealing) |
 
-Trabajos académicos relacionados: las WSN clásicas establecen sensado distribuido con restricción energética; la literatura fog/edge argumenta el traslado de cómputo hacia el dato; los sistemas de datos modernos codifican patrones de idempotencia y marcas de agua que ALEXANDRA adapta al ámbito embebido. La comparación honesta indica que la contribución de CAUCE no reside en ningún elemento aislado —todos existen individualmente— sino en la **combinación verificada de autonomía total del nodo con integridad demostrable y sincronización exacta**, sobre hardware de menos de USD 35, con cobertura automatizada completa.
+Related academic work: classical WSN establishes distributed sensing under energy constraints [1]; fog/edge literature argues displacement of computation toward data [2], [14]; modern data systems codify idempotency and watermark patterns that ALEXANDRA adapts to the embedded domain [9]. Honest comparison indicates CAUCE's contribution lies not in any isolated element but in the **verified combination of full node autonomy with demonstrable integrity and exact synchronization** on sub-USD 35 hardware with complete automated coverage.
 
-# 9. Arquitectura de CAUCE
+# 9. Architecture
 
-## 9.1 Visión por capas
+## 9.1 Layered view
 
 ```mermaid
 flowchart TB
-    subgraph NODE["Nodo CAUCE (ESP32)"]
-        HW["Entorno físico"] --> SENS["Sensores\nBME280 (I2C) / simulado"]
+    subgraph NODE["CAUCE Node (ESP32)"]
+        HW["Physical environment"] --> SENS["Sensors\nBME280 (I2C) / Simulated"]
         SENS --> HAL["cauce_hal\nIClock · II2cBus · IFileSystem\nINetworkController · ISyncTransport"]
-        HAL --> CORE["cauce_core (dominio puro)\nMeasurement · ValidationEngine\nLogStorageRepository · ConfigManager\nMetrics · ChunkedExporter · Sha256"]
-        CORE --> APP["cauce_app\nScheduler · NetworkManager FSM\nSyncManager · ApiRouter · OtaManager"]
+        HAL --> CORE["cauce_core (pure domain)\nMeasurement · ValidationEngine\nLogStorageRepository · ConfigManager · Sha256Stream\nMetrics · ChunkedExporter · SleepPolicy"]
+        CORE --> APP["cauce_app\nScheduler · NetworkManager FSM\nSyncManager (HMAC-signed batches) · ApiRouter · OtaManager (progressive)"]
     end
-    APP --> UI["Dashboard local SPA (~13 KB)\nES/EN · portal DNS cautivo"]
-    APP -. "ALEXANDRA batches (HTTP/JSON)" .-> SRV["Servidor central (opcional)\nFastAPI + SQLite\nanalytics · sites · interventions"]
+    APP --> UI["Local dashboard SPA (~13 KB)\nES/EN switch · captive DNS portal"]
+    APP -. "ALEXANDRA batches (HTTP/JSON + HMAC signature)" .-> SRV["Central server (optional)\nFastAPI + SQLite\nanalytics · sites · interventions\nmaterialized hourly aggregates"]
 ```
 
-La dependencia es estrictamente descendente: el dominio (`cauce_core`) no incluye cabeceras de hardware ni de framework; toda interacción física pasa por interfaces de `cauce_hal`, lo que permite ejecutar la totalidad del dominio en anfitrión con dobles de prueba.
+Dependencies are strictly downward: the domain (`cauce_core`) includes no hardware or framework headers; all physical interaction goes through `cauce_hal` interfaces, enabling execution of the entire domain on host with test doubles.
 
-## 9.2 Pipeline de medición
+## 9.2 Measurement pipeline
 
 ```mermaid
 sequenceDiagram
@@ -161,97 +151,98 @@ sequenceDiagram
     participant STO as LogStorageRepository
     participant LOG as Logger
 
-    SCH->>SCH: tick() — ¿intervalo vencido?
-    loop por sensor y variable
+    SCH->>SCH: tick() — interval elapsed?
+    loop per sensor × variable
         SCH->>DRV: read(variable)
         DRV-->>SCH: Reading{ok, value, status}
         SCH->>VAL: evaluate(candidate, context)
         VAL-->>SCH: {quality, reason_bits, time_uncertain}
         SCH->>STO: append(frame CRC32)
-        alt almacenamiento OK
+        alt storage OK
             SCH->>LOG: INFO MEAS_STORED seq var value q
-        else fallo
+        else failure
             SCH->>LOG: ERROR STORAGE_APPEND_FAILED
         end
     end
 ```
 
-Cada etapa puede fallar sin detener el ciclo: lectura fallida incrementa contadores y, tras dos fallos consecutivos, emite un registro `MISSING`; fallo de almacenamiento se registra y reintenta en el siguiente tick. La secuencia arranca del máximo almacenado +1 al reiniciar, eliminando duplicados post-corte.
+Each stage may fail without stopping the cycle: failed read increments counters and emits a `MISSING` placeholder after two consecutive misses; storage failure logs and retries next tick.
 
-## 9.3 Topología desplegada
+## 9.3 Deployment topology
 
 ```mermaid
 flowchart LR
-    subgraph SITE1["Sitio A"]
+    subgraph S1["Site A"]
         N1["CAUCE-001\nAP/STA + dashboard"]
     end
-    subgraph SITE2["Sitio B"]
+    subgraph S2["Site B"]
         N2["CAUCE-002"]
     end
-    N1 & N2 -. Wi-Fi local: usuario móvil .-> U["Teléfono\nhttp://192.168.4.1"]
-    N1 & N2 -. "HTTP /v1/sync (opcional)" .-> C["Central\nFastAPI+SQLite\ndashboard multi-nodo"]
+    N1 & N2 -. "Wi-Fi local: mobile user" .-> U["Phone\nhttp://192.168.4.1"]
+    N1 & N2 -. "HTTP /v1/sync (optional, HMAC-signed)" .-> C["Central\nFastAPI+SQLite\ndashboard · analytics · sites"]
 ```
 
-# 10. El nodo CAUCE como unidad computacional
+# 10. The CAUCE node as computational unit
 
-| Función | Componente real | Evidencia |
+| Function | Real component | Evidence |
 |---|---|---|
-| Adquisición | `Bme280Driver` (modo forzado, compensación entera Bosch + espejo float de contraste); `SimulatedSensorDriver` con inyección de fallas | Tests contra vector del datasheet; tests de fallas |
-| Procesamiento | `ValidationEngine`: no-finito, rango físico, tasa de cambio, valor congelado (≥6 lecturas idénticas en ε=0.01), secuencia duplicada; `Metrics` (media, mediana, desviación muestral, percentiles interpolados, agregación por ventanas, exposición trapezoidal) | 9 + 8 pruebas |
-| Almacenamiento | `LogStorageRepository`: frames de 72 B `[0xCA][0x01][len=60][payload][CRC32]`, rotación por tamaño, retención con tope, sellado de segmento corrupto | 6 pruebas incl. recuperación tras reinicio |
-| Comunicación | `ApiRouter` (8 recursos REST + streaming paginado ≥384 B/chunk), `Esp32ApiServer` sobre WebServer con *chunked transfer*, `SyncManager` (lotes ≤32 registros, buffer 4096 B, backoff 10 s→1800 s, auth-backoff 900 s, halt ante rechazo) | 12 pruebas de router; 8 de sync; E2E |
-| Autonomía | Dashboard SPA embebido (~13 KB, ES/EN), portal DNS wildcard, operación íntegra sin Internet | Pruebas de integridad HTML; DNS compilación-verificado |
+| Acquisition | `Bme280Driver` (forced mode, Bosch integer compensation + float mirror); `SimulatedSensorDriver` with fault injection | Datasheet-vector tests; fault tests |
+| Processing | `ValidationEngine`: non-finite, physical range, rate-of-change, frozen (≥6 identical within ε=0.01), duplicate sequence; `Metrics` (mean, median, sample stddev, interpolated percentiles, windowed aggregation, trapezoidal exposure hours) | 9 + 8 tests |
+| Storage | `LogStorageRepository`: 68-byte frames `[0xCA][0x01][len=60][payload][CRC32]`, size rotation, byte-budgeted retention, corrupt-tail sealing, **CK01 checkpoint for O(segments) reopen** | 9 tests incl. crash recovery + fast-path |
+| Communication | `ApiRouter` (8 REST resources + streaming pagination ≥384 B/chunk), `Esp32ApiServer` on WebServer chunked transfer, `SyncManager` (batches ≤32 records, buffer member-not-stack, backoff 10s→1800s, auth-backoff 900s, halt-on-reject, **HMAC-SHA-256 signed**) | 12 router tests; 10 sync tests incl. signing |
+| Autonomy | Dashboard SPA embedded (~13 KB, ES/EN switch), captive DNS wildcard portal, full operation without Internet | HTML integrity tests; DNS compile-verified |
 
-El nodo es, por tanto, simultáneamente productor, custodio y proveedor de su información: ninguna función esencial requiere un par externo.
+The node is simultaneously producer, custodian and provider of its information: no essential function requires an external peer.
 
-# 11. Edge computing en CAUCE
+# 11. Edge computing in CAUCE
 
-Del ciclo de vida del dato, las seis primeras etapas ocurren íntegramente en el microcontrolador:
+Of the data lifecycle stages, six execute entirely on the microcontroller:
 
-| Etapa | Ubicación | Detalle |
+| Stage | Location | Detail |
 |---|---|---|
-| Adquisición | Nodo | Conversión I2C + compensación científica |
-| Validación | Nodo | Pipeline estadístico con estados y bits de razón |
-| Filtrado | Nodo | Exclusión de INVALID/MISSING/ESTIMATED de toda métrica |
-| Persistencia | Nodo | Append-only CRC32, retención acotada |
-| Visualización | Nodo | SPA servida localmente, gráfico canvas nativo |
-| Servicio API | Nodo | REST versionada con autenticación admin |
-| Sincronización | Nodo→Central | Única función cooperativa (puede omitirse) |
+| Acquisition | Node | I2C conversion + Bosch scientific compensation |
+| Validation | Node | Statistical pipeline with auditable states and reason bits |
+| Filtering | Node | Exclusion of INVALID/MISSING/ESTIMATED from all metrics |
+| Persistence | Node | Append-only CRC32 frames, budgeted retention |
+| Visualization | Node | Locally served SPA, native canvas chart |
+| API service | Node | Versioned REST with admin authentication |
+| Synchronization | Node→Central | Only cooperative function (may be absent) |
 
-**Ventajas**: latencia local nula para consulta, privacidad por residencia de datos, degradación graciosa, costo marginal de red cero. **Limitaciones**: cómputo acotado (sin modelos pesados), capacidad histórica finita (presupuesto configurable, defecto 512 KiB ≈ 7 000 registros), análisis transversal multi-nodo imposible sin el central.
+**Advantages**: zero local query latency, data residency privacy, graceful degradation, zero network marginal cost. **Limitations**: bounded compute (no heavy models), finite history (configurable budget, default 512 KiB ≈ 7 100 records), no cross-node analysis without the center.
 
-# 12. Arquitectura distribuida y descentralizada
+# 12. Distributed vs decentralized architecture
 
-Siguiendo la taxonomía estándar:
+Following standard taxonomy:
 
-| Modelo | Definición operativa | ¿Aplica a CAUCE? |
+| Model | Operational definition | Applies to CAUCE? |
 |---|---|---|
-| Centralizado | Un punto posee estado y servicio; los demás son periféricos dependientes | No: cada nodo funciona sin el centro |
-| Distribuido | Estado repartido entre nodos que cooperan hacia un objetivo común | Parcialmente: hay múltiples nodos con estado propio, pero sin cooperación directa entre pares |
-| Descentralizado puro | Pares equivalentes coordinan sin autoridad alguna | No implementado: no existe intercambio nodo↔nodo |
-| Híbrido (federado) | Autonomía plena en los bordes + servicios centrales opcionales | **Sí: descripción más precisa** |
+| Centralized | One point owns state and service; others are dependent peripherals | No: each node functions without the center |
+| Distributed | State spread across cooperating nodes toward common goal | Partially: multiple nodes own state, but no direct peer cooperation exists |
+| Purely decentralized | Equivalent peers coordinate without authority | Not implemented: no node↔node exchange exists |
+| Hybrid (federated) | Full border autonomy + optional central services | **Yes: most accurate description** |
 
-Conclusión terminológica: CAUCE es un sistema **híbrido con autonomía total del borde**. La descentralización existe en el plano del *control de datos* (cada nodo es autoridad y custodio), mientras la coordinación analítica permanece centralizable opcionalmente. Denominar "descentralizado puro" al sistema actual sería impreciso.
+Terminological conclusion: CAUCE is a **hybrid system with full edge autonomy**. Decentralization exists in the *data control* plane (each node is authority and custodian); analytical coordination remains optionally centralizable. Calling the current system "purely decentralized" would be imprecise.
 
-# 13. Protocolo ALEXANDRA
+# 13. Protocol ALEXANDRA
 
-**ALEXANDRA — Autonomous Local EXchange for Distributed Resource Architecture** — es el protocolo de intercambio distribuido asociado a la arquitectura CAUCE. En su formulación actual, ALEXANDRA define cómo un recurso (una medición, un estado, una configuración) producido en un nodo se representa, se custodia localmente y se transfiere hacia infraestructura opcional garantizando idempotencia y trazabilidad. Este capítulo distingue explícitamente tres planos: **[I] implementación actual**, **[A] interpretación arquitectónica**, **[F] evolución propuesta**.
+**ALEXANDRA — Autonomous Local EXchange for Distributed Resource Architecture** — is the distributed exchange protocol associated with the CAUCE architecture. In its current formulation it defines how a resource (measurement, status, configuration) produced on a node is represented, locally custodied and transferred toward optional infrastructure guaranteeing idempotency and traceability. Three planes are distinguished: **[I]** implemented, **[A]** architectural interpretation, **[F]** future evolution.
 
-## 13.1 Principios [I]
+## 13.1 Principles [I]
 
-| # | Principio | Materialización |
+| # | Principle | Materialization |
 |---|---|---|
-| A-1 | Identidad inmutable del registro | Clave `(node_id, sequence)`; `sequence` monotónica persistida tras reinicio |
-| A-2 | Integridad verificable en reposo | Frame binario con CRC-32 por registro; sellado de segmento ante cola corrupta |
-| A-3 | Acuse honesto | `acknowledged_sequence` = mayor secuencia realmente persistida en el receptor; jamás fabricado |
-| A-4 | Idempotencia | Deduplicación por clave primaria en el servidor; reenvíos sin efecto económico-datos |
-| A-5 | Reanudación | Marca de agua persistida tras cada acuse; ante pérdida del archivo de estado se reinicia desde 0 y el reenvío completo converge por A-4 |
-| A-6 | Versionado | `protocol_version=1` en sobre y frame; rechazo explícito de versiones no soportadas |
-| A-7 | Degradación segura | Backoff exponencial ante errores de red; backoff fijo largo ante fallo de autenticación; **halt** definitivo ante rechazo semántico |
+| A-1 | Immutable record identity | Key `(node_id, sequence)`; monotonic `sequence` persisted across reboots |
+| A-2 | Verifiable at-rest integrity | Binary frame with per-record CRC-32; segment sealed upon tail corruption |
+| A-3 | Honest acknowledgement | `acknowledged_sequence` = highest sequence actually present in receiver database; never fabricated |
+| A-4 | Idempotency | Primary-key deduplication at server; re-sends have no data effect |
+| A-5 | Resumption | Watermark persisted after each individual ack; state-file loss triggers full replay converging via A-4 |
+| A-6 | Versioning | `protocol_version=1` in envelope and frame; unsupported versions explicitly rejected |
+| A-7 | Safe degradation | Exponential backoff on network errors; fixed long backoff on auth failure; definitive halt on semantic rejection |
+| A-8 | Device authenticity | Each batch carries HMAC-SHA-256 over the raw body using a per-device provisioning key; server verifies constant-time |
 
-## 13.2 Mensajes [I]
+## 13.2 Messages [I]
 
-**Sobre de lote nodo→central** (`POST /v1/sync`):
+Node→central batch envelope (`POST /v1/sync`):
 
 ```json
 {"protocol_version":1,"node_id":"CAUCE-001","batch_size":    5,
@@ -262,250 +253,261 @@ Conclusión terminológica: CAUCE es un sistema **híbrido con autonomía total 
    "time_uncertain":false}]}
 ```
 
-**Acuse central→nodo**: `200 {"acknowledged_sequence":1842}` · `401/403` credenciales · `422/409` rechazo semántico (el cliente detiene la sincronización) · errores de red → reintento con backoff.
+Headers when provisioned:
+```
+X-CAUCE-Node: CAUCE-001
+X-CAUCE-Signature: <64-char hex HMAC-SHA256(device_key, raw_body)>
+```
 
-**Recursos REST del nodo** (interfaz de intercambio directo): `/api/v1/node`, `/status`, `/measurements/latest`, `/measurements?from&to`, `/health`, `/config` (GET público; POST con Bearer→SHA-256), `/export?format=csv|json`. Formatos de intercambio: CSV RFC 4180 y JSON array, ambos servidos en flujo paginado.
+Central→node ack: `200 {"acknowledged_sequence":1842}` · `401` invalid credentials/signature · `422` semantic rejection (client halts) · network errors → exponential backoff.
 
-## 13.3 Máquina de estados del intercambio [I]
+Node REST resources: `/api/v1/node`, `/status`, `/measurements/latest`, `/measurements?from&to`, `/health`, `/config` (GET public; POST with Bearer→SHA-256), `/export?format=csv|json`. Exchange formats: CSV RFC 4180 and JSON array, both streamed paginated.
+
+## 13.3 Network state machine [I]
 
 ```mermaid
 stateDiagram-v2
     [*] --> OFFLINE
-    OFFLINE --> CONNECTING: enlace disponible
+    OFFLINE --> CONNECTING: link available
     CONNECTING --> CONNECTED: GotIp
-    CONNECTING --> WAITING_RETRY: timeout/fallo
+    CONNECTING --> WAITING_RETRY: timeout / failure
     CONNECTED --> DEGRADED: RSSI < -70 dBm
-    DEGRADED --> CONNECTED: RSSI recuperada
-    CONNECTED --> SYNCING: intervalo vencido y pendientes
-    SYNCING --> SYNCING: ack parcial (más pendientes)
-    SYNCING --> CONNECTED: todo sincronizado
+    DEGRADED --> CONNECTED: RSSI recovered
+    CONNECTED --> SYNCING: interval elapsed + pending records
+    SYNCING --> SYNCING: partial ack (more pending)
+    SYNCING --> CONNECTED: all synced
     CONNECTED --> WAITING_RETRY: LinkLost / NetworkError
-    WAITING_RETRY --> AP_FALLBACK: N fallos consecutivos
-    AP_FALLBACK --> WAITING_RETRY: reintento periódico
+    WAITING_RETRY --> AP_FALLBACK: N consecutive failures
+    AP_FALLBACK --> WAITING_RETRY: periodic retry
 ```
 
-Backoffs: red 5 s→300 s exponencial; sync 10 s→1800 s; autenticación 900 s fijos. La marca de agua se escribe en flash tras cada acue individual.
+Backoffs: network 5s→300s exponential; sync 10s→1800s exponential; auth 900s fixed. Watermark written to flash after each individual ack.
 
-## 13.4 Planos no implementados
+## 13.4 Non-implemented planes
 
-- **[A] Recursos genéricos**: el par variable–unidad y los estados de calidad son independientes del dominio climático; ALEXANDRA puede leerse como esquema general de intercambio de recursos telemétricos firmados por productor+secuencia (§14).
-- **[F] Intercambio entre pares**: descubrimiento mDNS/ESP-NOW, réplica nodo↔nodo y fusión CRDT no existen en el código; quedan como evolución.
-- **[F] Confianza criptográfica**: firmas de lotes y manifiestos firmados para OTA son propuesta; hoy la integridad en reposo es CRC (detección) y la autenticación es token simétrico.
+- **[A] Generic resources**: the variable–unit pair and quality states are climate-independent; ALEXANDRA can be read as a general telemetry-resource exchange schema signed by producer+sequence (§14).
+- **[F] Peer-to-peer exchange**: mDNS discovery, ESP-NOW transport, node↔node replication and CRDT merge do not exist in the codebase; proposed evolution.
+- **[F] Cryptographic trust**: asymmetric signatures (Ed25519) for batches and OTA manifests are proposed; current integrity-at-rest uses CRC (detection only) and authentication uses symmetric HMAC.
 
-# 14. Modelo de recursos
+# 14. Resource model
 
-La interfaz REST del nodo expone ya recursos direccionables: `node` (identidad/versiones), `status` (estado FSM + última medición), `measurements` (colección consultable y exportable), `health` (telemetría interna), `config` (estado mutable protegido). Esta forma sugiere una generalización donde cada capacidad del nodo —sensor, batería, almacenamiento, incluso actuadores futuros— se publique como recurso con identidad, versión e intercambio ALEXANDRA. Los componentes estrictamente ambientales se reducen al catálogo de variables y umbrales físicos (`Thresholds`); el resto (pipeline de validación, frames, API, sync, OTA) es genérico. Así, dominios como agricultura (humedad de suelo como nueva `Variable`), energía (corriente/tensión), o monitoreo urbano (ruido, ocupación) requieren añadir tipos al catálogo y calibración específica, sin modificar el núcleo del protocolo ni el almacenamiento.
+The node's REST interface already exposes addressable resources: `node` (identity/versions), `status` (FSM states + latest measurement), `measurements` (queryable/exportable collection), `health` (internal telemetry), `config` (protected mutable state). This form suggests generalization where each node capability —sensor, battery, storage, even future actuators— publishes as a resource with identity, version and ALEXANDRA exchange.
 
-# 15. Comunicación
+Strictly environmental components reduce to the variable catalogue and physical thresholds (`Thresholds`); everything else (validation pipeline, frame format, API, sync, OTA) is generic. Domains such as agriculture (soil moisture as new `Variable`), energy (current/voltage per circuit) or urban monitoring (noise, occupancy) require adding types to the catalogue and specific calibration, without modifying protocol core or storage.
 
-Tecnologías realmente presentes: **Wi-Fi 802.11 b/g/n** vía ESP32 en modos AP (portal/dashboard) y STA (cliente HTTP); **HTTP/1.1** con transferencia fragmentada para API y dashboard, y POST JSON para sincronización; **DNS** wildcard para portal cautivo; **I2C** a 100 kHz para el sensor. No existen en el código: MQTT, CoAP, ESP-NOW, Bluetooth ni malla (*mesh*).
+# 15. Communication
 
-Comparación justificada: HTTP se eligió por interoperabilidad universal (navegadores, curl, servidores), depurabilidad y ausencia de dependencias; su costo es mayor sobrecarga por mensaje que MQTT/CoAP, aceptable dada la cadencia de sincronización (minutos). Para redes sin IP o de bajo consumo extremo, LoRaWAN o ESP-NOW serían candidatos de evolución [F], requiriendo adaptar el transport de ALEXANDRA (interfaz `ISyncTransport` ya aísla ese punto).
+Technologies actually present: **Wi-Fi 802.11 b/g/n** in AP mode (portal/dashboard) and STA mode (HTTP client); **HTTP/1.1** with chunked transfer for API/dashboard and POST JSON for sync; **DNS** wildcard for captive portal; **I2C** at 100 kHz for sensors. Not present: MQTT, CoAP, ESP-NOW, Bluetooth, mesh.
 
-# 16. Funcionamiento offline
+Justified comparison: HTTP chosen for universal interoperability (browsers, curl, servers), debuggability and zero dependencies; cost is higher per-message overhead than MQTT/CoAP, acceptable given sync cadence (minutes). For non-IP or ultra-low-power networks, LoRaWAN or ESP-NOW would be evolution candidates [F], adapting ALEXANDRA's transport layer (interface `ISyncTransport` already isolates that point).
 
-| Escenario | Comportamiento real | Verificación |
+# 16. Offline operation
+
+| Scenario | Real behaviour | Verification |
 |---|---|---|
-| Sin Internet desde el arranque | Medición, validación, almacenamiento, dashboard y API operan normalmente; registros marcados `time_uncertain` si no hay fuente temporal | Pruebas con reloj invalidado |
-| Pérdida durante operación | FSM → `WAITING_RETRY` con backoff; sync suspendido; medición continúa | Tests de FSM |
-| Reinicio del nodo | Apertura reconstruye contadores/última secuencia escaneando segmentos; cola corrupta sella el segmento y rota | Test `corrupted_tail_is_isolated_on_reopen` |
-| Corte de energía a mitad de escritura | El CRC detecta el frame parcial; los previos permanecen válidos | Diseño + prueba de basura al final de segmento |
-| Servidor caído | Backoff exponencial hasta 1800 s; datos íntegros locales; sin pérdida | Tests de sync con transporte en fallo |
+| No Internet from boot | Acquisition, validation, storage, dashboard and API operate normally; records flagged `time_uncertain` if no time source | Tests with invalidated clock |
+| Loss during operation | FSM → `WAITING_RETRY` with backoff; sync suspended; measuring continues | Network/sync suites |
+| Node reboot | Open scans segments rebuilding state; sequence continues max+1 | `sequence_continues_across_reboot_without_duplicates` |
+| Power cut mid-write | CRC detects partial frame; previous frames remain valid | Design + garbage-tail test |
+| Server down | Exponential backoff up to 1800 s; local data integral; no loss | Sync tests with failing transport |
 
-El sistema mantiene así sus funciones esenciales indefinidamente sin par externo, cumpliendo H1 en el plano lógico.
+# 17. Storage and data
 
-# 17. Almacenamiento y datos
+## 17.1 Model
 
-## 17.1 Modelo
+Each measurement occupies a **68-byte frame**: 4-byte header (`magic 0xCA`, `version 0x01`, length u16), 60-byte payload (sequence u32, timestamp u64, value f32, variable, quality, reason bits, time flag, `node_id[16]`, `sensor_id[24]`) and CRC-32 IEEE (reflected polynomial 0xEDB88320) over the preceding 64 bytes. Explicit little-endian format, compiler-independent.
 
-Cada medición ocupa un **frame** de 72 bytes: cabecera de 4 (`magic 0xCA`, `version 0x01`, longitud u16), carga útil de 60 (secuencia u32, marca temporal u64, valor f32, variable, calidad, bits de razón, incertidumbre temporal, `node_id[16]`, `sensor_id[24]`) y CRC-32 IEEE (polinomio reflejado 0xEDB88320) sobre los 64 bytes previos. Formato *little-endian* explícito e independiente del compilador.
+## 17.2 Integrity and recovery
 
-## 17.2 Integridad y recuperación
+Sequential read validates per-frame CRC; on first failure, partial-tail assumed and segment **sealed**: valid records remain queryable, new writes rotate to clean segment —no flash truncate needed—. Prior history preserved with detection probability 1−2⁻³² per altered frame.
 
-La lectura secuencial valida el CRC de cada frame; ante el primer fallo se asume cola parcial (escritura interrumpida) y el segmento se **sella**: sus registros válidos permanecen consultables y las escrituras nuevas rotan a un segmento limpio —sin necesidad de truncado en flash—. El historial previo queda preservado, con probabilidad de detección 1−2⁻³² por frame alterado.
+## 17.3 Budget and scaling
 
-## 17.3 Presupuesto y escalado
+With defaults (512 KiB total, 64 KiB segments ≈ 910 frames) and 60 s cadence, node retains ≈15 h at full resolution before rotation; retention removes oldest keeping ≥1. Larger windows belong to the central: SQLite with indexes `(node_id, timestamp)` and `(variable, timestamp)` plus materialized hourly aggregates for O(buckets) long-range queries.
 
-Con valores por omisión (512 KiB totales, segmentos de 64 KiB ≈ 910 frames) y cadencia de 60 s, el nodo retiene ≈15 h a resolución completa antes de rotar; la retención elimina el segmento más antiguo conservando siempre uno. Ventanas mayores corresponden al central: SQLite con índices `(node_id, timestamp)` y `(variable, timestamp)`.
+## 17.4 Time
 
-## 17.4 Tiempo
+Timestamps in ms UTC; without trusted source stored as 0 with `time_uncertain` flag, preserving local order by sequence. Post-NTP temporal reconstruction available on the central via `/v1/nodes/{id}/time-reconstruct` using first-anchor + median-interval algorithm, flagging reconstructed rows.
 
-Marcas en ms UTC; sin fuente confiable se almacenan en 0 con bandera `time_uncertain`, conservando orden local por secuencia. La reconstrucción temporal posterior a NTP es trabajo futuro [F].
+# 18. Resilience
 
-# 18. Resiliencia
-
-| Fallo | Mecanismo | Resultado | Verificación |
+| Failure | Mechanism | Resulting state | Verification |
 |---|---|---|---|
-| Sensor desconectado | Lectura falla → contador → placeholder `MISSING` tras 2 ciclos; demás sensores continúan | Degradación por sensor | test scheduler |
-| Sensor congelado | Racha idéntica ≥6 en ε=0.01 → `SUSPECT` | Datos marcados | test validation |
-| Pérdida de conectividad | FSM red → backoff; medición intacta | Autonomía total | suites network/sync |
-| Reinicio | Escaneo reconstruye estado; secuencia continúa desde máx+1 | Sin duplicados | test storage/scheduler |
-| Fallo de almacenamiento | Contador + log; reintento siguiente ciclo | Nodo operativo | test scheduler |
-| Corrupción de datos | CRC + sellado + rotación | Historial válido preservado | test storage |
-| Servidor caído | Backoff exponencial; watermark persiste | Reenvío exacto al volver | E2E fase 3 |
-| OTA con imagen corrupta | Hash streaming ≠ manifiesto → abort; partición alternativa intacta | `VERIFY_FAILED` | suite ota |
+| Sensor disconnected | Read fails → counter → MISSING placeholder after 2 cycles; other sensors continue | Per-sensor degradation | scheduler test |
+| Sensor frozen | Identical streak ≥6 → SUSPECT | Flagged data | validation test |
+| Connectivity loss | Network FSM → backoff; measurement intact | Full autonomy | network/sync suites |
+| Reboot | Segment scan rebuilds state; sequence continues max+1; CK01 checkpoint accelerates reopen | No duplicates | storage/scheduler tests |
+| Storage failure | Counter + log; retry next cycle | Node operational | scheduler test |
+| Data corruption | CRC + seal + rotate | Valid history preserved | storage test |
+| Server down | Exponential backoff; watermark persists | Exact resend on return | E2E phase 3 |
+| OTA corrupted image | Streaming hash ≠ manifest → abort; alternate partition intact | VERIFY_FAILED | OTA suite |
+| Signed manifest substituted | HMAC ≠ expected → CHECK_FAILED before download | No download executed | manifest_signature test |
 
-# 19. Seguridad
+# 19. Security
 
-**Implementado**: tokens administrativos guardados solo como SHA-256 (vectores NIST verificados) y comparados en tiempo constante tanto en nodo como en servidor; validación estricta de toda entrada externa (rangos, longitudes acotadas); buffers estáticos sin asignaciones en hot-path; separación lectura pública / escritura autenticada; fail-closed (POST /config sin token configurado → 503); rate limiting por IP con memoria acotada en el central; ocultamiento de secretos en GET `/config`; privacidad mínima (solo telemetría ambiental e identificadores de nodo).
+**Implemented**: admin tokens stored only as SHA-256 (NIST-vector verified), compared constant-time on both node and server; strict validation of all external input (ranges, bounded lengths); static buffers with zero hot-path allocations; public-read/authenticated-write separation; fail-closed (POST /config without token → 503); per-IP rate limiting with bounded SQLite-backed memory on every endpoint; secret masking in GET `/config`; minimum privacy (environmental telemetry + node identifiers only); **per-device HMAC identity** with provisioning endpoint and raw-body signature verification; **OTA manifest authentication gate** before download acceptance.
 
-**Limitaciones honestas**: sin cifrado en tránsito (HTTP plano en LAN); identidad del nodo auto-declarada (sin criptografía de dispositivo); sin firma de lotes ni de imágenes OTA —el hash del manifiesto protege integridad de descarga, no autenticidad de origen—; portal DNS cautivo acepta cualquier dominio por diseño. Coherente para piloto comunitario en red local; insuficiente para exposición pública amplia.
+**Known limitations**: no transport encryption (plain HTTP on LAN; TLS requires certificate/provisioning infrastructure); node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
 
-# 20. Caso de uso ambiental
+# 20. Environmental use case
 
-Variables implementadas: temperatura del aire (−40..85 °C; ±5/min), humedad relativa (0–100 %RH; ±20/min), presión (300–1100 hPa; ±2/min), iluminancia (0–200 000 lx), tensión de batería (2.5–4.5 V). La arquitectura habilita:
+Implemented variables: air temperature (−40..85 °C, ±5/min), relative humidity (0–100 %RH, ±20/min), pressure (300–1100 hPa, ±2/min), illuminance (0–200 000 lx), battery voltage (2.5–4.5 V). The architecture enables:
 
-- **Microclima y variación espacial**: nodos co-instalados comparables tras calibración relativa por co-localización (procedimiento documentado).
-- **Estrés térmico**: exposición trapezoidal sobre umbral (p. ej., horas >32 °C) calculada en nodo y replicable en central.
-- **Evaluación antes/después**: intervenciones con ventana temporal; el endpoint separa estadísticos pre/post y **declara insuficiencia muestral** (<30 válidas por período) antes que permitir conclusiones débiles.
-- **Calidad como ciudadano de primera clase**: calidad y motivo por dato; métricas excluyen INVALID/MISSING/ESTIMATED.
+- **Microclimate and spatial variation**: co-installed nodes comparable after relative co-location calibration (documented procedure).
+- **Thermal stress**: trapezoidal exposure above threshold (e.g., hours >32 °C) computed at node and replicable centrally.
+- **Before/after evaluation**: interventions registered with time windows; endpoint separates pre/post statistics and **declares sample insufficiency** (<30 valid per period) rather than permitting weak conclusions.
+- **Quality as first-class citizen**: every datum carries quality and motive; metrics exclude INVALID/MISSING/ESTIMATED.
 
-Limitaciones específicas: sin certificado metrológico (exactitud = datasheet del fabricante, no verificada por el proyecto); deriva y autocalentamiento sin caracterizar; la exposición física, determinante, se documenta pero no se instrumenta.
+Specific limitations: no metrological certificate (declared accuracy = manufacturer datasheet, not verified by project); drift and self-heating uncharacterized; physical exposure determinant but documented not instrumented.
 
-# 21. Generalización de la arquitectura
+# 21. Generalization
 
-| Categoría | Componentes |
+| Category | Components |
 |---|---|
-| Genéricos dominio-neutral | Frames+CRC, repositorio append-only, validador paramétrico, exportadores, API REST, sync idempotente, OTA, config, logger, estadística |
-| Parametrizables | Catálogo variables/unidades, umbrales físicos, metadatos de sitio |
-| Específicos ambientales | BME280 y compensación, umbrales climáticos por defecto |
-| Específicos de hardware | HAL ESP32 (I2C/Wi-Fi/LittleFS/reloj) |
+| Domain-neutral generic | Frames+CRC, append-only repository, parametric validator, exporters, REST API, idempotent sync, OTA, config, logger, statistics |
+| Parameterizable | Variable/unit catalogue, physical thresholds, site metadata |
+| Environment-specific | BME280 compensation, climate default thresholds |
+| Hardware-specific | ESP32 HAL (I2C/Wi-Fi/LittleFS/clock) |
 
-Dominios candidatos con cambio mínimo: agricultura (humedad de suelo, conductividad), energía (corriente/tensión por circuito), infraestructura (vibración, ocupación), educación (plataforma docente de sistemas distribuidos reales). Condición arquitectónica: expresar el nuevo dominio como recursos monótonos de productor único —la propiedad que elimina conflictos de réplica—.
+Candidate domains with minimal change: agriculture (soil moisture, conductivity), energy (current/voltage per circuit), infrastructure (vibration, occupancy), education (real distributed-systems teaching platform). Architectural condition: express the new domain as monotonic resources with unique producer —the property eliminating replication conflicts—.
 
-# 22. Análisis técnico
+# 22. Technical analysis
 
-| Dimensión | Valor/comportamiento | Fuente |
+| Dimension | Value/behaviour | Source |
 |---|---|---|
-| Flash firmware | ≈363 KB de 1.3 MB (27.7 %) | build esp32dev |
-| RAM | Buffers fijos; sin heap en hot-path | diseño |
-| Registro | 72 B → ≈7 100 registros en 512 KiB | formato |
-| Cadencia | 60 s por defecto; configurable 10–3600 s | NodeConfig |
-| Latencia consulta local | HTTP en LAN servido desde flash/RAM locales | arquitectura |
-| Sincronización | Lotes ≤32 registros declarados; drenaje continuo mientras existan pendientes; backoff hasta 1800 s | SyncManager |
-| Energía | Sin deep sleep implementado; Wi-Fi activo continuo → consumo alto; política solo advisory | STATUS.md |
-| Escalabilidad central | Ingesta O(1) amortizada por registro (PK dedup); analítica O(n) por consulta; adecuado a 10¹–10² nodos | backend |
-| Mantenibilidad | 119 pruebas automatizadas; CI 5 trabajos; docs reproducibles | repositorio |
-| Costo | BOM 13–32 USD/nodo multi-proveedor | HARDWARE.md |
+| Flash firmware | ≈363 KB of 1.3 MB (27.7%) | esp32dev build |
+| RAM | Fixed buffers; no hot-path heap | design |
+| Record | 68 B → ≈7 700 records in 512 KiB | format arithmetic |
+| Cadence | Default 60 s; configurable 10–3600 s | NodeConfig |
+| Local query latency | HTTP LAN served from local flash/RAM | architecture |
+| Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
+| Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
+| Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets); detail queries O(n) — adequate for 10¹–10² node pilots | backend design |
+| Maintainability | 132 automated tests; CI 6 jobs; reproducible docs | repository |
+| Cost | BOM 13–32 USD/node multi-vendor | HARDWARE.md |
 
-Fórmulas implementadas — tasa de cambio: r = Δv / Δt_min; desviación muestral: s = √( Σ(xᵢ−x̄)² / (n−1) ); percentil interpolado lineal entre órdenes; exposición: E = Σ (tᵢ₊₁ − tᵢ) para intervalos consecutivos ambos sobre umbral, en horas; backoff exponencial acotado: tₙ = min(t₀·2^(n−1), t_max).
+Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
 
-# 23. Discusión
+# 23. Discussion
 
-Frente a la literatura de WSN, CAUCE invierte dos supuestos clásicos: prioriza Wi-Fi IP sobre radios de baja potencia (aceptando mayor consumo a cambio de servicio directo al usuario y reutilización de infraestructura doméstica), y agrega en nodo en lugar de en red. Frente al paradigma nube-céntrico de IoT, demuestra que el borde puede asumir validación, custodia íntegra y presentación sin pérdida de rigor, posicionándose en el extremo edge-dominante del espectro fog/edge [20].
+Against WSN literature, CAUCE inverts two classical assumptions: prioritizes IP Wi-Fi over low-power radios (accepting higher consumption in exchange for direct user service and domestic infrastructure reuse), and aggregates at-node instead of in-network. Against the cloud-centric IoT paradigm, it demonstrates that the edge can assume validation, integral custody and presentation without loss of rigour —positioning itself at the edge-dominant extreme of the fog/edge spectrum [14].
 
-El protocolo ALEXANDRA corresponde funcionalmente a patrones consolidados —cursor/watermark de ingesta, llave de idempotencia, store-and-forward— aplicados bajo restricciones embebidas [9], [15]. La contribución no es teórica sino de integración verificada: la propiedad combinada «sin duplicados ante cualquier interleaving» está demostrada por prueba automatizada extremo a extremo, incluido el escenario adversario de pérdida total del estado del cliente.
+ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/watermark, idempotency key, store-and-forward— applied under embedded constraints [9], [15]. The contribution is not theoretical but verified integration: the combined property "no duplicates under any interleaving" is demonstrated by automated E2E testing including the adversarial scenario of complete client-state loss.
 
-# 24. Limitaciones
+# 24. Limitations
 
-1. **Hardware no validado físicamente**: lo verificado corre en anfitrión o por compilación cruzada; BME280 real, LittleFS, radio Wi-Fi y cortes de energía reales permanecen pendientes de banco.
-2. **Seguridad**: sin TLS ni firmas criptográficas; identidad auto-declarada; portal DNS abierto.
-3. **Energía**: sin deep sleep; operación continua incompatible con alimentación solar modesta sin dimensionamiento específico.
-4. **Escaneo de apertura O(archivo)**: aceptable hasta ≈10⁵ registros.
-5. **Analítica central O(n)** sin agregados persistentes para horizontes largos.
-6. **Transporte único** HTTP/JSON; sin formato binario compacto ni compresión para enlaces estrechos.
-7. **Descentralización incompleta**: sin descubrimiento ni réplica entre pares; el central concentra la vista agregada (no la integridad).
-8. **Precisión científica**: dependiente de calibración relativa aún no ejecutada; sin trazabilidad metrológica.
-9. **Mantenimiento de campo**: sustitución de sensores exige recalibración documentada manual.
-10. **Complejidad multi-perfil**: HAL+dominio+app+backend exige perfil full-stack; mitigada por la suite automatizada.
+1. **Hardware not physically validated**: everything runs on host or cross-compilation; real BME280, LittleFS, Wi-Fi radio and power cuts await bench testing.
+2. **Security**: no TLS, no asymmetric signatures, self-declared node identity for unsigned nodes, open captive DNS.
+3. **Energy**: no deep sleep; continuous operation incompatible with modest solar without specific sizing.
+4. **Open-scan O(file)**: acceptable to ≈10⁵ records; CK01 mitigates but scan fallback remains O(bytes).
+5. **Central analytics O(n)** for detail queries beyond hourly aggregates.
+6. **Single transport** HTTP/JSON; no compact binary or compression for narrow links.
+7. **Incomplete decentralization**: no peer discovery or replica; central concentrates aggregate view (not integrity).
+8. **Scientific precision**: depends on unexecuted relative calibration; no metrological traceability.
+9. **Field maintenance**: sensor replacement requires manual recalibration documentation.
+10. **Multi-profile complexity**: HAL+domain+app+backend demands rare full-stack profile; mitigated by the automated suite.
 
-# 25. Trabajo futuro
+# 25. Future work
 
-1. **ALEXANDRA [F]**: intercambio entre pares vía ESP-NOW/mDNS con fusión por secuencia; manifiestos y lotes firmados; transporte CBOR/CoAP opcional [12].
-2. **Banco físico**: validación BME280/LittleFS/Wi-Fi; ensayos instrumentados de corte de energía; aplicación de `SleepPolicy` con deep sleep.
-3. **OTA completa**: lector HTTP nativo ESP32, firma de imágenes, confirmación post-arranque por contador.
-4. **Seguridad progresiva**: TLS o tokens por dispositivo derivados en provisioning; autorización granular en el central.
-5. **Tiempo**: NTP y reconstrucción temporal de registros `time_uncertain` tras primera sincronización.
-6. **Analítica persistente**: agregados precomputados y comparación multi-nodo normalizada por calibración relativa.
-7. **Nuevas topologías**: pasarelas LoRa para sitios sin Wi-Fi; réplicas regionales del central.
-8. **Actuadores**: extensión del modelo de recursos a comandos idempotentes con confirmación.
+1. **ALEXANDRA [F]**: peer-to-peer exchange via ESP-NOW/mDNS with sequence-based merge; Ed25519-signed manifests/batches; CBOR/CoAP optional transport.
+2. **Physical bench**: BME280/LittleFS/Wi-Fi validation; instrumented power-cut trials; `SleepPolicy` application with deep sleep.
+3. **Full OTA**: native ESP32 HTTP reader, image signing, post-boot boot-counter confirmation.
+4. **Progressive security**: TLS or per-device derived tokens; granular central authorization.
+5. **Time**: NTP + temporal reconstruction of `time_uncertain` records after first sync.
+6. **Persistent central analytics**: precomputed aggregates beyond hourly; calibration-normalized multi-node comparison.
+7. **New topologies**: LoRa gateways for sites without Wi-Fi; regional central replicas.
+8. **Actuators**: resource model extension to idempotent commands with confirmation.
 
-# 26. Conclusiones
+# 26. Conclusions
 
-- **Qué es CAUCE**: una infraestructura distribuida e híbrida de microestaciones basadas en ESP32 cuyo caso de uso principal es el monitoreo ambiental hiperlocal, construida como plataforma generalizable de adquisición–custodia–intercambio en el borde.
-- **Qué arquitectura implementa**: capas estrictas con dominio puro independiente de hardware; persistencia append-only con integridad verificable por registro; API y UI locales embebidas; sincronización eventual opcional; actualización segura por partición alternativa.
-- **Cuánto procesamiento ocurre en el edge**: la totalidad del ciclo salvo la analítica transversal multi-nodo —adquisición, validación estadística auditable, filtrado, almacenamiento íntegro, visualización local, exportación y autenticación—.
-- **Qué grado de descentralización posee**: autonomía plena de datos y función en cada nodo (offline-first estricto), con coordinación central opcional y no irrenunciable; formalmente híbrido, no par-a-par.
-- **Qué papel cumple ALEXANDRA**: es el contrato formal de intercambio —recursos REST versionados en el nodo, lotes idempotentes `(node_id, sequence)` con acuse honesto y marca de agua persistente, formato versionado en reposo—; su núcleo está implementado y verificado; sus extensiones entre pares y criptográficas son evolución propuesta.
-- **Qué demuestra (H1, H2)**: que la conjunción de §2.2 es alcanzable sobre un microcontrolador de bajo costo con cobertura automatizada —97 pruebas de firmware, 22 del servidor y E2E contra servidor real— incluido el caso adversario de pérdida completa del estado del cliente sin duplicados ni omisiones.
-- **Limitaciones**: validación física pendiente, ausencia de cifrado/firma, energía continua requerida hoy, escaneo y analítica acotados al tamaño del piloto.
-- **Potencial de generalización**: alto —el núcleo es dominio-neutral—, condicionado a que los nuevos dominios conserven la propiedad de productor único por recurso que fundamenta la simplicidad de ALEXANDRA.
+- **What CAUCE is**: a distributed hybrid infrastructure of ESP32-based microstations whose primary use case is hyperlocal environmental monitoring, built as a generalizable edge acquisition–custody–exchange platform.
+- **What architecture it implements**: strict layers with hardware-independent pure domain; append-only persistence with per-record verifiable integrity; embedded API and UI; optional eventual synchronization; alternate-partition secure update.
+- **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
+- **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
+- **What role ALEXANDRA plays**: formal exchange contract —versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format—; core implemented and verified; peer-to-peer and asymmetric-crypto extensions are proposed evolution.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —132 verifications including E2E against live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **Limitations**: pending physical validation, absence of encryption/asymmetric signing, today's continuous-power requirement, scanning and analytics scaled to pilot size.
+- **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
 ---
 
-# Referencias
+# References
 
-[1] I. Akyildiz, W. Su, Y. Sankarasubramaniam, E. Cayirci, «Wireless sensor networks: a survey», *Computer Networks*, vol. 38, nº 4, pp. 393–422, 2002.
+[1] I. Akyildiz, W. Su, Y. Sankarasubramaniam, E. Cayirci, "Wireless sensor networks: a survey", *Computer Networks*, vol. 38, no. 4, pp. 393–422, 2002.
 
-[2] F. Bonomi, R. Milito, J. Zhu, S. Addepalli, «Fog Computing and Its Role in the Internet of Things», *Proc. First Edition of the MCC Workshop on Mobile Cloud Computing*, ACM, 2012.
+[2] F. Bonomi, R. Milito, J. Zhu, S. Addepalli, "Fog Computing and Its Role in the Internet of Things", *Proc. MCC Workshop on Mobile Cloud Computing*, ACM, 2012.
 
-[3] E. Brewer, «Towards Robust Distributed Systems», keynote, *ACM Symposium on Principles of Distributed Computing (PODC)*, 2000.
+[3] E. Brewer, "Towards Robust Distributed Systems", keynote, *ACM PODC*, 2000.
 
-[4] Espressif Systems, *ESP32 Series Datasheet*, v4.x, y *ESP32 Technical Reference Manual*, documentación oficial, 2023. Disponible en: https://www.espressif.com/en/support/documents/technical-documents
+[4] Espressif Systems, *ESP32 Series Datasheet* and *ESP32 Technical Reference Manual*, official documentation, 2023. Available: https://www.espressif.com/en/support/documents/technical-documents
 
-[5] Bosch Sensortec, *BME280: Combined humidity and pressure sensor*, datasheet BST-BME280-DS002, 2022. Disponible en: https://www.bosch-sensortec.com
+[5] Bosch Sensortec, *BME280: Combined humidity and pressure sensor*, datasheet BST-BME280-DS002, 2022. Available: https://www.bosch-sensortec.com
 
-[6] R. Fielding, J. Reschke (eds.), «Hypertext Transfer Protocol (HTTP/1.1): Semantics and Content», RFC 7231, IETF, 2014.
+[6] R. Fielding, J. Reschke (eds.), "Hypertext Transfer Protocol (HTTP/1.1): Semantics and Content", RFC 7231, IETF, 2014.
 
-[7] S. Gilbert, N. Lynch, «Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services», *ACM SIGACT News*, vol. 33, nº 2, pp. 51–59, 2002.
+[7] S. Gilbert, N. Lynch, "Brewer's conjecture and the feasibility of consistent, available, partition-tolerant web services", *ACM SIGACT News*, vol. 33, no. 2, pp. 51–59, 2002.
 
 [8] ISO/IEC 30141:2018, *Information technology — Internet of Things (IoT) — Reference architecture*, ISO/IEC, 2018.
 
 [9] M. Kleppmann, *Designing Data-Intensive Applications*, O'Reilly Media, 2017.
 
-[10] L. Lamport, «Time, Clocks, and the Ordering of Events in a Distributed System», *Communications of the ACM*, vol. 21, nº 7, pp. 558–565, 1978.
+[10] L. Lamport, "Time, Clocks, and the Ordering of Events in a Distributed System", *Communications of the ACM*, vol. 21, no. 7, pp. 558–565, 1978.
 
-[11] OASIS, *MQTT Version 5.0*, OASIS Standard, 2019. Disponible en: https://docs.oasis-open.org/mqtt/mqtt/v5.0/
+[11] OASIS, *MQTT Version 5.0*, OASIS Standard, 2019. Available: https://docs.oasis-open.org/mqtt/mqtt/v5.0/
 
-[12] Z. Shelby, K. Hartke, C. Bormann, «The Constrained Application Protocol (CoAP)», RFC 7252, IETF, 2014.
+[12] Z. Shelby, K. Hartke, C. Bormann, "The Constrained Application Protocol (CoAP)", RFC 7252, IETF, 2014.
 
-[13] J. H. Saltzer, M. D. Schroeder, «The Protection of Information in Computer Systems», *Proceedings of the IEEE*, vol. 63, nº 9, pp. 1278–1308, 1975.
+[13] J. H. Saltzer, M. D. Schroeder, "The Protection of Information in Computer Systems", *Proceedings of the IEEE*, vol. 63, no. 9, pp. 1278–1308, 1975.
 
-[14] W. Shi, J. Cao, Q. Zhang, Y. Li, L. Xu, «Edge Computing: Vision and Challenges», *IEEE Internet of Things Journal*, vol. 3, nº 5, pp. 637–646, 2016.
+[14] W. Shi, J. Cao, Q. Zhang, Y. Li, L. Xu, "Edge Computing: Vision and Challenges", *IEEE Internet of Things Journal*, vol. 3, no. 5, pp. 637–646, 2016.
 
-[15] A. S. Tanenbaum, M. van Steen, *Distributed Systems: Principles and Paradigms*, 3ª ed., distributed-systems.net, 2017.
+[15] A. S. Tanenbaum, M. van Steen, *Distributed Systems: Principles and Paradigms*, 3rd ed., distributed-systems.net, 2017.
 
-[16] W. Vogels, «Eventually Consistent», *Communications of the ACM*, vol. 52, nº 1, pp. 40–44, 2009.
+[16] W. Vogels, "Eventually Consistent", *Communications of the ACM*, vol. 52, no. 1, pp. 40–44, 2009.
 
-[17] A. Demers et al., «Epidemic Algorithms for Replicated Database Maintenance», *Proc. ACM PODC*, pp. 1–12, 1987.
+[17] A. Demers et al., "Epidemic Algorithms for Replicated Database Maintenance", *Proc. ACM PODC*, pp. 1–12, 1987.
 
-[18] F. Adelantado et al., «Understanding the Limits of LoRaWAN», *IEEE Communications Magazine*, vol. 55, nº 9, 2017.
+[18] F. Adelantado et al., "Understanding the Limits of LoRaWAN", *IEEE Communications Magazine*, vol. 55, no. 9, 2017.
 
-[19] Y. Shafranovich, «Common Format and MIME Type for Comma-Separated Values (CSV) Files», RFC 4180, IETF, 2005.
+[19] Y. Shafranovich, "Common Format and MIME Type for Comma-Separated Values (CSV) Files", RFC 4180, IETF, 2005.
 
-[20] Espressif Systems, *ESP-IDF Programming Guide — Over The Air (OTA) Updates*, documentación oficial, consulta 2026. https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/ota.html
+[20] Espressif Systems, *ESP-IDF Programming Guide — Over The Air (OTA) Updates*, official documentation, consulted 2026. https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/ota.html
 
-[21] Institute for Advanced Architecture of Catalonia, *SmartCitizen Kit — Documentation*, consulta 2026. https://docs.smartcitizen.me
+[21] Institute for Advanced Architecture of Catalonia, *SmartCitizen Kit — Documentation*, consulted 2026. https://docs.smartcitizen.me
 
-[22] Sensor.Community, *Documentation of the participative sensor network*, consulta 2026. https://sensor.community
+[22] Sensor.Community, *Documentation of the participative sensor network*, consulted 2026. https://sensor.community
 
-[23] The Things Network, *LoRaWAN architecture documentation*, consulta 2026. https://www.thethingsnetwork.org/docs
+[23] The Things Network, *LoRaWAN architecture documentation*, consulted 2026. https://www.thethingsnetwork.org/docs
 
-[24] CAUCE Project, *Repositorio de implementación de referencia* (firmware, backend, simulador y suite de verificación automatizada), fuente primaria de este trabajo, versión analizada 2026.
+[24] CAUCE Project, *Reference implementation repository* (firmware, backend, simulator and automated verification suite), primary source of this work, analysed version 2026.
+
+[25] IETF, "HMAC: Keyed-Hashing for Message Authentication", RFC 2104, 1997.
+
+[26] NIST, *Secure Hash Standard (SHS)*, FIPS PUB 180-4, 2015.
 
 ---
 
-# Anexos
+# Annexes
 
-## Anexo A. Layout binario del frame de medición (72 bytes)
+## Annex A. Binary measurement frame layout (68 bytes)
 
-| Offset | Tamaño | Campo | Codificación |
+| Offset | Size | Field | Encoding |
 |---|---|---|---|
 | 0 | 1 | magic | 0xCA |
 | 1 | 1 | version | 0x01 |
 | 2 | 2 | payload_len | u16 LE (=60) |
 | 4 | 4 | sequence | u32 LE |
-| 8 | 8 | timestamp_utc_ms | u64 LE (0 = tiempo incierto) |
+| 8 | 8 | timestamp_utc_ms | u64 LE (0 = uncertain) |
 | 16 | 4 | value | IEEE-754 f32 LE |
 | 20 | 1 | variable | enum u8 |
 | 21 | 1 | quality | enum u8 |
 | 22 | 1 | reason_bits | bitmask u8 |
 | 23 | 1 | time_uncertain | 0/1 |
-| 24 | 16 | node_id | char[] NUL-terminado |
-| 40 | 24 | sensor_id | char[] NUL-terminado |
-| 64 | 4 | crc32 | CRC-32 (poly 0xEDB88320 reflejado) sobre bytes [0..63] |
+| 24 | 16 | node_id | char[] NUL-terminated |
+| 40 | 24 | sensor_id | char[] NUL-terminated |
+| 64 | 4 | crc32 | CRC-32 (poly 0xEDB88320 reflected) over bytes [0..63] |
 
-## Anexo B. Ejemplo de lote ALEXANDRA (nodo → central)
+## Annex B. ALEXANDRA batch example (node → central)
 
 ```json
 {"protocol_version":1,"node_id":"CAUCE-001","batch_size":    5,
@@ -516,11 +518,17 @@ El protocolo ALEXANDRA corresponde funcionalmente a patrones consolidados —cur
    "quality":"VALID","reason_bits":0,"time_uncertain":false}]}
 ```
 
-Acuse: `200 {"acknowledged_sequence":1842}`. El relleno del campo `batch_size` usa espacios (JSON válido); su ancho fijo permite parcheo in-place sin segundo búfer.
+Headers (provisioned):
+```
+X-CAUCE-Node: CAUCE-001
+X-CAUCE-Signature: <hex hmac-sha256(device_key, raw_body)>
+```
 
-## Anexo C. Umbrales de validación por omisión
+Ack: `200 {"acknowledged_sequence":1842}`. The `batch_size` field is space-padded (valid JSON); its fixed width allows in-place patching without a second buffer.
 
-| Variable | Rango | Variación máx./min |
+## Annex C. Default validation thresholds
+
+| Variable | Range | Max change/min |
 |---|---|---|
 | air_temperature | −40..85 °C | ±5 |
 | relative_humidity | 0..100 %RH | ±20 |
@@ -528,19 +536,20 @@ Acuse: `200 {"acknowledged_sequence":1842}`. El relleno del campo `batch_size` u
 | illuminance | 0..200000 lx | ±120000 |
 | battery_voltage | 2.5..4.5 V | ±0.2 |
 
-Congelamiento: racha ≥6 lecturas idénticas dentro de ε = 0.01. Sesgo temporal máximo tolerado hacia el futuro: 120 s.
+Frozen detection: streak ≥6 readings identical within ε = 0.01. Maximum tolerated forward time skew: 120 s.
 
-## Anexo D. Inventario de verificación automatizada
+## Annex D. Automated verification inventory
 
-| Suite (firmware/test) | Pruebas |
+| Suite (firmware/test/) | Count |
 |---|---|
-| validation · codec · storage · config · security · bme280 | 9·5·6·9·4·5 |
-| scheduler_integration · export · metrics · network · sync · api(cpp) · ota | 5·6·8·8·8·14·10 |
-| **Total firmware (anfitrión)** | **97** |
-| Backend (pytest): ingesta idempotente, auth, rate-limit, filtros, analytics×5, dashboard i18n, CSV global | **22** |
-| Integración E2E | 4 fases + aserciones SQLite |
+| validation · codec · storage · config · security · bme280 | 9·5·6·9·6·5 |
+| scheduler_integration · export · metrics · network · sync · api(cpp) · ota | 5·6·8·8·10·14·10 |
+| **Total firmware (host)** | **105** |
+| Backend (pytest): ingestion idempotency/auth/rate-limit/pagination · filters · analytics×6 · dashboard i18n · CSV export · simulator roundtrip | **26** |
+| Integration E2E | 4 phases + SQLite assertions |
+| **Grand total** | **132+** |
 
-## Anexo E. Configuración de nodo (extracto)
+## Annex E. Node configuration (extract)
 
 ```
 node_id=CAUCE-001
@@ -549,6 +558,23 @@ sync_interval_s=900
 storage_max_bytes=524288
 segment_max_bytes=65536
 wifi_enabled=0
-admin_token_sha256=<hex sha-256>
+admin_token_sha256=<sha-256 hex>
+sync_device_key=<per-device HMAC secret>
 thr_range_min_air_temperature=-40.00
+```
+
+## Annex F. OTA progressive download state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> CHECKING: checkInterval elapsed
+    CHECKING --> UP_TO_DATE: no release / same version
+    CHECKING --> CHECK_FAILED: gates blocked / manifest invalid
+    CHECKING --> DOWNLOADING: newer version + safety OK
+    DOWNLOADING --> DOWNLOADING: chunk processed (non-blocking)
+    DOWNLOADING --> VERIFY_FAILED: hash mismatch / size exceeded
+    DOWNLOADING --> INSTALL_FAILED: write error
+    DOWNLOADING --> REBOOT_PENDING: hash OK + installer confirms
+    REBOOT_PENDING --> [*]: reboot into new partition
 ```

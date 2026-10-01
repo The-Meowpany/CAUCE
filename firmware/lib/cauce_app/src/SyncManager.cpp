@@ -37,11 +37,17 @@ void SyncManager::configureEndpoint(const char* serverUrl,
 void SyncManager::setDeviceSecret(const char* asciiSecret) {
   if (!asciiSecret || !asciiSecret[0]) {
     hasDeviceKey_ = false;
+    deviceKeyLen_ = 0;
     return;
   }
-  sha256(reinterpret_cast<const uint8_t*>(asciiSecret),
-         std::strlen(asciiSecret), deviceKey_);
+  deviceKeyLen_ = std::strlen(asciiSecret);
+  if (deviceKeyLen_ > sizeof(deviceKey_)) deviceKeyLen_ = sizeof(deviceKey_);
+  std::memcpy(deviceKey_, asciiSecret, deviceKeyLen_);
   hasDeviceKey_ = true;
+}
+
+void SyncManager::setSyncIntervalS(uint32_t intervalS) {
+  tuning_.intervalS = intervalS < 60 ? 60 : intervalS;
 }
 
 void SyncManager::loadState() {
@@ -119,10 +125,12 @@ bool SyncManager::syncOneBatch() {
   char* payload = batchPayload_;
   const size_t payloadCapacity = sizeof(batchPayload_);
   size_t used = 0;
+  char nodeIdJson[64];
+  escapeJsonString(nodeId_, nodeIdJson, sizeof(nodeIdJson));
   used += static_cast<size_t>(std::snprintf(
       payload + used, payloadCapacity - used,
       "{\"protocol_version\":%u,\"node_id\":\"%s\",\"batch_size\":",
-      Versions::kProtocol, nodeId_));
+      Versions::kProtocol, nodeIdJson));
   const size_t batchSizePos = used;
   std::memcpy(payload + used, "00000", 5);
   used += 5;
@@ -159,7 +167,7 @@ bool SyncManager::syncOneBatch() {
   char signatureHex[65] = {0};
   if (hasDeviceKey_) {
     uint8_t mac[32];
-    hmacSha256(deviceKey_, sizeof(deviceKey_),
+    hmacSha256(deviceKey_, deviceKeyLen_,
                reinterpret_cast<const uint8_t*>(payload), used, mac);
     static const char* hexDigits = "0123456789abcdef";
     for (int i = 0; i < 32; ++i) {

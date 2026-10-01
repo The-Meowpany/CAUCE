@@ -19,9 +19,34 @@ import random
 import urllib.request
 from datetime import UTC, datetime
 
+_STRINGS = {
+    "es": {
+        "sync_help": "cuando se indica, envía los lotes al backend en vez de escribir CSVs",
+        "rows": "{name}: {n} filas ({m} mediciones)",
+        "sync_error": "  ERROR sincronizando {name}: {exc}",
+    },
+    "en": {
+        "sync_help": "when set, pushes batches to the backend instead of writing CSVs",
+        "rows": "{name}: {n} rows ({m} measurements)",
+        "sync_error": "  ERROR syncing {name}: {exc}",
+    },
+}
+
+
+def _lang() -> str:
+    lang = os.environ.get("CAUCE_LANG", "en")[:2].lower()
+    return lang if lang in _STRINGS else "en"
+
+
+def _t(key: str) -> str:
+    return _STRINGS[_lang()][key]
+
 VARIABLES = [
     ("air_temperature", "C"),
     ("relative_humidity", "%RH"),
+    ("pressure", "hPa"),
+    ("illuminance", "lx"),
+    ("battery_voltage", "V"),
 ]
 HEADER = ["node_id", "sensor_id", "sequence", "timestamp_utc_ms",
           "timestamp_iso", "variable", "value", "unit", "quality",
@@ -52,15 +77,42 @@ class Series:
         h = 65.0 - 2.5 * (temp - 18.0) + self.rng.gauss(0, 0.8)
         return round(min(100.0, max(0.0, h)), 2)
 
+    def pressure(self, ms: int, temp: float) -> float:
+        day = ms / 86400000.0
+        p = 1013.2 - 0.05 * (temp - 18.0) + 0.4 * math.sin(2 * math.pi * day / 3.0)
+        return round(p + self.rng.gauss(0, 0.05), 2)
+
+    def illuminance(self, ms: int) -> float:
+        hod = (ms % 86400000) / 3600000.0
+        if 6.0 <= hod <= 20.0:
+            sun = math.sin(math.pi * (hod - 6.0) / 14.0) ** 1.5
+            lux = 45000.0 * sun + self.rng.gauss(0, 150.0)
+        else:
+            lux = self.rng.gauss(2.0, 1.0)
+        return round(max(0.0, lux), 1)
+
+    def battery(self, ms: int) -> float:
+        hod = (ms % 86400000) / 3600000.0
+        day = ms / 86400000.0
+        charge = 0.15 * math.sin(2 * math.pi * (hod - 9.0) / 24.0)
+        drift = 0.01 * math.sin(2 * math.pi * day / 5.0)
+        v = 3.95 + charge + drift + self.rng.gauss(0, 0.005)
+        return round(min(4.2, max(3.6, v)), 3)
+
     def rows_for(self, ms: int, temp: float, hum: float,
                  quality: str = "VALID", reason: int = 0,
                  time_uncertain: bool = False) -> list[list]:
+        extra = [self.pressure(ms, temp), self.illuminance(ms),
+                 self.battery(ms)]
         out = []
-        for value, (var, unit) in zip([temp, hum], VARIABLES, strict=False):
+        values = [temp, hum, *extra]
+        for i, (value, (var, unit)) in enumerate(
+                zip(values, VARIABLES, strict=False)):
             self.seq += 1
+            q, r = (quality, reason) if i < 2 else ("VALID", 0)
             out.append([
                 self.node_id, self.sensor_id, self.seq, ms, iso(ms),
-                var, f"{value:.2f}", unit, quality, reason,
+                var, f"{value:.2f}", unit, q, r,
                 1 if time_uncertain else 0,
             ])
         return out
@@ -107,17 +159,14 @@ def scenario_sensor_failure(series: Series, days: int) -> list[list]:
         if freeze_start <= m < nan_start:
             if frozen_value is None:
                 frozen_value = t
-            rows.extend(series.rows_for(ms, frozen_value, frozen_value))
-            for r in rows[-2:]:
-                r[8] = "SUSPECT"
-                r[9] = 8
+            rows.extend(series.rows_for(ms, frozen_value, frozen_value,
+                                        "SUSPECT", 8))
             continue
         if nan_start <= m < nan_start + 30:
-            r = series.rows_for(ms, float("nan"), float("nan"))
-            for row in r:
+            r = series.rows_for(ms, float("nan"), float("nan"),
+                                "INVALID", 1)
+            for row in r[:2]:
                 row[6] = ""
-                row[8] = "INVALID"
-                row[9] = 1
             rows.extend(r)
             continue
         rows.extend(series.rows_for(ms, t, h))
@@ -211,8 +260,7 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--node-prefix", default="CAUCE-SIM")
-    parser.add_argument("--sync-url", default=None,
-                        help="when set, pushes batches to the backend instead of writing CSVs")
+    parser.add_argument("--sync-url", default=None, help=_t("sync_help"))
     args = parser.parse_args()
 
     exit_code = 0
@@ -220,12 +268,12 @@ def main() -> int:
         node_id = f"{args.node_prefix}-{index:03d}"
         series = Series(node_id, f"SIM-{index:02d}", args.seed + index)
         rows = fn(series, max(1, args.days))
-        print(f"{name}: {len(rows)} rows ({len(rows)//2} measurements)")
+        print(_t("rows").format(name=name, n=len(rows), m=len(rows)))
         if args.sync_url:
             try:
                 sync_rows(args.sync_url, rows)
             except Exception as exc:
-                print(f"  ERROR syncing {name}: {exc}")
+                print(_t("sync_error").format(name=name, exc=exc))
                 exit_code = 1
         else:
             write_csv(os.path.join(args.outdir, f"{name}.csv"), rows)

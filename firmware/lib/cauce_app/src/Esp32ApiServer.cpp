@@ -7,10 +7,6 @@
 
 namespace cauce::app {
 
-namespace {
-constexpr const char* kCORS = "Access-Control-Allow-Origin: *";
-}  // namespace
-
 Esp32ApiServer::Esp32ApiServer(WebServer& server, ApiRouter& router)
     : server_(server), router_(router) {}
 
@@ -39,8 +35,7 @@ void Esp32ApiServer::begin() {
 
     server_.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server_.send(response.statusCode, response.contentType, "");
-    server_.sendHeader("Access-Control-Allow-Origin", "*");
-    server_.sendContent(buffer_, response.bytesWritten);
+      server_.sendContent(buffer_, response.bytesWritten);
 
     int guard = 0;
     while (!response.streamDone && guard++ < 10000) {

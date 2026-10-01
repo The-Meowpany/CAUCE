@@ -26,7 +26,12 @@ struct NodeConfig {
   char wifiSsid[33]{};
   char wifiPassword[65]{};
   char ntpServer[48]{"pool.ntp.org"};
+  char syncServerUrl[128]{};
   char syncDeviceKey[65]{};
+  char otaManifestUrl[160]{};
+  bool loraEnabled{false};
+  uint32_t loraSyncIntervalS{3600};
+  char loraRegion[16]{"EU868"};
   uint32_t storageMaxBytes{512u * 1024u};
   uint32_t segmentMaxBytes{64u * 1024u};
   char adminTokenSha256[65]{};

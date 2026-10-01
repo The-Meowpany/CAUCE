@@ -6,38 +6,17 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from .alerts import evaluate_heat_rules
 from .analytics import summary_stats
 from .config import settings
-from .db import query, transaction
+from .db import engine, query, transaction
+from .ratelimit import check_rate
 from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
 def _check_rate(request: Request) -> None:
-    key = request.client.host if request.client else "unknown"
-    now = time.time()
-    with transaction() as conn:
-        row = conn.execute(
-            "SELECT request_count, window_start FROM rate_limit WHERE client_ip=?",
-            (key,),
-        ).fetchone()
-        if row is None or now - row["window_start"] >= 60.0:
-            conn.execute(
-                """INSERT INTO rate_limit(client_ip,window_start,request_count) VALUES(?,?,1)
-                   ON CONFLICT(client_ip) DO UPDATE SET window_start=?, request_count=1""",
-                (key, now, now),
-            )
-            return
-        if row["request_count"] >= settings.rate_limit_per_minute:
-            raise HTTPException(status_code=429, detail="rate_limited")
-        conn.execute(
-            "UPDATE rate_limit SET request_count=request_count+1 WHERE client_ip=?",
-            (key,),
-        )
-    # prune stale entries periodically (every 64th check)
-    if hash(key) % 64 == 0:
-        with transaction() as conn:
-            conn.execute("DELETE FROM rate_limit WHERE window_start<?", (now - 120.0,))
+    check_rate(request)
 
 
 def _acknowledged_sequence(conn, node_id: str, records: list[dict]) -> int | None:
@@ -102,6 +81,8 @@ async def sync_batch(
                       (node_id_claim,))
         if rows_ and rows_[0]["device_key"]:
             device_key = rows_[0]["device_key"]
+        import logging
+        logging.info(f"sync: node_id={node_id_claim}, device_key present={bool(device_key)}")
 
     if device_key:
         # Provisioned node: HMAC over the raw body is mandatory, and the
@@ -113,7 +94,11 @@ async def sync_batch(
         if not header_ok or not provided_sig or not hmac.compare_digest(
             provided_sig, expected_sig
         ):
+            import logging
+            logging.warning(f"sync: invalid signature for {node_id_claim}")
             raise HTTPException(status_code=401, detail="invalid_signature")
+    elif settings.sync_require_auth:
+        raise HTTPException(status_code=503, detail="sync_not_provisioned")
     else:
         require_bearer_token(authorization, settings.sync_token)
 
@@ -122,6 +107,9 @@ async def sync_batch(
     node_id = payload.get("node_id")
     if not isinstance(node_id, str) or not node_id:
         raise HTTPException(status_code=422, detail="missing_node_id")
+    transport = payload.get("transport", "wifi")
+    if transport not in ("wifi", "lora"):
+        raise HTTPException(status_code=422, detail="unsupported_transport")
     measurements = payload.get("measurements")
     if not isinstance(measurements, list):
         raise HTTPException(status_code=422, detail="missing_measurements")
@@ -134,6 +122,9 @@ async def sync_batch(
                 status_code=422,
                 detail=f"invalid_record_missing_{sorted(missing)[0]}",
             )
+        v = rec.get("value")
+        if v is not None and isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
+            raise HTTPException(status_code=422, detail="invalid_value_non_finite")
 
     now_ms = int(time.time() * 1000)
     with transaction() as conn:
@@ -170,6 +161,8 @@ async def sync_batch(
                     inserted_max = rec["sequence"]
 
         for rec in inserted_rows:
+            if rec["value"] is None:
+                continue
             hour_ts = (rec["timestamp_utc_ms"] // 3600000) * 3600000
             conn.execute(
                 """INSERT INTO agg_hourly(node_id,variable,hour_ts,cnt,sum,sumsq,min_v,max_v)
@@ -200,21 +193,63 @@ async def sync_batch(
         acked = _acknowledged_sequence(conn, node_id, measurements) or inserted_max
         if acked is not None:
             conn.execute(
-                """INSERT INTO sync_batches(node_id,batch_size,first_sequence,last_sequence,received_at_utc_ms)
-                   VALUES(?,?,?,?,?)""",
+                """INSERT INTO sync_batches(node_id,batch_size,first_sequence,last_sequence,received_at_utc_ms,transport)
+                   VALUES(?,?,?,?,?,?)""",
                 (
                     node_id,
                     len(measurements),
                     min((r["sequence"] for r in measurements), default=None),
                     max((r["sequence"] for r in measurements), default=None),
                     now_ms,
+                    transport,
                 ),
             )
+
+    try:
+        evaluate_heat_rules(node_id)
+    except Exception:
+        pass
 
     return {
         "acknowledged_sequence": acked if acked is not None else 0,
         "received": len(measurements),
     }
+
+
+@router.get("/ota/manifest")
+def ota_manifest(
+    request: Request,
+    node_id: str | None = None,
+) -> dict:
+    _check_rate(request)
+    path = settings.ota_releases_path
+    if not path:
+        raise HTTPException(status_code=404, detail="ota_not_configured")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            import json as _json
+            release = _json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="ota_manifest_unreadable") from exc
+    version = release.get("version")
+    sha256 = release.get("sha256")
+    url = release.get("url")
+    total_size = release.get("total_size")
+    if (not isinstance(version, str) or not version
+            or not isinstance(sha256, str) or not sha256
+            or not isinstance(url, str) or not url
+            or not isinstance(total_size, int) or total_size <= 0):
+        raise HTTPException(status_code=503, detail="ota_manifest_invalid")
+    signature = None
+    if node_id:
+        rows = query("SELECT device_key FROM nodes WHERE node_id=?", (node_id,))
+        if rows and rows[0]["device_key"]:
+            canonical = f"{version}|{url}|{total_size}"
+            signature = hmac.new(rows[0]["device_key"].encode(),
+                                 canonical.encode(),
+                                 hashlib.sha256).hexdigest()
+    return {"version": version, "sha256": sha256, "url": url,
+            "total_size": total_size, "hmac": signature}
 
 
 @router.get("/nodes")
@@ -267,11 +302,13 @@ def node_measurements(
     from_utc_ms: int | None = None,
     to_utc_ms: int | None = None,
     limit: int = 1000,
+    offset: int = 0,
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     limit = max(1, min(limit, 10000))
+    offset = max(0, offset)
     sql = "SELECT * FROM measurements WHERE node_id=?"
     params: list = [node_id]
     if variable:
@@ -286,10 +323,76 @@ def node_measurements(
     if to_utc_ms is not None:
         sql += " AND timestamp_utc_ms<=?"
         params.append(to_utc_ms)
-    sql += " ORDER BY timestamp_utc_ms LIMIT ?"
-    params.append(limit)
+    total = query(f"SELECT COUNT(*) AS c FROM ({sql})",
+                  tuple(params))[0]["c"]
+    sql += " ORDER BY timestamp_utc_ms LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     rows = query(sql, tuple(params))
-    return {"node_id": node_id, "measurements": [dict(r) for r in rows]}
+    return {"node_id": node_id, "total": total, "limit": limit,
+            "offset": offset,
+            "measurements": [dict(r) for r in rows]}
+
+
+@router.get("/maintenance/backup")
+def download_backup(
+    request: Request,
+    authorization: str | None = Header(default=None),
+):
+    import os
+    import tempfile
+
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+
+    _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    tmp.close()
+    try:
+        engine().execute(f"VACUUM INTO '{tmp.name}'")
+        engine().commit()
+    except Exception as exc:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+        raise HTTPException(status_code=503, detail="backup_failed") from exc
+
+    def _cleanup() -> None:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+
+    return FileResponse(tmp.name, media_type="application/x-sqlite3",
+                        filename="cauce-backup.sqlite",
+                        background=BackgroundTask(_cleanup))
+
+
+@router.post("/maintenance/retention")
+def run_retention(
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
+    days = payload.get("older_than_days", 90)
+    if not isinstance(days, int) or not 1 <= days <= 3650:
+        raise HTTPException(status_code=422, detail="invalid_retention_days")
+    cutoff = int(time.time() * 1000) - days * 86400000
+    with transaction() as conn:
+        gone_m = conn.execute(
+            "DELETE FROM measurements WHERE timestamp_utc_ms<?",
+            (cutoff,)).rowcount
+        gone_a = conn.execute(
+            "DELETE FROM agg_hourly WHERE hour_ts<?",
+            (cutoff,)).rowcount
+    engine().execute("VACUUM")
+    engine().commit()
+    return {"status": "retained", "older_than_days": days,
+            "deleted_measurements": gone_m, "deleted_buckets": gone_a,
+            "vacuumed": True}
 
 
 @router.get("/analytics/summary")
@@ -574,6 +677,13 @@ def time_reconstruct(
                ORDER BY sequence DESC""",
             (node_id, first_seq),
         ).fetchall()
+        already = conn.execute(
+            "SELECT COUNT(*) AS c FROM measurements WHERE node_id=? AND ts_reconstructed=1",
+            (node_id,),
+        ).fetchone()["c"]
+        if already > 0:
+            raise HTTPException(status_code=409,
+                                detail="already_reconstructed_run_once_only")
         uncertain_seqs = [r["sequence"] for r in cur]
         for seq in uncertain_seqs:
             distance = anchor_seq - seq

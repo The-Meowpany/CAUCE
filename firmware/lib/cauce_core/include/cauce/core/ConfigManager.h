@@ -37,10 +37,14 @@ class ConfigManager {
  private:
   bool readTextFile(const char* path, char* buffer, size_t capacity);
 
+  static constexpr size_t kScratchSize = 8192;
+
   hal::IFileSystem& fs_;
   char path_[64];
   char backupPath_[68];
   NodeConfig current_{};
+  char scratch_[kScratchSize];
+  uint8_t backupScratch_[kScratchSize];
 };
 
 }  // namespace cauce

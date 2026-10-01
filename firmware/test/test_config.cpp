@@ -125,6 +125,15 @@ void test_validation_rejects_bad_intervals() {
   TEST_ASSERT_TRUE(ConfigManager::validate(config).ok);
 }
 
+void test_validation_rejects_bad_node_id_charset() {
+  NodeConfig config = sampleConfig();
+  copyString(config.nodeId, sizeof(config.nodeId), "BAD ID!");
+  TEST_ASSERT_FALSE(ConfigManager::validate(config).ok);
+
+  copyString(config.nodeId, sizeof(config.nodeId), "CAUCE-001_A");
+  TEST_ASSERT_TRUE(ConfigManager::validate(config).ok);
+}
+
 void test_validation_rejects_inverted_thresholds() {
   NodeConfig config = sampleConfig();
   config.thresholds.rangeMin[static_cast<uint8_t>(Variable::Pressure)] = 1200.0f;
@@ -147,6 +156,7 @@ void registerConfigTests() {
   RUN_TEST(test_save_then_load_roundtrip);
   RUN_TEST(test_corrupted_main_restores_from_backup);
   RUN_TEST(test_validation_rejects_bad_intervals);
+  RUN_TEST(test_validation_rejects_bad_node_id_charset);
   RUN_TEST(test_validation_rejects_inverted_thresholds);
   RUN_TEST(test_garbage_input_rejected);
 }

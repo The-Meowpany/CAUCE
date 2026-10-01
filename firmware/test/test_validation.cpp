@@ -40,6 +40,30 @@ void test_valid_temperature_passes() {
   TEST_ASSERT_FALSE(r.timeUncertain);
 }
 
+void test_future_timestamp_beyond_skew_is_time_uncertain() {
+  ValidationContext ctx;
+  ctx.timeValid = true;
+  ctx.nowUtcMs = 1787356800000ULL;
+  const auto r = engine().evaluate(
+      makeMeasurement(Variable::AirTemperature, 21.5f, 9,
+                      1787356800000ULL + 120000ULL + 1ULL),
+      ctx);
+  TEST_ASSERT_TRUE(r.timeUncertain);
+  TEST_ASSERT_TRUE(r.reasonBits & kReasonTimeUncertain);
+}
+
+void test_timestamp_within_skew_stays_trusted() {
+  ValidationContext ctx;
+  ctx.timeValid = true;
+  ctx.nowUtcMs = 1787356800000ULL;
+  const auto r = engine().evaluate(
+      makeMeasurement(Variable::AirTemperature, 21.5f, 9,
+                      1787356800000ULL + 60000ULL),
+      ctx);
+  TEST_ASSERT_FALSE(r.timeUncertain);
+  TEST_ASSERT_EQUAL(Quality::Valid, r.quality);
+}
+
 void test_non_finite_value_is_invalid() {
   ValidationContext ctx;
   ctx.timeValid = true;
