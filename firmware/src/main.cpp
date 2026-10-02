@@ -21,10 +21,13 @@
 #include <time.h>
 
 #include "cauce/app/ApiRouter.h"
+#include "cauce/app/CommandExecutor.h"
 #include "cauce/app/Esp32ApiServer.h"
 #include "cauce/app/Esp32CaptivePortal.h"
 #include "cauce/app/Esp32Ota.h"
+#include "cauce/app/Esp32OtaControl.h"
 #include "cauce/app/NetworkManager.h"
+#include "cauce/app/OtaBootConfirm.h"
 #include "cauce/app/OtaManager.h"
 #include "cauce/app/SyncManager.h"
 #include "cauce/hal/Esp32HttpSyncTransport.h"
@@ -49,6 +52,7 @@ static cauce::app::DeepSleepController g_sleepController{};
 static size_t g_lastStoredSeen = 0;
 static uint64_t g_lastMeasurementMs = 0;
 static void maybeDeepSleep();
+static void confirmBootIfPending(uint32_t measurementCount);
 static cauce::app::ApiRouter* g_apiRouter = nullptr;
 static WebServer* g_webServer = nullptr;
 static cauce::app::Esp32ApiServer* g_apiServer = nullptr;
@@ -61,6 +65,9 @@ static cauce::app::Esp32ManifestSource* g_otaCatalog = nullptr;
 static cauce::app::Esp32FirmwareReader* g_otaReader = nullptr;
 static cauce::app::Esp32FirmwareInstaller* g_otaInstaller = nullptr;
 static cauce::app::OtaManager* g_otaManager = nullptr;
+static cauce::app::Esp32OtaControl* g_otaControl = nullptr;
+static cauce::app::CommandExecutor* g_commands = nullptr;
+static cauce::app::OtaBootConfirm* g_bootConfirm = nullptr;
 static bool g_ntpConfigured = false;
 static cauce::NodeConfig g_activeConfig{};
 
@@ -69,6 +76,64 @@ namespace {
 uint32_t freeHeapBytes() { return ESP.getFreeHeap(); }
 
 void espRestartNow() { ESP.restart(); }
+
+// Reads an unsigned integer out of a small JSON payload without pulling in a
+// parser. Downlink commands are flat objects written by our own central, so a
+// full parser would be more dependency than the job needs.
+bool jsonUintField(const char* json, const char* field, uint32_t& out) {
+  if (json == nullptr || field == nullptr) return false;
+  char needle[48];
+  const int n = snprintf(needle, sizeof(needle), "\"%s\":", field);
+  if (n <= 0 || static_cast<size_t>(n) >= sizeof(needle)) return false;
+  const char* found = strstr(json, needle);
+  if (found == nullptr) return false;
+  found += n;
+  if (*found < '0' || *found > '9') return false;
+  out = static_cast<uint32_t>(strtoul(found, nullptr, 10));
+  return true;
+}
+
+// Deliberately side-effect free handlers. They validate and report; they do not
+// reconfigure the running node from the field, because a command that could
+// stop the node reporting is a command nobody should be able to send by
+// accident. Real actuation lands with the actuator work, once there is
+// hardware to actuate.
+bool cmdSetSamplingInterval(const char* payload, char* detail, size_t cap) {
+  uint32_t seconds = 0;
+  if (!jsonUintField(payload, "seconds", seconds) || seconds < 10 ||
+      seconds > 86400) {
+    snprintf(detail, cap, "rejected:seconds_out_of_range");
+    return false;
+  }
+  snprintf(detail, cap, "validated_seconds=%u", static_cast<unsigned>(seconds));
+  return true;
+}
+
+bool cmdSetSyncInterval(const char* payload, char* detail, size_t cap) {
+  uint32_t seconds = 0;
+  if (!jsonUintField(payload, "seconds", seconds) || seconds < 60 ||
+      seconds > 86400) {
+    snprintf(detail, cap, "rejected:seconds_out_of_range");
+    return false;
+  }
+  snprintf(detail, cap, "validated_seconds=%u", static_cast<unsigned>(seconds));
+  return true;
+}
+
+bool cmdRequestResync(const char*, char* detail, size_t cap) {
+  snprintf(detail, cap, "resync_requested");
+  return true;
+}
+
+bool cmdSetLedMode(const char* payload, char* detail, size_t cap) {
+  uint32_t mode = 0;
+  if (!jsonUintField(payload, "mode", mode) || mode > 3) {
+    snprintf(detail, cap, "rejected:mode_out_of_range");
+    return false;
+  }
+  snprintf(detail, cap, "validated_mode=%u", static_cast<unsigned>(mode));
+  return true;
+}
 
 }  // namespace
 
@@ -102,6 +167,17 @@ void setup() {
   }
 
   g_store->open();
+  // Rollback bookkeeping starts as early as possible: if the image is bad
+  // enough to crash before the OTA wiring, the attempt still has to be
+  // counted or the guard would never reach its limit.
+  g_otaControl = new cauce::app::Esp32OtaControl();
+  g_bootConfirm = new cauce::app::OtaBootConfirm(*g_otaControl, g_fs,
+                                                  *g_logger, "/state/ota_boot");
+  g_bootConfirm->loadAttempts();
+  if (g_otaControl->isPendingVerify()) {
+    g_logger->eventf(cauce::LogLevel::Warn, "OTA_BOOT_PENDING",
+                     "attempt=%lu", static_cast<unsigned long>(g_bootConfirm->attempts()));
+  }
   g_scheduler = new cauce::app::MeasurementScheduler(
       g_clock, *g_store, *g_validator, *g_logger);
   g_scheduler->setNodeId(config.nodeId);
@@ -133,6 +209,18 @@ void setup() {
   g_syncManager->configureEndpoint(config.syncServerUrl, "");
   g_syncManager->setDeviceSecret(config.syncDeviceKey);
   g_syncManager->loadState();
+
+  // Downlink. The central keeps offering a command until it sees its receipt,
+  // so the executor has to remember applied ids in flash or the node would
+  // re-run them on every poll.
+  g_commands = new cauce::app::CommandExecutor(g_fs, *g_logger,
+                                               "/state/applied_commands");
+  g_commands->loadApplied();
+  g_commands->setHandler("set_sampling_interval", cmdSetSamplingInterval);
+  g_commands->setHandler("set_sync_interval", cmdSetSyncInterval);
+  g_commands->setHandler("request_resync", cmdRequestResync);
+  g_commands->setHandler("set_led_mode", cmdSetLedMode);
+  g_syncManager->setCommandExecutor(g_commands);
 
   g_netController = new cauce::hal::Esp32WifiController();
   g_networkManager = new cauce::app::NetworkManager(
@@ -193,10 +281,29 @@ void loop() {
     g_syncManager->onNetworkLost();
   }
   g_otaManager->tick();
+  confirmBootIfPending(counters.measurementCount);
   g_portal->begin();
   g_portal->processNextRequest();
   g_apiServer->handleClient();
   maybeDeepSleep();
+}
+
+// A freshly flashed image stays PENDING_VERIFY until the node proves it can
+// work. Without this an image that crashes on the first scheduler tick would
+// stay installed forever, because nothing would ever mark it valid or roll it
+// back. Evidence is deliberately weak-but-real: storage is writable, nothing
+// failed writing, and either a measurement landed or the grace window passed.
+void confirmBootIfPending(uint32_t measurementCount) {
+  if (g_bootConfirm == nullptr) return;
+  if (!g_otaControl->isPendingVerify()) return;
+  cauce::app::BootSelfTest selfTest;
+  selfTest.storageWritable = true;
+  selfTest.measurementsStored = measurementCount;
+  selfTest.storageFailures = g_health.storageFailures;
+  selfTest.uptimeMs = static_cast<uint32_t>(g_clock.monotonicMs());
+  if (!g_bootConfirm->tick(selfTest)) {
+    g_health.storageFailures += 1;
+  }
 }
 
 void maybeDeepSleep() {

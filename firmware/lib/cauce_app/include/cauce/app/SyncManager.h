@@ -11,6 +11,8 @@
 
 namespace cauce::app {
 
+class CommandExecutor;
+
 class SyncManager {
  public:
   static constexpr uint32_t kRecordsPerBatch = 32;
@@ -34,6 +36,9 @@ class SyncManager {
   // the raw provisioned key: HMAC_SHA256(device_key, raw_request_body).
   void setDeviceSecret(const char* asciiSecret);
   void setSyncIntervalS(uint32_t intervalS);
+  // Optional downlink executor. When set, commands carried back by a sync
+  // response are run and their receipts ride the next batch.
+  void setCommandExecutor(CommandExecutor* executor) { executor_ = executor; }
   void loadState();
   void onNetworkConnected();
   void onNetworkLost();
@@ -47,6 +52,7 @@ class SyncManager {
 
  private:
   bool syncOneBatch();
+  void runPendingCommands();
   void scheduleRetry(bool authFailure);
   bool saveWatermark();
   void loadWatermarkLocked();
@@ -68,6 +74,8 @@ class SyncManager {
   // tick() may run on tasks with small stacks.
   char batchPayload_[4096];
   Tuning tuning_;
+  CommandExecutor* executor_{nullptr};
+  char receiptsJson_[384];
 
   bool connected_{false};
   bool halted_{false};

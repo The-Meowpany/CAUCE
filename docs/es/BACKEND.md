@@ -95,6 +95,41 @@ casi siempre es emplazamiento, no prueba. INVALID/MISSING/ESTIMATED
 quedan fuera de la matemática; SUSPECT cuenta pero su proporción se
 reporta junto al resultado.
 
+## Downlink
+
+El central puede mandar instrucciones a un nodo que ya reporta. Viajan en la
+misma respuesta de `/v1/sync` que acusa un lote, así que no agrega un
+despertar extra de radio ni un modo de falla nuevo en el nodo.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/v1/nodes/{id}/commands` | Encolar un comando. Token admin |
+| GET | `/v1/nodes/{id}/commands` | Listar con estado `pending` / `delivered` / `acked` / `expired` |
+
+Dos propiedades lo hacen seguro de reintentar, que es la única que importa
+cuando el otro extremo es un dispositivo offline-first:
+
+- **Idempotencia.** `(node_id, idempotency_key)` es único. Reenviar la misma
+  clave devuelve el comando original con `created: false` en vez de encolar un
+  segundo. Reusar una clave con un cuerpo *distinto* es `409`, porque eso es un
+  bug del cliente e ignorarlo en silencio lo escondería.
+- **Entrega honesta.** Un comando queda `pending` hasta que el nodo lo reporta
+  en una vuelta de `/v1/sync`, pasa a `delivered` cuando llega, y a `acked`
+  solo cuando el nodo manda un resultado. Un comando expirado deja de
+  ofrecerse. Nada se reporta como hecho por el simple hecho de haber sido
+  encolado.
+
+El nodo responde con `command_receipts` en su siguiente lote. Un acuse para el
+comando de otro nodo, o para un comando que no existe, se cuenta y se ignora:
+el nodo es un par autenticado pero no es autoridad sobre el comando de otro.
+
+Los tipos son pocos y sin efectos secundarios a propósito:
+`set_sampling_interval`, `set_sync_interval`, `request_resync`, `set_led_mode`.
+El nodo que va en el repo valida sus argumentos y responde; no se reconfigura a
+sí mismo desde el campo. La actuación real viene con hardware que se pueda
+actuar.
+
+
 ## Calibración
 
 El central es dueño de la calibración: `measurements.value` sigue crudo y el
@@ -163,7 +198,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 116 tests
+pytest tests -q                      # 127 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 

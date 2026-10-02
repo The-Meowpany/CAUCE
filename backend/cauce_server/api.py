@@ -272,9 +272,30 @@ async def sync_batch(
     except Exception:
         pass
 
+    # Downlink rides the same round trip the node already makes, so it costs no
+    # extra radio wakeup. Receipts first, so a command acknowledged in this very
+    # response cannot be handed back again.
+    from .commands import pending_commands, record_receipts
+
+    receipts = payload.get("command_receipts") or []
+    if not isinstance(receipts, list):
+        raise HTTPException(status_code=422, detail="invalid_command_receipts")
+    if receipts:
+        record_receipts(node_id, receipts)
+
+    commands = [
+        {
+            "command_id": c["command_id"],
+            "kind": c["kind"],
+            "payload": c["payload"],
+        }
+        for c in pending_commands(node_id)
+    ]
+
     return {
         "acknowledged_sequence": acked if acked is not None else 0,
         "received": len(measurements),
+        "commands": commands,
     }
 
 

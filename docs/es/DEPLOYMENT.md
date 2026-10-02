@@ -64,34 +64,47 @@ termina TLS y es el único puerto publicado:
 
 ```bash
 cd deployment
-export CAUCE_DOMAIN=cauce.local          # el hostname que van a usar los nodos
+export CAUCE_DOMAIN=cauce.example.org      # el hostname que van a usar los nodos
+export ACME_EMAIL=ops@cauce.example.org    # para que Let's Encrypt te avise
 docker compose up -d --build
 ```
 
-Qué aporta y qué cuesta:
+Qué compra y qué cuesta:
 
 - `http://CAUCE_DOMAIN` redirige a `https://CAUCE_DOMAIN`.
-- El central responde solo en `127.0.0.1:8000`, así el operador puede
+- El central responde solo en `127.0.0.1:8000`, así un operador puede
   depurar desde el host mientras la red ve el 443 y nada más.
 - Los lotes van firmados por dispositivo (HMAC-SHA256) además de cifrados:
-  TLS no reemplaza la firma, y la firma no reemplaza a TLS.
+  el TLS no reemplaza la firma, y la firma no reemplaza el TLS.
 
-**Certificado para un piloto solo en LAN.** El `tls internal` por defecto hace
-que Caddy emita desde su propia CA local. Exportá la raíz una vez e
-instalala en cada nodo y en la máquina del operador, si no los nodos
-rechazan el lote:
+**Modos de certificado.** `CAUCE_TLS_MODE` elige uno, y dejarlo vacío es el
+default:
 
-```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
-```
+- **Vacío (recomendado).** `tls` sin argumento hace que Caddy resuelva un
+  certificado ACME real para `CAUCE_DOMAIN` y lo renueve solo. Lo único que
+  hace falta es un nombre público que apunte al host y los puertos 80 y 443
+  alcanzables.
+- **`internal`.** Para un piloto sin DNS público. Caddy emite desde su
+  propia CA local y hay que confiar en esa CA en todas partes:
 
-**Certificado para un nombre público.** Borrá la línea `tls internal` del
-`Caddyfile`, definí `ACME_EMAIL`, y Caddy obtiene y renueva un certificado
-real sin intervención. `CAUCE_DOMAIN` tiene que resolver públicamente.
+  ```bash
+  export CAUCE_TLS_MODE=internal
+  docker compose up -d
+  docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
+  ```
 
-Del lado del nodo: apuntá `sync_server_url` a `https://CAUCE_DOMAIN` e
-instalá el certificado raíz en el ESP32 si no es una CA de confianza
-pública. A partir de ahí queda cubierto el punto del checklist "central
+  Instalá `cauce-root.crt` en cada nodo y en la máquina del operador; si no,
+  los nodos rechazan el lote.
+
+No hay un tercer modo a propósito. Fijar un certificado autofirmado por
+nodo es más trabajo operativo que cualquiera de los dos anteriores, y un
+certificado que nadie rota termina siendo un certificado en el que nadie
+confía.
+
+Del lado del nodo: apuntá `sync_server_url` a `https://CAUCE_DOMAIN`, e
+instalá el certificado raíz en el ESP32 solo si elegiste `internal`. Desde
+ahí queda satisfecha la casilla "backend accesible por TLS".
+
 alcanzable por TLS".
 
 ## 3. Preparar cada nodo

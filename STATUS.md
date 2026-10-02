@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (148 firmware + 116 backend tests, E2E green)
+## Implemented and verified (176 firmware + 127 backend tests, E2E green)
 | **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 5 pruebas nuevas (firmware HMAC RFC4231 x2 + matriz backend valida/firma-mala/sin-firma + device-secret signing x2) |
 
 | Component | Evidence |
@@ -14,6 +14,10 @@ not. It overrides any aspirational claim elsewhere.
 | **Deep sleep**: portable `DeepSleepController` (9 tests) plus `Esp32Sleeper`, behind a `deep_sleep_enabled` flag that is **off by default** until bench power measurement | 9 firmware tests + 2 config tests |
 | **Non-blocking OTA chunks**: tri-state `ReadStatus` reader, no 10 s per-chunk wait, `OTA_STALLED` with a tick budget | 3 firmware tests |
 | **TLS in front of the central**: Caddy with an internal CA and an env-driven domain; central bound to loopback only | 1 backend test + ESP32 build |
+| **Downlink commands**: `(node_id, idempotency_key)` unique, delivered in the same `/v1/sync` response that acks a batch, node remembers applied ids in flash and reports receipts | 11 backend tests + 12 firmware tests |
+| **OTA rollback wired**: `OtaBootConfirm` persists a boot-attempt counter, marks the image valid once storage proves itself, rolls back after 3 bad boots | 8 firmware tests; ESP32 build SUCCESS |
+| **Honest LoRa delivery**: `ILoRaRadio::receive()`, gateway ack frame with XOR check, stale-ack drain, unconfirmed batch reported as a retryable error instead of an optimistic ack | 9 firmware tests |
+| **Monotonic sync watermark**: a late acknowledgement can no longer rewind `last_acked_sequence`, for either transport | covered by the LoRa and downlink suites |
 | **Data coverage accounting**: expected vs received, longest gap, gap reasons (`no_data` / `measured_not_delivered` / `clock_uncertain`), node + site + CSV | 8 backend tests |
 | **Control sites and difference-in-differences** in `before-after`, with distance to the treated site and automatic exclusion of under-sampled controls | 2 backend tests + `haversine_m`/`difference_in_differences` unit-covered |
 | **Fleet triage** (`/v1/fleet`): firmware spread, last sync, storage, flags, `needs_visit`; `/system` renders it in en/es/pt | 3 backend tests + dashboard render test |
@@ -50,10 +54,10 @@ not. It overrides any aspirational claim elsewhere.
 - Real BME280 reads via Wire (datasheet-driven, passes simulated-bus tests).
 - LittleFS on real flash (mount/wear/power-cut).
 - Wi-Fi radio (`Esp32WifiController` implementing the tested FSM interface).
-- OTA actual flash write (`Esp32Ota` on `Update`, cross-compiled) +
+- OTA actual flash write (`Esp32Ota` on `Update`, cross-compiled) + boot-counter confirmation (`OtaBootConfirm` wired in `main.cpp`). Both unrun on hardware.
   boot-counter rollback confirmation (both unrun on hardware).
 - NTP time source.
-- LoRa sync transport (`LoRaSyncTransport` behind `ILoRaRadio`).
+- LoRa sync transport (`LoRaSyncTransport` behind `ILoRaRadio`). The acknowledgement path is host-tested; the radio itself is not.
 - OTA rollback: two-slot partition table (`firmware/partitions.csv`),
   `OtaRollbackGuard` policy (mark valid / retry / roll back) and
   `Esp32OtaControl`. Policy is host-tested; the flash path is not.
@@ -68,12 +72,17 @@ not. It overrides any aspirational claim elsewhere.
 - Calibration **uncertainty**: records carry no uncertainty estimate, so
   `docs/*/CALIBRATION.md` keeps every external claim marked pending. There
   is no formal calibration process yet.
-- Coverage accounting is still row-bound for very long windows even
-  though `summary` now prefers hourly buckets.
-- TLS ships with an internal CA for a private domain; a public
+- Coverage accounting caps a query at 400 days and reports the top 20
+  gaps with `gaps_truncated` set when there are more, so a very long
+  window is bounded rather than complete.
+- TLS ships ACME by default (`CAUCE_TLS_MODE` empty); a public deployment still needs a real DNS name.
   deployment still needs a real certificate.
 - Deep sleep is wired but **disabled by default**: turning it on requires
   the bench measurement in `docs/en/BENCH_PLAN.md`.
+- LoRa still sends raw JSON inside the payload budget rather than the 68-byte
+  frame `ROADMAP.md` M2 describes, and no gateway has been built to ack it.
+- Downlink kinds validate and report but do not reconfigure the node; real
+  actuation needs hardware that can be actuated.
 
 ## Known technical debt / backlog (prioritized)
 
@@ -87,7 +96,7 @@ not. It overrides any aspirational claim elsewhere.
 | 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) - **increased to 512 B** | Long messages | Done |
 | 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Open |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
-| 9 | LOW | `LogStorageRepository` / coverage queries scan rows in Python for very long windows | Windows > 90 days on a node | Partly done: `granularity=auto` reads `agg_hourly` past 7 days. Coverage still caps windows at 400 days and gaps at 20, so it remains row-bound |
+| 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is already a SQL window function (`LAG`) capped at 20 gaps, so no Python row loop remains |
 
 ### Closed this round
 
@@ -159,9 +168,9 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 148 succeeded
+cd firmware && pio test -e native      # expect: 176 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 116 passed
+python -m pytest tests -q              # expect: 127 passed
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

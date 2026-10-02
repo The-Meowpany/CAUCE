@@ -32,8 +32,10 @@ void Esp32Clock::setUtcMs(uint64_t epochMs) {
   struct timeval tv {};
   tv.tv_sec = static_cast<time_t>(epochMs / 1000ULL);
   tv.tv_usec = static_cast<suseconds_t>((epochMs % 1000ULL) * 1000ULL);
-  settimeofday(&tv, nullptr);
-}
+settimeofday(&tv, nullptr);
+      }
+
+      void Esp32Clock::sleepMs(uint32_t durationMs) { delay(durationMs); }
 
 Esp32WireBus::Esp32WireBus(int sdaPin, int sclPin, uint32_t frequencyHz)
     : sdaPin_(sdaPin), sclPin_(sclPin), frequencyHz_(frequencyHz) {}

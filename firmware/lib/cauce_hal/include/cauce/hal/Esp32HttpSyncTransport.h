@@ -17,7 +17,10 @@ class Esp32HttpSyncTransport final : public ISyncTransport {
                    const char* signatureHex, uint32_t timeoutMs,
                    uint32_t& ackedSequenceOut) override;
 
+ Result fetchCommands(CommandBatch& out) override;
+
  private:
+  CommandBatch lastCommands_;
   String url_;
   String token_;
 };

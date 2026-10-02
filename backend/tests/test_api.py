@@ -1708,7 +1708,13 @@ def test_compose_terminates_tls_and_hides_the_backend():
 
     assert 'caddy:' in compose, 'no caddy service'
     assert 'reverse_proxy cauce-central:8000' in caddyfile
-    assert 'tls internal' in caddyfile
+    # Empty CAUCE_TLS_MODE must yield a bare `tls`, which is what makes Caddy
+    # solve a real ACME certificate instead of falling back to its local CA.
+    assert re.search(r'^\ttls \{\$CAUCE_TLS_MODE\}', caddyfile, re.MULTILINE), (
+        'tls mode is not env-driven: the default has to be a real certificate')
+    assert 'CAUCE_TLS_MODE' in compose
+    assert 'CAUCE_TLS_MODE: ${CAUCE_TLS_MODE:-}' in compose, (
+        'the default must stay empty so ACME is what you get out of the box')
     assert 'Strict-Transport-Security' in caddyfile
     assert 'CAUCE_DOMAIN' in compose
     assert 'ACME_EMAIL' in compose

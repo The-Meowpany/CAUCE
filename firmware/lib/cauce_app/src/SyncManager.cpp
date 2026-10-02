@@ -1,5 +1,7 @@
 #include "cauce/app/SyncManager.h"
 
+#include "cauce/app/CommandExecutor.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -112,6 +114,22 @@ void SyncManager::scheduleRetry(bool authFailure) {
                  static_cast<unsigned long>(backoffS));
 }
 
+// Runs whatever commands the central sent back. Kept separate from
+// syncOneBatch so a transport that cannot do downlink needs no special case.
+void SyncManager::runPendingCommands() {
+  if (executor_ == nullptr) return;
+  hal::CommandBatch batch;
+  if (transport_.fetchCommands(batch) != hal::ISyncTransport::Result::Ok) {
+    return;
+  }
+  if (batch.count == 0) return;
+  CommandReceipt receipts[CommandExecutor::kMaxReceipts];
+  const size_t n = executor_->ingest(batch, receipts, CommandExecutor::kMaxReceipts);
+  if (n == 0) return;
+  logger_.eventf(LogLevel::Info, "DOWNLINK_COMMANDS", "count=%u",
+                 static_cast<unsigned>(n));
+}
+
 bool SyncManager::syncOneBatch() {
   Measurement batch[kRecordsPerBatch];
   QueryStats stats{};
@@ -125,6 +143,10 @@ bool SyncManager::syncOneBatch() {
   char* payload = batchPayload_;
   const size_t payloadCapacity = sizeof(batchPayload_);
   size_t used = 0;
+  receiptsJson_[0] = '\0';
+  if (executor_ != nullptr) {
+    executor_->writeReceiptsJson(receiptsJson_, sizeof(receiptsJson_));
+  }
   char nodeIdJson[64];
   escapeJsonString(nodeId_, nodeIdJson, sizeof(nodeIdJson));
   used += static_cast<size_t>(std::snprintf(
@@ -134,6 +156,17 @@ bool SyncManager::syncOneBatch() {
   const size_t batchSizePos = used;
   std::memcpy(payload + used, "00000", 5);
   used += 5;
+  // Receipts for commands run on the previous round trip go out with this
+  // batch, so acknowledgement and delivery share one request.
+  if (receiptsJson_[0] != '\0') {
+    const size_t receiptsLen = std::strlen(receiptsJson_);
+    if (used + receiptsLen < payloadCapacity - 1) {
+      std::memcpy(payload + used, ",", 1);
+      ++used;
+      std::memcpy(payload + used, receiptsJson_, receiptsLen);
+      used += receiptsLen;
+    }
+  }
   used += static_cast<size_t>(
       std::snprintf(payload + used, payloadCapacity - used,
                     ",\"measurements\":["));
@@ -185,7 +218,13 @@ bool SyncManager::syncOneBatch() {
 
   switch (result) {
     case hal::ISyncTransport::Result::Ok: {
-      lastAckedSeq_ = ackedSeq > maxSentSeq ? maxSentSeq : ackedSeq;
+      runPendingCommands();
+      // Clamp down to what was actually sent, then never move backwards. A
+      // late acknowledgement from a previous attempt must not rewind the
+      // watermark: the server dedupes on (node_id, sequence) anyway, so the
+      // only cost of rewinding would be resending rows we already stored.
+      const uint32_t bounded = ackedSeq > maxSentSeq ? maxSentSeq : ackedSeq;
+      lastAckedSeq_ = bounded > lastAckedSeq_ ? bounded : lastAckedSeq_;
       saveWatermark();
       failures_ = 0;
       lastSyncUtcMs_ = clock_.utcMs();

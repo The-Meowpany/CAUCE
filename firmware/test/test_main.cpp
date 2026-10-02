@@ -14,9 +14,11 @@ void registerApiTests();
 void registerSyncTests();
 void registerOtaTests();
 void registerOtaRollbackTests();
+void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerDiagnosticsTests();
 void registerDeepSleepTests();
+void registerCommandTests();
 
 int main() {
   UNITY_BEGIN();
@@ -34,8 +36,10 @@ int main() {
   registerSyncTests();
   registerOtaTests();
   registerOtaRollbackTests();
+  registerOtaBootConfirmTests();
   registerLoRaTests();
-registerDiagnosticsTests();
+  registerDiagnosticsTests();
   registerDeepSleepTests();
+  registerCommandTests();
   return UNITY_END();
 }

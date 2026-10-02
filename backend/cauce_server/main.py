@@ -7,6 +7,7 @@ from . import db
 from .alerts import router as alerts_router
 from .api import router
 from .calibration import router as calibration_router
+from .commands import router as commands_router
 from .config import settings
 from .coverage import router as coverage_router
 from .dashboard import router as dashboard_router
@@ -45,7 +46,8 @@ def healthz() -> dict:
     measurements = query("SELECT COUNT(*) AS c FROM measurements")
     tables = {}
     for name in ("sites", "interventions", "sync_batches", "alert_rules",
-                 "alert_log"):
+                 "alert_log", "commands", "calibration",
+                 "maintenance_events", "agg_hourly"):
         try:
             tables[name] = query(f"SELECT COUNT(*) AS c FROM {name}")[0]["c"]
         except Exception:
@@ -74,3 +76,4 @@ app.include_router(legal_router)
 app.include_router(coverage_router)
 app.include_router(fleet_router)
 app.include_router(calibration_router)
+app.include_router(commands_router)

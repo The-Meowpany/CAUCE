@@ -21,6 +21,8 @@ class ManualClock final : public IClock {
     mono_ += delta;
     if (valid_) utc_ += delta;
   }
+  // A manual clock advances virtual time rather than blocking.
+  void sleepMs(uint32_t durationMs) override { advanceMs(durationMs); }
   void invalidateTime() {
     valid_ = false;
     utc_ = 0;

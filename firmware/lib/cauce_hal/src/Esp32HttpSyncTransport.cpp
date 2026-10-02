@@ -31,6 +31,7 @@ ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
   const int code = http.POST(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(jsonPayload)),
                              static_cast<size_t>(length));
   Result result = Result::ServerError;
+  lastCommands_.clear();
   if (code == 200) {
     const String body = http.getString();
     JsonDocument doc;
@@ -46,6 +47,18 @@ ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
       } else {
         result = Result::Rejected;
       }
+      // Downlink travels in the acknowledgement response: no extra round trip
+      // and no extra radio wakeup on the node.
+      JsonArray commands = doc["commands"];
+      if (commands) {
+        for (JsonVariant item : commands) {
+          const uint32_t id = item["command_id"] | 0u;
+          const char* kindText = item["kind"] | "";
+          const char* payloadText = item["payload"] | "";
+          if (id == 0 || kindText[0] == '\0') continue;
+          lastCommands_.add(id, kindText, payloadText);
+        }
+      }
     }
   } else if (code == 401 || code == 403) {
     result = Result::AuthFailed;
@@ -56,6 +69,11 @@ ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
   }
   http.end();
   return result;
+}
+
+ISyncTransport::Result Esp32HttpSyncTransport::fetchCommands(CommandBatch& out) {
+  out = lastCommands_;
+  return Result::Ok;
 }
 
 }  // namespace cauce::hal

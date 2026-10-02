@@ -63,7 +63,8 @@ LAN**. Caddy terminates TLS and is the only published port:
 
 ```bash
 cd deployment
-export CAUCE_DOMAIN=cauce.local          # hostname the nodes will use
+export CAUCE_DOMAIN=cauce.example.org      # hostname the nodes will use
+export ACME_EMAIL=ops@cauce.example.org    # lets Let's Encrypt warn you
 docker compose up -d --build
 ```
 
@@ -75,22 +76,32 @@ What this buys and what it costs:
 - Batches are signed per device (HMAC-SHA256) as well as encrypted; TLS
   does not replace signing, and signing does not replace TLS.
 
-**Certificate for a LAN-only pilot.** The default `tls internal` makes
-Caddy issue from its own local CA. Export the root once and install it on
-every node and on the operator machine, otherwise the nodes reject the
-batch:
+**Certificate modes.** `CAUCE_TLS_MODE` picks one, and leaving it empty is
+the default:
 
-```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
-```
+- **Empty (recommended).** `tls` takes no argument, so Caddy solves a real
+  ACME certificate for `CAUCE_DOMAIN` and renews it unattended. All the
+  deployment needs is a public DNS name pointing at the host and ports 80
+  and 443 reachable.
+- **`internal`.** For a pilot with no public DNS name. Caddy issues from
+  its own local CA, and you then have to trust that CA everywhere:
 
-**Certificate for a public name.** Delete the `tls internal` line from
-`Caddyfile`, set `ACME_EMAIL`, and Caddy obtains and renews a real
-certificate unattended. `CAUCE_DOMAIN` must resolve publicly.
+  ```bash
+  export CAUCE_TLS_MODE=internal
+  docker compose up -d
+  docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
+  ```
+
+  Install `cauce-root.crt` on every node and on the operator machine,
+  otherwise the nodes reject the batch.
+
+There is deliberately no third mode. Pinning a self-signed certificate per
+node is more operational work than either of the above, and a certificate
+nobody rotates quietly becomes a certificate nobody trusts.
 
 Node side: point `sync_server_url` at `https://CAUCE_DOMAIN`, and install
-the root certificate on the ESP32 if it is not a publicly trusted CA. From
-there the checklist item "backend reachable over TLS" is satisfied.
+the root certificate on the ESP32 only if you chose `internal`. From there
+the checklist item "backend reachable over TLS" is satisfied.
 
 ## 3. Prepare each node
 

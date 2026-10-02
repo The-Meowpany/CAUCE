@@ -17,8 +17,10 @@ services:
     restart: unless-stopped
 
   # TLS terminator. The central never leaves this network unencrypted.
-  # Set CAUCE_DOMAIN to the hostname the nodes use; set CAUCE_TLS_INTERNAL=1
-  # for a pilot without a public DNS name.
+  # Set CAUCE_DOMAIN to the hostname the nodes use. Leave CAUCE_TLS_MODE empty
+  # and set ACME_EMAIL to get a real ACME certificate; set
+  # CAUCE_TLS_MODE=internal only when there is no public DNS name and the nodes
+  # will be given Caddy's local root certificate instead.
   caddy:
     image: caddy:2-alpine
     depends_on:
@@ -29,7 +31,8 @@ services:
       - "8443:8443"
     environment:
       CAUCE_DOMAIN: ${CAUCE_DOMAIN:-cauce.local}
-      ACME_EMAIL: ${ACME_EMAIL:-ops@cauce.local}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      CAUCE_TLS_MODE: ${CAUCE_TLS_MODE:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

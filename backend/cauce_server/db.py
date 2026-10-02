@@ -70,6 +70,37 @@ CREATE TABLE IF NOT EXISTS sync_batches (
 
 CREATE INDEX IF NOT EXISTS idx_sync_node_ts ON sync_batches(node_id, received_at_utc_ms);
 
+-- Downlink. A command is identified by the idempotency key the caller chose,
+-- so re-posting the same intent can never actuate twice. `delivered_utc_ms`
+-- stays NULL until the node reports the command in a /v1/sync round trip,
+-- which is what makes an undeliverable command visible instead of silently
+-- pending forever.
+CREATE TABLE IF NOT EXISTS commands (
+    command_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at_utc_ms INTEGER NOT NULL,
+    expires_at_utc_ms INTEGER,
+    delivered_utc_ms INTEGER,
+    acked_utc_ms INTEGER,
+    result TEXT,
+    UNIQUE (node_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_commands_pending
+    ON commands(node_id, delivered_utc_ms, command_id);
+
+CREATE TABLE IF NOT EXISTS command_receipts (
+    node_id TEXT NOT NULL,
+    command_id INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    detail TEXT,
+    at_utc_ms INTEGER NOT NULL,
+    PRIMARY KEY (node_id, command_id, state)
+);
+
 CREATE TABLE IF NOT EXISTS agg_hourly (
     node_id TEXT NOT NULL,
     variable TEXT NOT NULL,

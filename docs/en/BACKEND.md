@@ -94,6 +94,41 @@ is usually about placement, not proof. INVALID/MISSING/ESTIMATED are
 excluded from the math; SUSPECT counts but its share is reported next
 to the result.
 
+## Downlink
+
+The central can send instructions to a node that already reports up. It
+travels in the same `/v1/sync` response that acknowledges a batch, so it
+adds no extra radio wakeup and no new failure mode on the node.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/v1/nodes/{id}/commands` | Queue a command. Admin token |
+| GET | `/v1/nodes/{id}/commands` | List with `pending` / `delivered` / `acked` / `expired` state |
+
+Two properties make it safe to retry, which is the only property that
+matters when the far end is an offline-first device:
+
+- **Idempotency.** `(node_id, idempotency_key)` is unique. Re-posting the
+  same key returns the original command with `created: false` instead of
+  queueing a second one. Reusing a key with a *different* body is a `409`,
+  because that is a client bug and silently ignoring it would hide it.
+- **Honest delivery.** A command stays `pending` until the node reports it
+  in a `/v1/sync` round trip, becomes `delivered` when it arrives, and
+  `acked` only when the node sends an outcome. An expired command stops
+  being offered. Nothing is reported as done on the strength of having
+  been queued.
+
+The node answers with `command_receipts` in its next batch. A receipt for
+another node's command, or for a command that does not exist, is counted
+and ignored: the node is an authenticated peer but not an authority on
+someone else's command.
+
+Kinds are deliberately small and side-effect free: `set_sampling_interval`,
+`set_sync_interval`, `request_resync`, `set_led_mode`. The shipped node
+validates their arguments and reports back; it does not reconfigure itself
+from the field. Actuation belongs with hardware that can be actuated.
+
+
 ## Calibration
 
 The central owns calibration: `measurements.value` stays raw and the
@@ -151,7 +186,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 116 tests
+pytest tests -q                      # 127 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 

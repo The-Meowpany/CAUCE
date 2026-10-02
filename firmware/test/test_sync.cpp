@@ -5,6 +5,7 @@
 
 #include <unity.h>
 
+#include "cauce/app/CommandExecutor.h"
 #include "cauce/app/SyncManager.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
@@ -23,6 +24,8 @@ class ScriptedTransport final : public hal::ISyncTransport {
   std::vector<std::string> signatures;
   Result nextResult{Result::Ok};
   int okCallsRemaining{-1};
+  // Downlink the "central" hands back on the next successful round trip.
+  hal::CommandBatch commandsToDeliver;
 
   void configure(const char*, const char*) override {}
 
@@ -34,6 +37,12 @@ class ScriptedTransport final : public hal::ISyncTransport {
     if (okCallsRemaining > 0) --okCallsRemaining;
     if (nextResult != Result::Ok) return nextResult;
     ackedOut = maxSeqOf(payload);
+    return Result::Ok;
+  }
+
+  Result fetchCommands(hal::CommandBatch& out) override {
+    out = commandsToDeliver;
+    commandsToDeliver.clear();
     return Result::Ok;
   }
 
@@ -359,6 +368,97 @@ void test_node_id_escaped_in_sync_envelope() {
                            payload.substr(0, 80).c_str());
 }
 
+int g_downlinkCalls = 0;
+char g_downlinkDetail[64] = {0};
+
+bool downlinkHandler(const char* payload, char* detailOut, size_t cap) {
+  ++g_downlinkCalls;
+  copyString(g_downlinkDetail, sizeof(g_downlinkDetail), payload);
+  copyString(detailOut, cap, "handled");
+  return true;
+}
+
+struct DownlinkRig {
+  LogStorageRepository store{fs, "data_sync"};
+  ScriptedTransport transport;
+  Logger logger{sink};
+  CommandExecutor executor{fs, logger, "/state/applied_commands"};
+  SyncManager manager;
+
+  DownlinkRig()
+      : manager(store, transport, syncClock, logger, fs, kStatePath) {
+    store.open();
+    manager.setNodeId("CAUCE-001");
+    manager.configureEndpoint("http://central.example/v1/sync", "");
+    manager.setCommandExecutor(&executor);
+    executor.setHandler("request_resync", downlinkHandler);
+    executor.loadApplied();
+    manager.loadState();
+  }
+};
+
+void test_downlink_command_is_executed_and_reported_back() {
+  wipeSyncData();
+  g_downlinkCalls = 0;
+  g_downlinkDetail[0] = '\0';
+  DownlinkRig rig;
+
+  rig.store.append(makeM(1, 1787356800000ULL));
+  rig.transport.commandsToDeliver.add(500, "request_resync", "{\"why\":\"test\"}");
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1, g_downlinkCalls);
+  TEST_ASSERT_EQUAL_STRING("{\"why\":\"test\"}", g_downlinkDetail);
+
+  // The receipt travels with the next batch, not the one that delivered it.
+  rig.store.append(makeM(2, 1787356860000ULL));
+  syncClock.advanceMs(300000);
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(2u, rig.transport.calls.size());
+  const std::string& second = rig.transport.calls[1];
+  TEST_ASSERT_TRUE(second.find("\"command_receipts\"") != std::string::npos);
+  TEST_ASSERT_TRUE(second.find("\"command_id\":500") != std::string::npos);
+  TEST_ASSERT_TRUE(second.find("\"state\":\"acked\"") != std::string::npos);
+}
+
+void test_downlink_command_is_not_executed_twice_across_boots() {
+  wipeSyncData();
+  g_downlinkCalls = 0;
+  DownlinkRig rig;
+
+  rig.store.append(makeM(1, 1787356800000ULL));
+  rig.transport.commandsToDeliver.add(600, "request_resync", "{}");
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1, g_downlinkCalls);
+
+  // The central keeps offering it until it sees the receipt.
+  rig.store.append(makeM(2, 1787356860000ULL));
+  rig.transport.commandsToDeliver.add(600, "request_resync", "{}");
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1, g_downlinkCalls);
+
+  // A reboot must not re-run it either: the id is in flash.
+  DownlinkRig rebooted;
+  TEST_ASSERT_TRUE(rebooted.executor.wasApplied(600));
+  rebooted.store.append(makeM(3, 1787356920000ULL));
+  rebooted.transport.commandsToDeliver.add(600, "request_resync", "{}");
+  rebooted.manager.onNetworkConnected();
+  rebooted.manager.tick();
+  TEST_ASSERT_EQUAL(1, g_downlinkCalls);
+}
+
+void test_sync_without_an_executor_still_carries_no_receipts() {
+  wipeSyncData();
+  Rig rig;
+  rig.store.append(makeM(1, 1787356800000ULL));
+  rig.manager.onNetworkConnected();
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(1u, rig.transport.calls.size());
+  TEST_ASSERT_TRUE(rig.transport.calls[0].find("command_receipts") ==
+                   std::string::npos);
+}
+
 void registerSyncTests() {
   UNITY_BEGIN();
   RUN_TEST(test_idle_when_disconnected_or_empty);
@@ -373,5 +473,8 @@ void registerSyncTests() {
   RUN_TEST(test_no_device_secret_sends_unsigned);
   RUN_TEST(test_sync_interval_setter_clamps_and_applies);
   RUN_TEST(test_node_id_escaped_in_sync_envelope);
+  RUN_TEST(test_downlink_command_is_executed_and_reported_back);
+  RUN_TEST(test_downlink_command_is_not_executed_twice_across_boots);
+  RUN_TEST(test_sync_without_an_executor_still_carries_no_receipts);
   UNITY_END();
 }

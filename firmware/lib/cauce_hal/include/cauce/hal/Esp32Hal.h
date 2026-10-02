@@ -18,6 +18,7 @@ class Esp32Clock final : public IClock {
   uint64_t utcMs() const override;
   bool utcTimeValid() const override;
   void setUtcMs(uint64_t epochMs) override;
+  void sleepMs(uint32_t durationMs) override;
 
  private:
   mutable uint64_t lastUtcMs_;

@@ -119,23 +119,62 @@ did the pieces that decide whether a field deployment is survivable:
 - **Long-window analytics**: `granularity=auto` answers a 30-day
   request from the `agg_hourly` buckets instead of streaming every raw
   row, and says in the response which granularity it used.
+- **Downlink, idempotent by construction.** The central queues a command
+  per `(node_id, idempotency_key)` and hands it to the node in the same
+  `/v1/sync` response that acknowledges a batch, so it costs no extra
+  radio wakeup. The node remembers applied ids in flash and reports a
+  receipt; the central re-offers the command until it arrives. Delivery
+  is honest: `pending` means nobody confirmed it, `expired` means it aged
+  out, and neither is quietly reported as done. Kinds shipped are
+  validation-only (`set_sampling_interval`, `set_sync_interval`,
+  `request_resync`, `set_led_mode`) — they check their arguments and
+  report, but do not reconfigure the running node, because a command
+  that could stop a node reporting is one nobody should send by accident.
+  Real actuation waits for hardware that can be actuated.
+- **OTA rollback now wired.** `OtaBootConfirm` keeps a boot-attempt
+  counter in flash and marks the image valid once the node proves it can
+  store a measurement, or rolls back after three bad boots. Without it
+  an image that crashed on the first tick would stay installed forever.
 
 Still open here:
 
-- **OTA rollback on hardware.** The decision FSM and the rollback
-  policy are host-tested and the two-slot partition table ships, but
-  nobody has flashed a board, marked an image valid, or watched a bad
-  image roll back. Until that happens, updates need physical access.
+- **OTA rollback on hardware.** The policy, the counter and the ESP32
+  partition calls are wired and host-tested, but nobody has flashed a
+  board, marked an image valid, or watched a bad image roll back. Until
+  that happens, updates need physical access.
 - **Calibration uncertainty.** The central applies offsets and
   scales correctly, but nothing carries an uncertainty estimate and
   there is no formal procedure. Until then a calibrated reading is a
   better relative comparison, not a traceable measurement.
 - **Deep sleep power measurement.** The policy is tested; the savings
   are not.
-- A real certificate if the central is ever exposed publicly.
+- A real certificate if the central is ever exposed publicly — the
+  deployment gets ACME by default now, so this is a DNS problem, not a
+  code one.
+- LoRa still sends raw JSON within the payload budget instead of the
+  68-byte frame M2 describes. Acknowledgement is now real, but the
+  compact encoding and its fragmentation are not written.
 
 ## Non-goals for now
 
-Full mesh routing, firmware OTA over LoRa, downlink control loops,
-MQTT/CoAP on constrained nodes, multi-region LoRaWAN roaming. Each of
-these has been suggested at least once; each waits its turn.
+Full mesh routing, firmware OTA over LoRa, MQTT/CoAP on constrained nodes,
+multi-region LoRaWAN roaming, asymmetric signatures. Each has been
+suggested at least once; each waits its turn.
+
+Two of them changed status when the interfaces were examined:
+
+- **Downlink control loops** were a non-goal and are no longer one, at the
+  transport level. `ILoRaRadio` and `ISyncTransport` were both
+  send-only, which is what actually blocked it; both now have a receive
+  path. What shipped is delivery and idempotency, not actuation: see M5.
+- **Peer-to-peer exchange** is still a non-goal, and adding `receive()`
+  did not change that. A radio that can hear a neighbour is not a mesh;
+  it is the prerequisite for one, and the reason it is cheap to defer
+  is that the sync path is already idempotent.
+
+Ed25519 stays out for a concrete reason rather than a taste one: the
+firmware has SHA-256 and HMAC and no bignum, so curve arithmetic would be
+written from scratch on a part with no room to review it. Symmetric
+per-device keys plus TLS cover the pilot threat model; a signature scheme
+is worth it when there is a key-distribution problem to solve that
+symmetry cannot.

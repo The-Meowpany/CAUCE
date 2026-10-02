@@ -218,7 +218,7 @@ Following standard taxonomy:
 |---|---|---|
 | Centralized | One point owns state and service; others are dependent peripherals | No: each node functions without the center |
 | Distributed | State spread across cooperating nodes toward common goal | Partially: multiple nodes own state, but no direct peer cooperation exists |
-| Purely decentralized | Equivalent peers coordinate without authority | Not implemented: no node↔node exchange exists |
+| Purely decentralized | Equivalent peers coordinate without authority | Not implemented: no node↔node exchange exists. Downlink does not change this, because every command still travels through the central |
 | Hybrid (federated) | Full border autonomy + optional central services | **Yes: most accurate description** |
 
 Terminological conclusion: CAUCE is a **hybrid system with full edge autonomy**. Decentralization exists in the *data control* plane (each node is authority and custodian); analytical coordination remains optionally centralizable. Calling the current system "purely decentralized" would be imprecise.
@@ -287,7 +287,8 @@ Backoffs: network 5s→300s exponential; sync 10s→1800s exponential; auth 900s
 
 - **[A] Generic resources**: the variable–unit pair and quality states are climate-independent; ALEXANDRA can be read as a general telemetry-resource exchange schema signed by producer+sequence (§14).
 - **[F] Peer-to-peer exchange**: mDNS discovery, ESP-NOW transport, node↔node replication and CRDT merge do not exist in the codebase; proposed evolution.
-- **[F] Cryptographic trust**: asymmetric signatures (Ed25519) for batches and OTA manifests are proposed; current integrity-at-rest uses CRC (detection only) and authentication uses symmetric HMAC.
+- **[I] Cryptographic trust**: asymmetric signatures (Ed25519) for batches and OTA manifests are proposed; current integrity-at-rest uses CRC (detection only) and authentication uses symmetric HMAC. Deferred for a stated reason rather than a preference: the firmware provides SHA-256 and HMAC with no bignum arithmetic, so curve operations would be written from scratch on a part with no room to review them, while per-device symmetric keys plus TLS already cover the pilot threat model.
+- **[I] Downlink channel**: node-to-central delivery and idempotency ship (`POST /v1/nodes/{id}/commands`, carried in the `/v1/sync` response, applied ids persisted in flash, receipts reported back). Actuation does not: the shipped kinds validate arguments and report. This required first giving `ILoRaRadio` and `ISyncTransport` a receive path, since both were send-only.
 
 # 14. Resource model
 
@@ -347,7 +348,7 @@ Timestamps in ms UTC; without trusted source stored as 0 with `time_uncertain` f
 
 **Implemented**: admin tokens stored only as SHA-256 (NIST-vector verified), compared constant-time on both node and server; strict validation of all external input (ranges, bounded lengths); static buffers with zero hot-path allocations; public-read/authenticated-write separation; fail-closed (POST /config without token → 503); per-IP rate limiting with bounded SQLite-backed memory on every endpoint; secret masking in GET `/config`; minimum privacy (environmental telemetry + node identifiers only); **per-device HMAC identity** with provisioning endpoint and raw-body signature verification; **OTA manifest authentication gate** before download acceptance.
 
-**Known limitations**: transport encryption now terminates at a reverse proxy shipped with the project (`deployment/Caddyfile`, automatic internal CA, central bound to loopback), but plain HTTP on a bare LAN deployment remains possible and a public exposure would require a real certificate; node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
+**Known limitations**: transport encryption terminates at a reverse proxy shipped with the project (`deployment/Caddyfile`), which obtains a real ACME certificate by default and can fall back to an internal CA with `CAUCE_TLS_MODE=internal`, with the central bound to loopback; plain HTTP on a bare LAN deployment remains possible and a public exposure needs a public DNS name; node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
 
 # 20. Environmental use case
 
@@ -383,7 +384,7 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
 | Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
 | Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
-| Maintainability | 264 automated tests (148 firmware, 116 backend); CI 6 jobs; reproducible docs | repository |
+| Maintainability | 303 automated tests (176 firmware, 127 backend); CI 6 jobs; reproducible docs | repository |
 | Cost | BOM 13–32 USD/node multi-vendor | HARDWARE.md |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
@@ -411,12 +412,12 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 
 1. **ALEXANDRA [F]**: peer-to-peer exchange via ESP-NOW/mDNS with sequence-based merge; Ed25519-signed manifests/batches; CBOR/CoAP optional transport.
 2. **Physical bench**: BME280/LittleFS/Wi-Fi validation; instrumented power-cut trials; enabling deep sleep once its power saving is measured.
-3. **OTA closure**: the ESP32 HTTP reader and manifest signing ship and the download no longer blocks the scheduler; post-boot boot-counter confirmation and the physical flash/rollback trial remain.
+3. **OTA closure**: the ESP32 HTTP reader, manifest signing and post-boot boot-counter confirmation ship, with the attempt counter persisted in flash; the download no longer blocks the scheduler. Only the physical flash and rollback trial remains.
 4. **Progressive security**: TLS termination and per-device derived tokens ship; asymmetric image signing and granular central authorization remain.
 5. **Time**: NTP discipline and central temporal reconstruction ship with an honest margin-of-error statement; tightening that margin remains.
 6. **Persistent central analytics**: hourly aggregates with `auto` selection and calibration-normalized comparison ship; aggregates finer-grained or coarser than hourly remain.
 7. **New topologies**: LoRa gateways for sites without Wi-Fi; regional central replicas.
-8. **Actuators**: resource model extension to idempotent commands with confirmation.
+8. **Actuators**: the idempotent command channel with confirmation ships; only the handlers are missing, and they should stay validation only until there is hardware whose actuation is safe to repeat.
 
 # 26. Conclusions
 
@@ -425,7 +426,7 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
 - **What role ALEXANDRA plays**: formal exchange contract —versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format—; core implemented and verified; peer-to-peer and asymmetric-crypto extensions are proposed evolution.
-- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —264 verifications (148 firmware, 116 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —303 verifications (176 firmware, 127 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
 - **Limitations**: pending physical validation, absence of asymmetric signing, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
@@ -550,10 +551,10 @@ Frozen detection: streak ≥6 readings identical within ε = 0.01. Maximum toler
 | `test_security` | 16 |
 | `test_sync` | 12 |
 | `test_main` (validation, codec, storage, config, BME280, scheduler, diagnostics, deep sleep) | 36 |
-| **Total firmware (host)** | **148** |
-| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract | **116** |
+| **Total firmware (host)** | **176** |
+| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract, downlink commands | **127** |
 | Integration E2E | 4 phases + SQLite assertions |
-| **Grand total** | **264+** |
+| **Grand total** | **303+** |
 
 ## Annex E. Node configuration (extract)
 
@@ -566,6 +567,10 @@ segment_max_bytes=65536
 wifi_enabled=0
 deep_sleep_enabled=0
 admin_token_sha256=<sha-256 hex>
+# persisted beside it, not user config:
+# /state/sync_state        last_acked_seq
+# /state/ota_boot          boot_attempts
+# /state/applied_commands applied=<command_id>[;<command_id>...]
 sync_device_key=<per-device HMAC secret>
 thr_range_min_air_temperature=-40.00
 ```
