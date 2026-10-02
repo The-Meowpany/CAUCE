@@ -1,10 +1,10 @@
-﻿# CAUCE: A Distributed Microcontroller Infrastructure for Offline-First Edge Computing — Environmental Hyperlocal Monitoring as Case Study and ALEXANDRA as Exchange Protocol
+# CAUCE: A Distributed Microcontroller Infrastructure for Offline-First Edge Computing — Environmental Hyperlocal Monitoring as Case Study and ALEXANDRA as Exchange Protocol
 
 ---
 
 ## Abstract
 
-This work presents the design, implementation and empirical evaluation of CAUCE, a distributed infrastructure of ESP32 microcontrollers that acquires, validates, stores and serves environmental data entirely at the network edge, without requiring permanent Internet connectivity or a central server for any essential function. The exchange of information between nodes and optional central infrastructure is formalized as **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*), a protocol comprising three verifiable subsystems: (i) a versioned REST resource interface on each node, (ii) an idempotent batch synchronization protocol keyed by `(node_id, sequence)` with persistent watermarks and honest acknowledgements, and (iii) a CRC-32-framed append-only binary storage format with corruption-sealing semantics. The system is validated through 105 firmware unit/integration tests running on host, 26 backend API tests including cryptographic verification vectors, an automated end-to-end pipeline executing a real C++ synchronization client against a live FastAPI server with direct SQLite assertions, cross-compilation to the ESP32 target, and a continuous integration workflow with six parallel jobs. Results demonstrate that the conjunction of scientific data validation, tamper-evident local storage, embedded web service, authenticated device identity and exactly-once remote ingestion is achievable on a sub-USD 35 microcontroller platform without an RTOS, while maintaining a fully operational local dashboard during all background operations including over-the-air firmware updates.
+This work presents the design, implementation and empirical evaluation of CAUCE, a distributed infrastructure of ESP32 microcontrollers that acquires, validates, stores and serves environmental data entirely at the network edge, without requiring permanent Internet connectivity or a central server for any essential function. The exchange of information between nodes and optional central infrastructure is formalized as **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*), a protocol comprising three verifiable subsystems: (i) a versioned REST resource interface on each node, (ii) an idempotent batch synchronization protocol keyed by `(node_id, sequence)` with persistent watermarks and honest acknowledgements, and (iii) a CRC-32-framed append-only binary storage format with corruption-sealing semantics. On top of that core the implementation adds a runtime calibration overlay, bounded-cost analytics through materialized hourly and daily aggregates with automatic granularity selection, an at-least-once downlink command channel with end-to-end idempotency, a fragmented binary carrier for narrowband radio with gateway forwarding and acknowledgement, TLS termination, and per-principal authorization with capability scopes and site scoping. The system is validated through 202 firmware unit/integration tests running on host, 192 backend API tests including cryptographic verification vectors and cross-language wire-format vectors, an automated end-to-end pipeline executing a real C++ synchronization client against a live FastAPI server with direct SQLite assertions, cross-compilation to the ESP32 target, and a continuous integration workflow with six parallel jobs. Results demonstrate that the conjunction of scientific data validation, tamper-evident local storage, embedded web service, authenticated device identity and effectively-once remote ingestion -at-least-once delivery made idempotent by `(node_id, sequence)` deduplication, rather than a stronger transport guarantee- is achievable on a sub-USD 35 microcontroller platform without an RTOS, while maintaining a fully operational local dashboard during all background operations including over-the-air firmware updates. Peer-to-peer exchange and asymmetric signatures are specified as future evolution of the protocol and are deliberately not claimed as present; the system is a hybrid with full edge autonomy, not a mesh.
 
 **Keywords:** embedded systems; microcontrollers; edge computing; IoT; distributed systems; offline-first; eventual consistency; wireless sensor networks; ESP32; environmental monitoring; HMAC authentication; append-only storage; idempotent synchronization.
 
@@ -20,7 +20,7 @@ The contribution is twofold:
 
 **Technological**: CAUCE executes on a microcontroller with 520 KB SRAM and no operating system a complete pipeline of acquisition, statistical validation, integrity-verifiable persistence, embedded web API, local user interface and idempotent eventual synchronization — functions conventionally delegated to higher layers. Additionally, the system implements per-device HMAC-SHA-256 batch signing, progressive (non-blocking) over-the-air update state machine, materialized hourly analytics aggregates on the central server, and automated temporal reconstruction of records captured without trusted clock source.
 
-**Methodological**: the system is covered by automated tests executable without hardware (105 firmware + 26 backend = 131 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
+**Methodological**: the system is covered by automated tests executable without hardware (202 firmware + 192 backend = 394 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
 
 # 2. Problem Statement
 
@@ -239,6 +239,10 @@ Terminological conclusion: CAUCE is a **hybrid system with full edge autonomy**.
 | A-6 | Versioning | `protocol_version=1` in envelope and frame; unsupported versions explicitly rejected |
 | A-7 | Safe degradation | Exponential backoff on network errors; fixed long backoff on auth failure; definitive halt on semantic rejection |
 | A-8 | Device authenticity | Each batch carries HMAC-SHA-256 over the raw body using a per-device provisioning key; server verifies constant-time |
+| A-9 | Stable iteration over a moving target | Opaque cursors (`(timestamp_utc_ms, sequence)` for measurements, `node_id` for the fleet) so a long read stays consistent while the fleet keeps writing; `limit`/`offset` retained for compatibility |
+| A-10 | Bounded cost over long horizons | Materialized hourly and daily aggregates, with `granularity=auto` selecting the cheapest honest answer and declaring in the response which one it used |
+| A-11 | At-least-once downlink | A command is identified by `(node_id, idempotency_key)`, re-offered until acknowledged, executed at most once by the node through flash-persisted applied ids; delivery state is reported honestly as pending, delivered, acked or expired rather than assumed |
+| A-12 | Derived, never rewritten | Calibration is an overlay applied on read; `measurements.value` stays raw, so a recalibration replays over history without touching a node |
 
 ## 13.2 Messages [I]
 
@@ -260,6 +264,38 @@ X-CAUCE-Signature: <64-char hex HMAC-SHA256(device_key, raw_body)>
 ```
 
 Central→node ack: `200 {"acknowledged_sequence":1842}` · `401` invalid credentials/signature · `422` semantic rejection (client halts) · network errors → exponential backoff.
+
+The `200` also carries `"commands": [...]`, so downlink rides the round trip the
+node already makes and costs no extra radio wakeup. The node answers with
+`"command_receipts"` in its next batch, and a receipt naming another node's
+command is counted and ignored: a node is an authenticated peer, not an
+authority over someone else's command.
+
+Narrowband carrier (`transport: "lora"`) uses a binary frame rather than the JSON
+envelope. A measurement payload is 60 bytes and a LoRa uplink at SF9 carries 115,
+so a batch is fragmented across frames:
+
+```
+frame   0..1   magic 0xCA | version 1
+        2..3   batch_id        4      fragment_index
+        5      fragment_count  6..7   record_count (whole batch)
+        8..9   payload_bytes   10..   record payloads, 60 B each
+        last 2  CRC16-CCITT
+```
+
+The gateway reassembles, forwards one `POST /v1/sync` per batch, and
+acknowledges the highest sequence the server **durably stored** rather than the
+highest it received, so the node advances its watermark only for data that
+actually landed. Fragments that are foreign, duplicated or corrupt are refused
+rather than merged, because merging a bad fragment corrupts the batch silently.
+SF10 and below are refused rather than truncated: half a measurement is worse
+than none.
+
+The encoder (C++, firmware) and the decoder (Python, gateway) are independent
+implementations of this format, and the exact bytes are pinned as
+cross-language known-answer vectors in both directions, including the
+acknowledgement frame, so neither side can drift while still passing its own
+tests.
 
 Node REST resources: `/api/v1/node`, `/status`, `/measurements/latest`, `/measurements?from&to`, `/health`, `/config` (GET public; POST with Bearer→SHA-256), `/export?format=csv|json`. Exchange formats: CSV RFC 4180 and JSON array, both streamed paginated.
 
@@ -350,6 +386,8 @@ Timestamps in ms UTC; without trusted source stored as 0 with `time_uncertain` f
 
 **Known limitations**: transport encryption terminates at a reverse proxy shipped with the project (`deployment/Caddyfile`), which obtains a real ACME certificate by default and can fall back to an internal CA with `CAUCE_TLS_MODE=internal`, with the central bound to loopback; plain HTTP on a bare LAN deployment remains possible and a public exposure needs a public DNS name; node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
 
+**The gateway weakens A-8, and that is a design debt this project introduced on itself.** A-8 authenticates each batch with a per-device HMAC over the raw request body, so a gateway that forwards on a node's behalf must hold that node's `device_key`. The consequence is that a gateway is a trusted party equivalent to every node it serves: whoever compromises it can forge any of them. This is not visible in §13 because the gateway was not part of the original formulation; it was added by milestone M2, and the forwarding path was chosen because it required no change to the server's verification surface. Choosing the cheaper option over the one that preserves the property is a decision worth naming rather than absorbing. Two mitigations are enforced in the meantime: a gateway configured without a key does **not** silently downgrade a provisioned node to unsigned (the server returns 401, the gateway raises, nothing is acknowledged and the node keeps its rows), and per-principal authorization with `read`/`write`/`admin` scopes plus optional site scoping bounds what any single credential can reach. The structural fix is for the node to sign the compact frame itself and the server to verify against the frame rather than the reconstructed body; that moves the verification surface onto the wire format and is the first item of §25.
+
 # 20. Environmental use case
 
 Implemented variables: air temperature (−40..85 °C, ±5/min), relative humidity (0–100 %RH, ±20/min), pressure (300–1100 hPa, ±2/min), illuminance (0–200 000 lx), battery voltage (2.5–4.5 V). The architecture enables:
@@ -398,7 +436,7 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 # 24. Limitations
 
 1. **Hardware not physically validated**: everything runs on host or cross-compilation; real BME280, LittleFS, Wi-Fi radio and power cuts await bench testing.
-2. **Security**: TLS available in front of the central and HMAC-signed batches implemented, but no asymmetric signatures, self-declared node identity for unsigned nodes and open captive DNS remain.
+2. **Security**: TLS available in front of the central and HMAC-signed batches implemented, but no asymmetric signatures, self-declared node identity for unsigned nodes and open captive DNS remain. A LoRa gateway must hold the device key of every node it forwards for, so it is as trusted as those nodes: key distribution to gateways is an open problem, not a configuration detail (§19).
 3. **Energy**: deep sleep policy implemented and host-tested but disabled by default, so continuous operation is still incompatible with modest solar without specific sizing and bench measurement.
 4. **Open-scan O(file)**: acceptable to ≈10⁵ records; CK01 mitigates but scan fallback remains O(bytes).
 5. **Central analytics**: `granularity=auto` avoids O(n) past 7 days, but coverage accounting and explicit raw queries remain row-bound.
@@ -410,22 +448,52 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 
 # 25. Future work
 
-1. **ALEXANDRA [F]**: peer-to-peer exchange via ESP-NOW/mDNS with sequence-based merge; Ed25519-signed manifests/batches; CBOR/CoAP optional transport.
-2. **Physical bench**: BME280/LittleFS/Wi-Fi validation; instrumented power-cut trials; enabling deep sleep once its power saving is measured.
-3. **OTA closure**: the ESP32 HTTP reader, manifest signing and post-boot boot-counter confirmation ship, with the attempt counter persisted in flash; the download no longer blocks the scheduler. Only the physical flash and rollback trial remains.
-4. **Progressive security**: TLS termination and per-device derived tokens ship; asymmetric image signing and granular central authorization remain.
-5. **Time**: NTP discipline and central temporal reconstruction ship with an honest margin-of-error statement; tightening that margin remains.
-6. **Persistent central analytics**: hourly aggregates with `auto` selection and calibration-normalized comparison ship; aggregates finer-grained or coarser than hourly remain.
-7. **New topologies**: LoRa gateways for sites without Wi-Fi; regional central replicas.
-8. **Actuators**: the idempotent command channel with confirmation ships, and the LoRa path now carries a compact 68-byte frame whose forwarding loop is verified end to end against the central; what remains is the radio driver, the link budget, and the actuation handlers, which should stay validation only until there is hardware whose actuation is safe to repeat.
+Ordered by dependency rather than by size, because the first three change what
+the protocol can claim and the rest are engineering on a settled foundation.
 
+1. **Node-signed frames [F]**: the node signs the compact LoRa frame and the
+   server verifies against the frame instead of the reconstructed body. First
+   because it removes the one place where the implementation currently weakens
+   A-8 (see §19), and because it is the prerequisite that makes the next two
+   cheap instead of controversial.
+2. **Asymmetric signatures [F]**: Ed25519 over the same frame, with the node's
+   public key in its provisioning record. Once the frame is already signed this
+   substitutes one primitive for another, rather than introducing signing into
+   a protocol that has none. It answers the problem symmetric keys structurally
+   cannot: a party that must verify without being trusted to impersonate.
+3. **Peer-to-peer exchange [F]**: ESP-NOW/mDNS discovery and sequence-based
+   merge between equivalent nodes. Deferred longest precisely because the
+   receive path, cursors and idempotent ingestion it would rest on already
+   exist, which makes it an ordering decision rather than a foundation problem.
+   CBOR/CoAP remains optional transport.
+4. **Physical bench**: BME280, LittleFS and Wi-Fi validation; instrumented
+   power-cut trials; enabling deep sleep once its saving is measured.
+5. **Radio**: an SX1276 driver and a link budget. The frame format,
+   fragmentation, acknowledgement and the whole forwarding loop are verified
+   end to end against the server; only the air interface is unproven.
+6. **OTA closure**: the ESP32 HTTP reader, manifest signing and post-boot
+   boot-counter confirmation ship, with the attempt counter persisted in flash
+   and the download no longer blocking the scheduler. Only the physical flash
+   and rollback trial remain.
+7. **Granular authorization breadth**: per-principal scopes and site scoping
+   ship, and are applied to calibration, maintenance and commands; the
+   remaining read endpoints still run behind the shared gate.
+8. **Time**: NTP discipline and central temporal reconstruction ship with an
+   honest margin-of-error statement; tightening that margin remains.
+9. **Analytics**: hourly and daily aggregates with `granularity=auto` ship;
+   sub-hourly buckets remain, and are the only granularity that would cost
+   resolution rather than add speed.
+10. **Actuators**: the idempotent command channel with confirmation and the
+    compact LoRa carrier ship; what remains is the actuation handlers, which
+    should stay validation-only until there is hardware whose actuation is safe
+    to repeat.
 # 26. Conclusions
 
 - **What CAUCE is**: a distributed hybrid infrastructure of ESP32-based microstations whose primary use case is hyperlocal environmental monitoring, built as a generalizable edge acquisition–custody–exchange platform.
 - **What architecture it implements**: strict layers with hardware-independent pure domain; append-only persistence with per-record verifiable integrity; embedded API and UI; optional eventual synchronization; alternate-partition secure update.
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
-- **What role ALEXANDRA plays**: formal exchange contract —versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format—; core implemented and verified; peer-to-peer and asymmetric-crypto extensions are proposed evolution.
+- **What role ALEXANDRA plays**: formal exchange contract -versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format, opaque cursors for stable iteration, and at-least-once downlink with flash-persisted exactly-once application-; twelve principles are implemented and tested, while peer-to-peer exchange and asymmetric signatures remain specified future evolution. One implementation debt is recorded explicitly: the LoRa gateway must hold each node's device key to forward on its behalf, which weakens the device-authenticity principle until nodes sign frames directly (§19, §25).
 - **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —394 verifications (202 firmware, 192 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
 - **Limitations**: pending physical validation, absence of asymmetric signing, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
