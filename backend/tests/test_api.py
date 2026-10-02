@@ -1410,7 +1410,8 @@ def test_csv_export_format_survives_blocked_streaming(client):
     assert lines[0] == ('node_id,sensor_id,sequence,timestamp_utc_ms,'
                         'timestamp_iso,variable,value,unit,quality,'
                         'reason_bits,time_uncertain,calibrated_value,'
-                        'calibration_scale,calibration_offset')
+                        'calibration_scale,calibration_offset,'
+                        'calibration_uncertainty')
     assert len(lines) == 701
     first = lines[1].split(',')
     assert first[0] == 'CAUCE-001'
@@ -1609,17 +1610,20 @@ def test_csv_export_appends_calibrated_columns(client):
     client.post('/v1/sites', json={'site_id': 's1'})
     client.post('/v1/sync', json=sync_payload(
         _series('CAUCE-001', BASE_TS, 3, base=20.0), node_id='CAUCE-001'))
-    _calibrated_site(client, offset=-1.5)
+    _calibrated_site(client, offset=-1.5, uncertainty=0.3,
+                     uncertainty_kind='co_location_spread')
     text = client.get('/v1/nodes/CAUCE-001/export.csv').text
     lines = text.strip().splitlines()
     header = lines[0].split(',')
-    assert header[-3:] == ['calibrated_value', 'calibration_scale',
-                            'calibration_offset']
+    assert header[-4:] == ['calibrated_value', 'calibration_scale',
+                            'calibration_offset', 'calibration_uncertainty']
     row = lines[1].split(',')
     assert row[6] == '20.0'
     assert row[11] == '18.5'
     assert row[12] == '1.0'
     assert row[13] == '-1.5'
+    # scale is 1.0, so the recorded uncertainty passes through unchanged
+    assert row[14] == '0.3'
 
 
 def test_retired_calibration_is_not_applied(client):

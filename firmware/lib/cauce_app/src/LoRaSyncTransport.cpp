@@ -1,8 +1,212 @@
 #include "cauce/app/LoRaSyncTransport.h"
 
+#include <cstdlib>
 #include <cstring>
 
 namespace cauce::app {
+
+namespace {
+
+// Minimal reader for the flat record objects SyncManager emits. A full JSON
+// parser is not justified here: the producer is our own SyncManager and the
+// frame format only has room for a handful of fields anyway.
+//
+// Every lookup is bounded by [begin, end) so a field can only ever be read
+// from the object being parsed. A cursor that scanned the whole document would
+// silently return the first record's value for every record.
+class JsonCursor {
+ public:
+  JsonCursor(const char* data, size_t begin, size_t end)
+      : data_(data), begin_(begin), end_(end), cursor_(begin) {}
+
+  size_t position() const { return cursor_; }
+  bool atEnd() const { return cursor_ >= end_; }
+  char peek() const { return cursor_ < end_ ? data_[cursor_] : '\0'; }
+  void seek(size_t position) { cursor_ = position; }
+
+  // Locates the next '{' at or after the cursor and returns its index.
+  bool nextObject(size_t& startOut) {
+    while (cursor_ < end_ && data_[cursor_] != '{') ++cursor_;
+    if (cursor_ >= end_) return false;
+    startOut = cursor_;
+    return true;
+  }
+
+  // Steps past the closing '}' of the object that starts at `objectStart`.
+  size_t endOfObject(size_t objectStart) {
+    int depth = 0;
+    bool inString = false;
+    for (size_t i = objectStart; i < end_; ++i) {
+      const char c = data_[i];
+      if (inString) {
+        if (c == '\\') {
+          ++i;
+          continue;
+        }
+        if (c == '"') inString = false;
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+        continue;
+      }
+      if (c == '{') ++depth;
+      if (c == '}') {
+        --depth;
+        if (depth == 0) return i + 1;
+      }
+    }
+    return end_;
+  }
+
+  // Seeks to the value of `key` inside this object. Returns false when absent.
+  //
+  // The scan starts at the beginning of the object, not at the cursor: fields
+  // are looked up in whatever order the caller asks for, and the JSON order is
+  // not that order. A forward-only scan silently returns "absent" for any field
+  // that happens to appear earlier than the previous lookup, which is how a
+  // sequence number turns into a silent zero.
+  bool seekField(const char* key) {
+    const size_t keyLen = std::strlen(key);
+    for (size_t i = begin_; i + keyLen + 1 < end_; ++i) {
+      if (data_[i] != '"') continue;
+      if (std::strncmp(data_ + i + 1, key, keyLen) != 0) continue;
+      if (data_[i + 1 + keyLen] != '"') continue;
+      size_t j = i + 2 + keyLen;
+      while (j < end_ && (data_[j] == ' ' || data_[j] == ':')) ++j;
+      if (j >= end_) return false;
+      cursor_ = j;
+      return true;
+    }
+    return false;
+  }
+
+  uint32_t uintField(const char* key, uint32_t fallback) {
+    if (!seekField(key)) return fallback;
+    if (data_[cursor_] < '0' || data_[cursor_] > '9') return fallback;
+    return static_cast<uint32_t>(std::strtoul(data_ + cursor_, nullptr, 10));
+  }
+
+  int64_t intField(const char* key, int64_t fallback) {
+    if (!seekField(key)) return fallback;
+    return std::strtoll(data_ + cursor_, nullptr, 10);
+  }
+
+  float floatField(const char* key, float fallback) {
+    if (!seekField(key)) return fallback;
+    if (data_[cursor_] == 'n') return fallback;  // null
+    return static_cast<float>(std::strtod(data_ + cursor_, nullptr));
+  }
+
+  // Reads a quoted string, stopping at the object end so a hostile payload
+  // cannot walk off the buffer.
+  void stringField(const char* key, char* out, size_t capacity) {
+    out[0] = '\0';
+    if (!seekField(key)) return;
+    if (data_[cursor_] != '"') return;
+    ++cursor_;
+    size_t i = 0;
+    while (cursor_ < end_ && data_[cursor_] != '"' && i + 1 < capacity) {
+      out[i++] = data_[cursor_++];
+    }
+    out[i] = '\0';
+  }
+
+ private:
+  const char* data_;
+  size_t begin_;
+  size_t end_;
+  size_t cursor_;
+};
+
+Variable variableFromName(const char* name) { return parseVariable(name); }
+
+Quality qualityFromName(const char* name) {
+  for (uint8_t i = 0; i <= static_cast<uint8_t>(Quality::Missing); ++i) {
+    const Quality candidate = static_cast<Quality>(i);
+    const char* text = qualityName(candidate);
+    if (text != nullptr && std::strcmp(text, name) == 0) return candidate;
+  }
+  return Quality::Suspect;
+}
+
+}  // namespace
+
+size_t LoRaSyncTransport::parseBatchJson(const char* jsonPayload, size_t length,
+                                         Measurement* out, size_t capacity) {
+  if (jsonPayload == nullptr || out == nullptr || capacity == 0) return 0;
+  JsonCursor scanner(jsonPayload, 0, length);
+  if (!scanner.seekField("measurements")) return 0;
+
+  size_t written = 0;
+  size_t arrayStart = scanner.position();
+  // The array itself is the only place records live, so the scan is bounded to
+  // the matching bracket. Without that bound a `{` outside the array would be
+  // parsed as a record.
+  size_t arrayEnd = length;
+  int depth = 0;
+  bool inString = false;
+  for (size_t i = arrayStart; i < length; ++i) {
+    const char c = jsonPayload[i];
+    if (inString) {
+      if (c == '\\') {
+        ++i;
+        continue;
+      }
+      if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') {
+      inString = true;
+      continue;
+    }
+    if (c == '[') ++depth;
+    if (c == ']') {
+      --depth;
+      if (depth == 0) {
+        arrayEnd = i;
+        break;
+      }
+    }
+  }
+
+  JsonCursor cursor(jsonPayload, arrayStart, arrayEnd);
+  for (;;) {
+    size_t objectStart = 0;
+    if (!cursor.nextObject(objectStart)) break;
+    const size_t objectEnd = cursor.endOfObject(objectStart);
+    // Re-anchor on this object so no lookup can escape it.
+    JsonCursor record(jsonPayload, objectStart, objectEnd);
+    record.seek(objectStart);
+
+    Measurement m{};
+    record.stringField("node_id", m.nodeId, sizeof(m.nodeId));
+    record.stringField("sensor_id", m.sensorId, sizeof(m.sensorId));
+    char variable[16] = {0};
+    record.stringField("variable", variable, sizeof(variable));
+    char quality[16] = {0};
+    record.stringField("quality", quality, sizeof(quality));
+    m.sequence = record.uintField("sequence", 0);
+    m.timestampUtcMs =
+        static_cast<uint64_t>(record.intField("timestamp_utc_ms", 0));
+    m.value = record.floatField("value", 0.0f);
+    m.reasonBits = static_cast<uint8_t>(record.uintField("reason_bits", 0));
+    m.timeUncertain = record.uintField("time_uncertain", 0) != 0;
+    m.variable = variableFromName(variable);
+    m.quality = qualityFromName(quality);
+
+    // A record without a sequence or with a variable the frame cannot name is
+    // not something the compact frame can carry honestly, so it is dropped
+    // rather than framed as a zero.
+    if (m.sequence != 0 && m.variable != Variable::Unknown &&
+        written < capacity) {
+      out[written++] = m;
+    }
+
+    cursor.seek(objectEnd);
+  }
+  return written;
+}
 
 LoRaSyncTransport::LoRaSyncTransport(hal::ILoRaRadio& radio, hal::IClock& clock)
     : radio_(radio), clock_(clock) {}
@@ -61,6 +265,10 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
     const char* jsonPayload, size_t length, const char*, uint32_t,
     uint32_t& ackedSequenceOut) {
   confirmed_ = false;
+  // Every failure path returns without touching this again, so it must not
+  // arrive holding the caller's previous value: SyncManager would read that as
+  // progress the radio never made.
+  ackedSequenceOut = 0;
 
   if (!jsonPayload || length == 0 || length > maxPayloadBytes_) {
     return Result::NetworkError;
@@ -71,17 +279,42 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
   }
   if (!radio_.canSendNow()) return Result::NetworkError;
 
+  Measurement records[kMaxRecordsPerBatch];
+  const size_t count = parseBatchJson(jsonPayload, length, records,
+                                      kMaxRecordsPerBatch);
+  // A batch that did not survive the trip into the compact frame is not sent:
+  // reporting success would make the node drop rows nobody ever received.
+  if (count == 0) return Result::NetworkError;
+
   // Clear stale answers before transmitting, otherwise an acknowledgement
   // delayed from a previous attempt would be read as this one's.
   drainAcks();
 
-  if (!radio_.send(reinterpret_cast<const uint8_t*>(jsonPayload), length)) {
-    return Result::NetworkError;
+  const uint16_t batchId = static_cast<uint16_t>(nextBatchId_++);
+  LoRaBatchEncoder encoder(records, count, batchId);
+  uint8_t frame[256];
+  LoRaBatchHeader header{};
+  bool sentAny = false;
+  while (!encoder.done()) {
+    if (!encoder.nextFrame(frame, sizeof(frame), radioPayloadBytes_, header)) {
+      return Result::NetworkError;
+    }
+    if (!radio_.send(frame, frameSizeOf(header))) {
+      return Result::NetworkError;
+    }
+    sentAny = true;
+    if (!encoder.done()) {
+      // Pacing between fragments keeps the duty cycle inside the limit and
+      // gives the gateway a window to receive what it already has.
+      clock_.sleepMs(fragmentGapMs_);
+    }
   }
-  lastSendMonotonicMs_ = now;
+  if (!sentAny) return Result::NetworkError;
+
+  lastSendMonotonicMs_ = clock_.monotonicMs();
   everSent_ = true;
 
-  const uint64_t deadline = now + ackTimeoutMs_;
+  const uint64_t deadline = lastSendMonotonicMs_ + ackTimeoutMs_;
   uint8_t buffer[kAckFrameSize];
   uint32_t acked = 0;
   while (clock_.monotonicMs() < deadline) {
@@ -92,7 +325,8 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
       confirmed_ = true;
       return Result::Ok;
     }
-    const uint32_t elapsed = static_cast<uint32_t>(clock_.monotonicMs() - now);
+    const uint32_t elapsed =
+        static_cast<uint32_t>(clock_.monotonicMs() - lastSendMonotonicMs_);
     if (ackTimeoutMs_ - elapsed < ackPollIntervalMs_) break;
     clock_.sleepMs(ackPollIntervalMs_);
   }
@@ -101,6 +335,12 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
   // being silently dropped.
   ackedSequenceOut = 0;
   return Result::NetworkError;
+}
+
+size_t LoRaSyncTransport::frameSizeOf(const LoRaBatchHeader& header) {
+  // The trailer carries the CRC the gateway checks. Leaving it out of the
+  // length would send a frame the receiver must reject.
+  return LoRaBatchHeaderSize + LoRaTrailerSize + header.payloadBytes;
 }
 
 }  // namespace cauce::app

@@ -526,7 +526,7 @@ def analytics_summary(
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
-    if granularity not in ("auto", "raw", "hourly"):
+    if granularity not in ("auto", "raw", "hourly", "daily"):
         raise HTTPException(status_code=422, detail="invalid_granularity")
     calibration = calibration_for(node_id, variable)
 
@@ -536,11 +536,36 @@ def analytics_summary(
     elif to_utc_ms is not None:
         span_ms = to_utc_ms - (from_utc_ms or 0)
 
-    use_hourly = granularity == "hourly" or (
+    use_daily = granularity == "daily" or (
         granularity == "auto" and span_ms is not None
-        and span_ms >= HOURLY_MIN_SPAN_MS
-        and _hourly_coverage_ok(node_id, variable, from_utc_ms, to_utc_ms)
+        and span_ms >= DAILY_MIN_SPAN_MS
+        and _daily_coverage_ok(node_id, variable)
     )
+    use_hourly = not use_daily and (
+        granularity == "hourly" or (
+            granularity == "auto" and span_ms is not None
+            and span_ms >= HOURLY_MIN_SPAN_MS
+            and _hourly_coverage_ok(node_id, variable, from_utc_ms, to_utc_ms)
+        )
+    )
+    if use_daily:
+        raw_daily = _daily_stats(node_id, variable, from_utc_ms, to_utc_ms)
+        calibrated_daily = transform_stats(raw_daily, calibration)
+        return {
+            "node_id": node_id,
+            "variable": variable,
+            "metric_type": "derived",
+            "source": "materialized_daily",
+            "granularity": "daily",
+            "note": (
+                "descriptive statistics only; does not imply causality. "
+                "daily buckets: every intra-day peak and trough is invisible. "
+                "use granularity=hourly or raw to see within-day behaviour"
+            ),
+            "calibration": calibration_summary(calibration),
+            **({"calibrated": calibrated_daily} if calibration else {}),
+            **raw_daily,
+        }
     if use_hourly:
         raw_hourly = _hourly_stats(node_id, variable, from_utc_ms, to_utc_ms)
         calibrated_hourly = transform_stats(raw_hourly, calibration)
@@ -580,10 +605,46 @@ def analytics_summary(
 
 
 HOUR_MS = 3600000
+DAY_MS = 24 * HOUR_MS
 # Below a week the raw rows are cheap to read and give exact extremes, so
 # `auto` stays on raw. Above it the hourly buckets are the cheaper answer and
 # the response says which one it used.
 HOURLY_MIN_SPAN_MS = 7 * 24 * HOUR_MS
+# Past a season the question is a trend, not an extreme, and daily buckets
+# turn ~500 hourly rows into ~90. Set high on purpose: a daily bucket hides
+# every intra-day peak, so it is only a fair answer when nobody is asking for
+# one.
+DAILY_MIN_SPAN_MS = 120 * 24 * HOUR_MS
+
+
+def _daily_stats(node_id: str, variable: str, from_utc_ms: int | None,
+                 to_utc_ms: int | None) -> dict:
+    sql = ("SELECT day_ts AS bucket_ts, cnt, sum, sumsq, min_v, max_v"
+           " FROM agg_daily WHERE node_id=? AND variable=?")
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        sql += " AND day_ts>=?"
+        params.append((from_utc_ms // DAY_MS) * DAY_MS)
+    if to_utc_ms is not None:
+        sql += " AND day_ts<=?"
+        params.append((to_utc_ms // DAY_MS) * DAY_MS)
+    sql += " ORDER BY day_ts"
+    return _agg_stats(query(sql, tuple(params)), "daily")
+
+
+def _daily_coverage_ok(node_id: str, variable: str) -> bool:
+    rows = query(
+        "SELECT COUNT(*) AS buckets, COALESCE(SUM(cnt),0) AS samples"
+        " FROM agg_daily WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]
+    if rows["buckets"] == 0:
+        return False
+    raw = query(
+        "SELECT COUNT(*) AS c FROM measurements WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]["c"]
+    return raw == 0 or rows["samples"] >= raw * 0.9
 
 
 def _hourly_stats(node_id: str, variable: str, from_utc_ms: int | None,
@@ -598,7 +659,7 @@ def _hourly_stats(node_id: str, variable: str, from_utc_ms: int | None,
         sql += " AND hour_ts<=?"
         params.append((to_utc_ms // HOUR_MS) * HOUR_MS)
     sql += " ORDER BY hour_ts"
-    return _agg_stats(query(sql, tuple(params)))
+    return _agg_stats(query(sql, tuple(params)), "hourly")
 
 
 def _hourly_coverage_ok(node_id: str, variable: str, from_utc_ms: int | None,
@@ -799,11 +860,11 @@ def analytics_period_compare(
     }
 
 
-def _agg_stats(rows) -> dict:
+def _agg_stats(rows, granularity: str = "hourly") -> dict:
     import math
     cnt = sum(r["cnt"] for r in rows)
     if cnt == 0:
-        return {"count": 0}
+        return {"count": 0, "granularity": granularity}
     total_sum = sum(r["sum"] for r in rows)
     total_sumsq = sum(r["sumsq"] for r in rows)
     mean = total_sum / cnt
@@ -817,7 +878,7 @@ def _agg_stats(rows) -> dict:
         "mean": round(mean, 3),
         "stddev_pop": round(math.sqrt(variance), 3),
         "buckets": len(rows),
-        "granularity": "hourly",
+        "granularity": granularity,
     }
 
 

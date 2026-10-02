@@ -25,10 +25,9 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_scope, require_site_access
 
 router = APIRouter(prefix="/v1", tags=["commands"])
 
@@ -54,6 +53,11 @@ def _utc_ms() -> int:
 
 def node_exists(node_id: str) -> bool:
     return bool(query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)))
+
+
+def _site_of(node_id: str) -> str | None:
+    rows = query("SELECT site_id FROM nodes WHERE node_id=?", (node_id,))
+    return rows[0]["site_id"] if rows else None
 
 
 def enqueue_command(
@@ -209,7 +213,7 @@ def post_command(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "write")
 
     kind = payload.get("kind")
     if kind not in COMMAND_KINDS:
@@ -234,6 +238,7 @@ def post_command(
 
     if not node_exists(node_id):
         raise HTTPException(status_code=404, detail="node_not_found")
+    require_site_access(principal, _site_of(node_id))
 
     command, created = enqueue_command(node_id, key, kind, body, ttl_ms)
     return {
@@ -259,9 +264,10 @@ def list_commands(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "read")
     if not node_exists(node_id):
         raise HTTPException(status_code=404, detail="node_not_found")
+    require_site_access(principal, _site_of(node_id))
     limit = max(1, min(limit, 500))
     rows = query(
         "SELECT * FROM commands WHERE node_id=? ORDER BY command_id DESC LIMIT ?",

@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (176 firmware + 127 backend tests, E2E green)
+## Implemented and verified (211 firmware + 170 backend tests, E2E green)
 | **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 5 pruebas nuevas (firmware HMAC RFC4231 x2 + matriz backend valida/firma-mala/sin-firma + device-secret signing x2) |
 
 | Component | Evidence |
@@ -18,6 +18,11 @@ not. It overrides any aspirational claim elsewhere.
 | **OTA rollback wired**: `OtaBootConfirm` persists a boot-attempt counter, marks the image valid once storage proves itself, rolls back after 3 bad boots | 8 firmware tests; ESP32 build SUCCESS |
 | **Honest LoRa delivery**: `ILoRaRadio::receive()`, gateway ack frame with XOR check, stale-ack drain, unconfirmed batch reported as a retryable error instead of an optimistic ack | 9 firmware tests |
 | **Monotonic sync watermark**: a late acknowledgement can no longer rewind `last_acked_sequence`, for either transport | covered by the LoRa and downlink suites |
+| **LoRa compact frame**: 68-byte records packed per spreading factor (SF7 3/uplink, SF9 1/uplink), CRC16 per frame, reassembly that refuses foreign, duplicated or corrupt fragments; SF10 and below refused rather than truncated | 11 firmware tests + 13 backend tests |
+| **Cross-language LoRa format check**: the exact bytes the C++ encoder produces are pinned as known-answer vectors and decoded by an independent Python implementation that also serves as the gateway | 13 backend tests |
+| **Calibration uncertainty**: absolute uncertainty plus its kind, scaling with `|scale|`, `null` kept distinct from zero, surviving partial updates, exported to CSV | 8 backend tests |
+| **Per-principal authorization**: `api_tokens` with read/write/admin scopes and an optional site, digests stored, constant-time comparison; the shared admin token still works untouched | 10 backend tests |
+| **Daily aggregates**: `agg_daily` maintained by trigger from `agg_hourly`, `granularity=daily`, and `auto` switching to it past 120 days | 14 backend tests |
 | **Data coverage accounting**: expected vs received, longest gap, gap reasons (`no_data` / `measured_not_delivered` / `clock_uncertain`), node + site + CSV | 8 backend tests |
 | **Control sites and difference-in-differences** in `before-after`, with distance to the treated site and automatic exclusion of under-sampled controls | 2 backend tests + `haversine_m`/`difference_in_differences` unit-covered |
 | **Fleet triage** (`/v1/fleet`): firmware spread, last sync, storage, flags, `needs_visit`; `/system` renders it in en/es/pt | 3 backend tests + dashboard render test |
@@ -79,8 +84,9 @@ not. It overrides any aspirational claim elsewhere.
   deployment still needs a real certificate.
 - Deep sleep is wired but **disabled by default**: turning it on requires
   the bench measurement in `docs/en/BENCH_PLAN.md`.
-- LoRa still sends raw JSON inside the payload budget rather than the 68-byte
-  frame `ROADMAP.md` M2 describes, and no gateway has been built to ack it.
+- The LoRa frame format, fragmentation and acknowledgement are written and
+  cross-checked, but there is no gateway firmware, no radio driver and no
+  link budget: the air interface is unproven.
 - Downlink kinds validate and report but do not reconfigure the node; real
   actuation needs hardware that can be actuated.
 
@@ -168,9 +174,9 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 176 succeeded
+cd firmware && pio test -e native      # expect: 211 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 127 passed
+python -m pytest tests -q              # expect: 170 passed
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

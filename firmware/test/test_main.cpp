@@ -16,6 +16,7 @@ void registerOtaTests();
 void registerOtaRollbackTests();
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
+void registerLoRaBatchTests();
 void registerDiagnosticsTests();
 void registerDeepSleepTests();
 void registerCommandTests();
@@ -38,6 +39,7 @@ int main() {
   registerOtaRollbackTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
+  registerLoRaBatchTests();
   registerDiagnosticsTests();
   registerDeepSleepTests();
   registerCommandTests();

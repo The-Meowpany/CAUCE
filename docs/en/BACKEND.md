@@ -186,7 +186,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 127 tests
+pytest tests -q                      # 170 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -203,6 +203,82 @@ broken is the node you should visit. `firmware_spread` tells you
 whether the fleet is on one image, which matters while updates still
 need physical access. Pass `storage_capacity_bytes` to turn stored
 records into a percentage.
+
+## LoRa wire format
+
+A measurement frame is 68 bytes, and a LoRa payload at SF9 is 115, so a batch
+never fits in one uplink. `LoRaBatchEncoder` slices a batch into frames and
+`LoRaBatchReassembler` puts it back together on the receiving side.
+
+Each frame carries enough header for the receiver to reject it without asking
+for a retransmit: batch id, fragment index, fragment count, the record count the
+whole batch should end with, and the payload length. The redundancy is
+deliberate, because a lost fragment costs the entire batch and radio time is
+the expensive resource.
+
+```
+frame   0..1   magic 0xCA | version 1
+        2..3   batch_id
+        4      fragment_index
+        5      fragment_count
+        6..7   record_count for the whole batch
+        8..9   payload_bytes
+        10..   record payloads, 60 bytes each
+        last 2  CRC16-CCITT over everything before it
+```
+
+Spreading factor decides how many records ride one uplink:
+
+| SF | Payload budget | Records per uplink | A 4-record batch |
+|---|---|---|---|
+| SF7 | 222 B | 3 | 2 uplinks |
+| SF8 | 222 B | 3 | 2 uplinks |
+| SF9 | 115 B | 1 | 4 uplinks |
+| SF10 and below | 51 B or less | refused | refused |
+
+SF10 is refused rather than truncated: a measurement cut in half is worse than
+no measurement, so the node reports a retryable error and keeps the records.
+
+`lora_frames.py` is the reference decoder and doubles as the gateway: it turns
+reassembled frames into a `POST /v1/sync` body. The C++ encoder and the Python
+decoder are deliberately independent implementations of the same format, and
+`tests/test_lora_frames.py` pins the exact bytes the firmware produces, so a
+change on either side shows up as a failing test rather than as a gateway that
+quietly stops accepting nodes.
+
+What this still does **not** do: there is no gateway firmware, no LoRa radio
+driver, and no measurement of any link budget. The frame format and its
+acknowledgement are host-tested; the air interface is unproven.
+
+
+## Authorization
+
+Two models, because one token is honest for one operator and wrong for more
+than one:
+
+- `CAUCE_API_TOKEN` is the shared admin token. It has every scope, and a
+  single-operator deployment needs no configuration at all.
+- `api_tokens` holds real principals. Each has a name, a SHA-256 digest of its
+  token, a comma-separated scope list, and optionally one `site_id`. A principal
+  with `site_id` set may only touch that site; one without is fleet-wide.
+  `admin` in the scope list satisfies every scope.
+
+Tokens are stored as digests, never in the clear, and compared in constant
+time. A lost token means issuing a new one, not reading the old one back.
+
+Scopes are enforced before payload validation, so a caller without the scope
+learns nothing about the endpoint beyond its existence:
+
+| Capability | Grants |
+|---|---|
+| `read` | Reading calibration, maintenance and command state |
+| `write` | Changing calibration, logging maintenance, queueing commands |
+| `admin` | Everything above |
+
+Site scoping is the half that stops data leaking. Scopes alone limit *what* an
+operator can do but never *where*, which would leave a per-site operator free to
+read another site's data through a URL it guessed.
+
 
 ## Serverless notes
 

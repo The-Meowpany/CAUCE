@@ -12,6 +12,7 @@ from .analytics import summary_stats
 from .api import analytics_heat_events
 from .calibration import (
     apply_value,
+    calibrated_uncertainty,
     is_identity,
     site_calibrations,
     transform_stats,
@@ -954,7 +955,8 @@ def node_events_page(node_id: str, request: Request,
 
 _CSV_HEADER = ("node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,"
                "variable,value,unit,quality,reason_bits,time_uncertain,"
-               "calibrated_value,calibration_scale,calibration_offset\n")
+               "calibrated_value,calibration_scale,calibration_offset,"
+               "calibration_uncertainty\n")
 
 _CSV_SELECT = """
     SELECT node_id, COALESCE(sensor_id,''), sequence, timestamp_utc_ms,
@@ -964,7 +966,7 @@ _CSV_SELECT = """
     FROM measurements
     """
 
-_CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13}\n")
+_CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14}\n")
 _CSV_CHUNK_LINES = 500
 
 
@@ -987,12 +989,16 @@ def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
                 cal = calibrations.get(r[0], {}).get(r[5])
                 value = "" if r[6] is None else f"{r[6]}"
                 calibrated = apply_value(r[6], cal)
+                # Empty means nobody characterised the uncertainty, which is a
+                # different fact from an uncertainty of zero.
+                uncertainty = calibrated_uncertainty(cal)
                 block.append(_CSV_ROW.format(
                     r[0], r[1], r[2], r[3], r[4], r[5], value, r[7], r[8],
                     r[9], r[10],
                     "" if calibrated is None else f"{calibrated}",
                     "" if not cal else f"{cal['scale']}",
-                    "" if not cal else f"{cal['offset']}"))
+                    "" if not cal else f"{cal['offset']}",
+                    "" if uncertainty is None else f"{uncertainty}"))
                 if len(block) >= _CSV_CHUNK_LINES:
                     yield "".join(block)
                     block = []

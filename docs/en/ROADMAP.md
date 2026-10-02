@@ -151,15 +151,28 @@ Still open here:
 - A real certificate if the central is ever exposed publicly — the
   deployment gets ACME by default now, so this is a DNS problem, not a
   code one.
-- LoRa still sends raw JSON within the payload budget instead of the
-  68-byte frame M2 describes. Acknowledgement is now real, but the
-  compact encoding and its fragmentation are not written.
+- **LoRa on the wire now, in the air not yet.** The compact 68-byte frame,
+  fragmentation, reassembly, the gateway acknowledgement and a reference
+  decoder all exist and are cross-checked between the C++ encoder and the
+  Python one. What is still missing is a gateway, a radio driver and any link
+  budget: the format is proven, the air interface is not.
+- **Calibration uncertainty** is recorded and propagated, so a report can
+  separate measurement from method. There is still no calibration procedure,
+  which is what traceability would actually require.
+- **Authorization is per-principal** when you want it: named tokens with
+  scopes and an optional site. A single-operator deployment keeps using the
+  shared admin token and needs no change.
 
 ## Non-goals for now
 
 Full mesh routing, firmware OTA over LoRa, MQTT/CoAP on constrained nodes,
 multi-region LoRaWAN roaming, asymmetric signatures. Each has been
 suggested at least once; each waits its turn.
+
+Firmware OTA over LoRa now has a number attached rather than an opinion: a
+68-byte record does not divide into a 222-byte airtime budget at any spreading
+factor that still reaches a kilometre, so the manifest check is as far as that
+idea can honestly go.
 
 Two of them changed status when the interfaces were examined:
 

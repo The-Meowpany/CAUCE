@@ -95,6 +95,32 @@ marked **pending**. We don't present wishes as results. A calibration
 record with `method=co-location-relative` and no uncertainty estimate
 belongs in a report under "pending", not under "measured".
 
+## Calibration uncertainty
+
+A calibration record can carry an absolute `uncertainty` and the
+`uncertainty_kind` that says where it came from: `sensor_datasheet`,
+`co_location_spread`, `repeatability`, `estimated` or `unknown`.
+
+Two rules make this worth having:
+
+- **`null` is not zero.** An absent uncertainty means nobody characterised it,
+  which is a different statement from "it is exact". The CSV leaves the column
+  blank in that case, and every analytics response reports `uncertainty: null`.
+- **It scales with the correction.** A scale of 0.5 halves the uncertainty the
+  scale introduces, so the reported figure is the uncertainty *after*
+  calibration. A negative scale uses its magnitude, because a reflection adds
+  no error.
+
+`uncertainty_kind` without an `uncertainty` is a `422`: naming the kind of an
+uncertainty nobody quantified is worse than saying nothing. A partial update
+that omits both keeps whatever was recorded before, so re-posting an offset does
+not silently drop a characterisation that took a co-location week to produce.
+
+What this does not do is make the project traceable. It lets a report say how
+much of a number is measurement and how much is method. There is still no
+calibration procedure and no metrological claim anywhere in this system.
+
+
 ## Minimal recommended plan (once ≥2 physical nodes exist)
 
 1. Co-locate all nodes for 48 h at the same spot → compute

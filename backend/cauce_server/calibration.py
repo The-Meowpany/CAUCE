@@ -5,10 +5,9 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_scope, require_site_access
 
 router = APIRouter(prefix="/v1")
 
@@ -19,6 +18,12 @@ MAX_ABS_OFFSET = 1000.0
 METHODS = ("unspecified", "co-location-relative",
            "single-point-reference")
 STATUSES = ("applied", "provisional", "retired", "rejected")
+# How the uncertainty figure was arrived at. Recording the kind matters as much
+# as the number: a datasheet tolerance and a co-location spread are not the same
+# claim, and reporting one as the other would be dishonest.
+UNCERTAINTY_KINDS = ("sensor_datasheet", "co_location_spread",
+                     "repeatability", "estimated", "unknown")
+MAX_UNCERTAINTY = 1000.0
 MAINTENANCE_KINDS = ("install", "calibration", "sensor_replacement",
                      "maintenance", "relocation", "note")
 
@@ -52,7 +57,8 @@ def node_calibration_map() -> dict[str, dict[str, dict]]:
     CSV export where a per-row lookup would dominate the runtime."""
     rows = query(
         """SELECT n.node_id, c.variable, c.scale, c.offset, c.method, c.status,
-                  c.calibration_date, c.calibration_reference
+                  c.calibration_date, c.calibration_reference,
+                  c.uncertainty, c.uncertainty_kind
            FROM nodes n JOIN calibration c ON c.site_id = n.site_id
            WHERE c.status<>'retired'"""
     )
@@ -92,9 +98,27 @@ def transform_stats(stats: dict, calibration: dict | None) -> dict:
     return out
 
 
+def calibrated_uncertainty(calibration: dict | None) -> float | None:
+    """Absolute uncertainty of a calibrated value, in the variable's unit.
+
+    A correction expressed as a scale moves the uncertainty with it: dividing
+    the signal by two halves the error the scale introduces. An offset is an
+    addition, so its uncertainty passes through unchanged. When no uncertainty
+    was ever characterised this returns None rather than 0, because "nobody
+    measured it" and "it is exact" must not look the same.
+    """
+    if not calibration:
+        return None
+    recorded = calibration.get("uncertainty")
+    if recorded is None:
+        return None
+    return round(float(recorded) * abs(float(calibration["scale"])), 6)
+
+
 def calibration_summary(calibration: dict | None) -> dict:
     if not calibration:
-        return {"applied": False, "identity": True}
+        return {"applied": False, "identity": True, "uncertainty": None}
+    uncertainty = calibrated_uncertainty(calibration)
     return {
         "applied": True,
         "identity": is_identity(calibration["scale"], calibration["offset"]),
@@ -104,12 +128,30 @@ def calibration_summary(calibration: dict | None) -> dict:
         "status": calibration["status"],
         "calibration_date": calibration["calibration_date"],
         "calibration_reference": calibration["calibration_reference"],
+        # None here is a statement: nobody characterised this. It is not the
+        # same as zero, and the docs depend on the difference staying visible.
+        "uncertainty": uncertainty,
+        "uncertainty_kind": calibration.get("uncertainty_kind"),
     }
 
 
 def _number(payload: dict, key: str, default: float | None,
             low: float, high: float) -> float:
     value = payload.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=422, detail=f"invalid_{key}")
+    value = float(value)
+    if not math.isfinite(value) or value < low or value > high:
+        raise HTTPException(status_code=422, detail=f"invalid_{key}")
+    return value
+
+
+def _optional_number(payload: dict, key: str, low: float,
+                    high: float) -> float | None:
+    """A number allowed to be absent, but which must be sane when present."""
+    value = payload.get(key)
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise HTTPException(status_code=422, detail=f"invalid_{key}")
     value = float(value)
@@ -134,7 +176,8 @@ def put_calibration(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "write")
+    require_site_access(principal, site_id)
     variable = payload.get("variable")
     if not isinstance(variable, str) or not variable:
         raise HTTPException(status_code=422, detail="missing_variable")
@@ -147,6 +190,18 @@ def put_calibration(
     offset = _number(payload, "offset", IDENTITY_OFFSET, -MAX_ABS_OFFSET,
                      MAX_ABS_OFFSET)
     method = _choice(payload, "method", METHODS, "unspecified")
+    uncertainty = _optional_number(payload, "uncertainty", 0.0, MAX_UNCERTAINTY)
+    uncertainty_kind = payload.get("uncertainty_kind")
+    if uncertainty_kind is not None:
+        if (not isinstance(uncertainty_kind, str)
+                or uncertainty_kind not in UNCERTAINTY_KINDS):
+            raise HTTPException(status_code=422,
+                                detail="invalid_uncertainty_kind")
+        if uncertainty is None:
+            # Naming the kind of an uncertainty nobody quantified is worse than
+            # saying nothing.
+            raise HTTPException(status_code=422,
+                                detail="uncertainty_kind_without_uncertainty")
     status = _choice(payload, "status", STATUSES, "applied")
     reference = payload.get("calibration_reference")
     sensor_id = payload.get("sensor_id")
@@ -165,18 +220,25 @@ def put_calibration(
         conn.execute(
             """INSERT INTO calibration
                (site_id, variable, scale, offset, method, calibration_reference,
-                sensor_id, calibration_date, status, notes, updated_utc_ms)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                sensor_id, calibration_date, status, uncertainty,
+                uncertainty_kind, notes, updated_utc_ms)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(site_id, variable) DO UPDATE SET
                  scale=excluded.scale, offset=excluded.offset,
                  method=excluded.method,
                  calibration_reference=excluded.calibration_reference,
                  sensor_id=excluded.sensor_id,
                  calibration_date=excluded.calibration_date,
-                 status=excluded.status, notes=excluded.notes,
+                 status=excluded.status,
+                 uncertainty=COALESCE(excluded.uncertainty,
+                                     calibration.uncertainty),
+                 uncertainty_kind=COALESCE(excluded.uncertainty_kind,
+                                           calibration.uncertainty_kind),
+                 notes=excluded.notes,
                  updated_utc_ms=excluded.updated_utc_ms""",
             (site_id, variable, scale, offset, method, reference, sensor_id,
-             calibration_date, status, payload.get("notes"), now_ms),
+             calibration_date, status, uncertainty, uncertainty_kind,
+             payload.get("notes"), now_ms),
         )
     return {"status": "calibrated", "site_id": site_id, "variable": variable,
             "scale": scale, "offset": offset, "method": method,
@@ -200,7 +262,8 @@ def get_calibration(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "read")
+    require_site_access(principal, site_id)
     if not query("SELECT 1 FROM sites WHERE site_id=?", (site_id,)):
         raise HTTPException(status_code=404, detail="site_not_found")
     rows = query(
@@ -225,7 +288,8 @@ def log_maintenance(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "write")
+    require_site_access(principal, site_id)
     kind = _choice(payload, "kind", MAINTENANCE_KINDS, "note")
     at_utc_ms = payload.get("at_utc_ms", int(time.time() * 1000))
     if isinstance(at_utc_ms, bool) or not isinstance(at_utc_ms, int) or at_utc_ms < 0:
@@ -251,7 +315,8 @@ def list_maintenance(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "read")
+    require_site_access(principal, site_id)
     if not query("SELECT 1 FROM sites WHERE site_id=?", (site_id,)):
         raise HTTPException(status_code=404, detail="site_not_found")
     rows = query(

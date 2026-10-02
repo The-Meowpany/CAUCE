@@ -98,6 +98,33 @@ deseos como resultados. Un registro con `method=co-location-relative` y
 sin estimación de incertidumbre va en un informe bajo "pendiente", no bajo
 "medido".
 
+## Incertidumbre de calibración
+
+Un registro de calibración puede llevar una `uncertainty` absoluta y el
+`uncertainty_kind` que dice de dónde salió: `sensor_datasheet`,
+`co_location_spread`, `repeatability`, `estimated` o `unknown`.
+
+Dos reglas le dan valor:
+
+- **`null` no es cero.** Una incertidumbre ausente significa que nadie la
+  caracterizó, que es una afirmación distinta de "es exacto". El CSV deja la
+  columna vacía en ese caso, y toda respuesta de analítica reporta
+  `uncertainty: null`.
+- **Escala con la corrección.** Una escala de 0.5 reduce a la mitad la
+  incertidumbre que introduce la escala, así que la cifra reportada es la
+  incertidumbre *después* de calibrar. Una escala negativa usa su magnitud,
+  porque una reflexión no agrega error.
+
+Un `uncertainty_kind` sin `uncertainty` da `422`: nombrar el tipo de una
+incertidumbre que nadie cuantificó es peor que no decir nada. Una actualización
+parcial que omita ambos conserva lo anterior, así que re-postear un offset no
+borra en silencio una caracterización que costó una semana de co-localización.
+
+Lo que esto no hace es volver trazable al proyecto. Permite que un informe diga
+cuánto de un número es medición y cuánto es método. Sigue sin haber un
+procedimiento de calibración ni una afirmación metrológica en el sistema.
+
+
 ## Plan mínimo recomendado (una vez que existan ≥2 nodos físicos)
 
 1. Co-localizar todos los nodos 48 h en el mismo lugar → calcular los

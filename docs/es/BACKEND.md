@@ -198,11 +198,88 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 127 tests
+pytest tests -q                      # 170 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
 Docker: `docker compose -f deployment/docker-compose.yml up --build`
+
+## Formato de radio LoRa
+
+Un frame de medicion son 68 bytes y un payload LoRa en SF9 son 115, asi que un
+lote nunca entra en un solo uplink. `LoRaBatchEncoder` corta el lote en frames
+y `LoRaBatchReassembler` lo rearma del lado receptor.
+
+Cada frame lleva suficiente header para que el receptor lo rechace sin pedir
+retransmision: batch id, indice de fragmento, cantidad de fragmentos, la
+cantidad de registros que el lote completo deberia tener, y el largo del
+payload. La redundancia es deliberada, porque un fragmento perdido cuesta el
+lote entero y el tiempo de radio es el recurso caro.
+
+```
+frame   0..1   magic 0xCA | version 1
+        2..3   batch_id
+        4      fragment_index
+        5      fragment_count
+        6..7   record_count del lote completo
+        8..9   payload_bytes
+        10..   payloads de registros, 60 bytes cada uno
+        ultimos 2  CRC16-CCITT sobre todo lo anterior
+```
+
+El factor de dispersion decide cuantos registros entran en un uplink:
+
+| SF | Presupuesto | Registros por uplink | Un lote de 4 |
+|---|---|---|---|
+| SF7 | 222 B | 3 | 2 uplinks |
+| SF8 | 222 B | 3 | 2 uplinks |
+| SF9 | 115 B | 1 | 4 uplinks |
+| SF10 y menos | 51 B o menos | rechazado | rechazado |
+
+SF10 se rechaza en vez de truncar: una medicion cortada por la mitad es peor
+que no tener medicion, asi que el nodo reporta un error reintentable y conserva
+los registros.
+
+`lora_frames.py` es el decoder de referencia y sirve de gateway: convierte los
+frames rearmados en un body de `POST /v1/sync`. El encoder en C++ y el decoder
+en Python son implementaciones deliberadamente independientes del mismo
+formato, y `tests/test_lora_frames.py` fija los bytes exactos que produce el
+firmware, asi que un cambio en cualquier lado aparece como un test que falla y
+no como un gateway que en silencio deja de aceptar nodos.
+
+Lo que esto **todavia no** hace: no hay firmware de gateway, no hay driver de
+radio LoRa, y no hay medicion de ningun link budget. El formato del frame y su
+acuse estan testeados en host; la interfaz de aire no esta probada.
+
+
+## Autorización
+
+Dos modelos, porque un token es honesto para un operador y equivocado para más
+de uno:
+
+- `CAUCE_API_TOKEN` es el token admin compartido. Tiene todos los scopes, y un
+  despliegue de un solo operador no necesita configuración alguna.
+- `api_tokens` guarda principales reales. Cada uno tiene nombre, el digest
+  SHA-256 de su token, una lista de scopes separada por comas, y opcionalmente
+  un `site_id`. Un principal con `site_id` solo puede tocar ese sitio; uno sin
+  él es de flota completa. `admin` en la lista satisface todos los scopes.
+
+Los tokens se guardan como digest, nunca en claro, y se comparan en tiempo
+constante. Un token perdido implica emitir uno nuevo, no releer el viejo.
+
+Los scopes se exigen antes de validar el payload, así que un llamador sin el
+scope no aprende nada del endpoint más allá de que existe:
+
+| Capacidad | Permite |
+|---|---|
+| `read` | Leer calibración, mantenimiento y estado de comandos |
+| `write` | Cambiar calibración, registrar mantenimiento, encolar comandos |
+| `admin` | Todo lo anterior |
+
+El scoping por sitio es la mitad que evita que se filtren datos. Los scopes
+solos limitan *qué* puede hacer un operador pero nunca *dónde*, lo que dejaría a
+un operador de sitio libre de leer datos de otro sitio por una URL que adivinara.
+
 
 ## Notas serverless
 

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import sqlite3
@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS commands (
 CREATE INDEX IF NOT EXISTS idx_commands_pending
     ON commands(node_id, delivered_utc_ms, command_id);
 
+-- API principals. Tokens are stored as SHA-256 digests, never in the clear.
+-- A principal with site_id set may only touch that site; one without is
+-- fleet-wide. `scopes` is a comma-separated capability list, and 'admin' means
+-- all of them.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    name TEXT PRIMARY KEY,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    scopes TEXT NOT NULL DEFAULT 'read',
+    site_id TEXT,
+    created_at_utc_ms INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS command_receipts (
     node_id TEXT NOT NULL,
     command_id INTEGER NOT NULL,
@@ -112,6 +124,93 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     max_v REAL,
     PRIMARY KEY (node_id, variable, hour_ts)
 );
+
+-- Same shape as agg_hourly, one row per UTC day. Two years of 60 s samples is
+-- ~1M raw rows per variable; hourly is 17.5k and daily is 730. `auto` picks
+-- daily only when the window is long enough that the savings matter and the
+-- answer is a trend rather than an extreme.
+CREATE TABLE IF NOT EXISTS agg_daily (
+    node_id TEXT NOT NULL,
+    variable TEXT NOT NULL,
+    day_ts INTEGER NOT NULL,
+    cnt INTEGER NOT NULL,
+    sum REAL NOT NULL,
+    sumsq REAL NOT NULL,
+    min_v REAL,
+    max_v REAL,
+    PRIMARY KEY (node_id, variable, day_ts)
+);
+
+-- agg_daily is maintained by trigger rather than by a batch job: the hourly
+-- upsert in /v1/sync already holds the increment, so deriving the day inside
+-- the same transaction means the two can never drift apart.
+CREATE TRIGGER IF NOT EXISTS agg_daily_from_hourly
+AFTER INSERT ON agg_hourly
+BEGIN
+    -- Merge, do not ignore: the first hourly row of a day creates the row and
+    -- every later one has to add to it. INSERT OR IGNORE would silently keep a
+    -- single hour and lose the rest of the day.
+    INSERT INTO agg_daily
+        (node_id, variable, day_ts, cnt, sum, sumsq, min_v, max_v)
+    VALUES (new.node_id, new.variable,
+            (new.hour_ts / 86400000) * 86400000,
+            new.cnt, new.sum, new.sumsq, new.min_v, new.max_v)
+    ON CONFLICT(node_id, variable, day_ts) DO UPDATE SET
+        cnt = agg_daily.cnt + excluded.cnt,
+        sum = agg_daily.sum + excluded.sum,
+        sumsq = agg_daily.sumsq + excluded.sumsq,
+        min_v = CASE
+            WHEN agg_daily.min_v IS NULL THEN excluded.min_v
+            WHEN excluded.min_v IS NULL THEN agg_daily.min_v
+            ELSE MIN(agg_daily.min_v, excluded.min_v) END,
+        max_v = CASE
+            WHEN agg_daily.max_v IS NULL THEN excluded.max_v
+            WHEN excluded.max_v IS NULL THEN agg_daily.max_v
+            ELSE MAX(agg_daily.max_v, excluded.max_v) END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS agg_daily_merge_hourly
+AFTER UPDATE ON agg_hourly
+BEGIN
+    -- Take the change out of the old day first, then put it into the new one.
+    -- A same-day update nets to zero across both statements, so this also
+    -- covers the rare case of a row being re-bucketed into another day; doing
+    -- only the second half would silently inflate the day it left.
+    UPDATE agg_daily SET
+        cnt = cnt - (old.cnt - new.cnt),
+        sum = sum - (old.sum - new.sum),
+        sumsq = sumsq - (old.sumsq - new.sumsq),
+        min_v = CASE
+            WHEN old.min_v IS NOT NULL AND min_v IS NOT NULL
+                 AND old.min_v = min_v AND new.min_v >= old.min_v
+                THEN NULL
+            ELSE min_v END,
+        max_v = CASE
+            WHEN old.max_v IS NOT NULL AND max_v IS NOT NULL
+                 AND old.max_v = max_v AND new.max_v <= old.max_v
+                THEN NULL
+            ELSE max_v END
+    WHERE node_id = old.node_id AND variable = old.variable
+      AND day_ts = (old.hour_ts / 86400000) * 86400000;
+
+    INSERT INTO agg_daily
+        (node_id, variable, day_ts, cnt, sum, sumsq, min_v, max_v)
+    VALUES (new.node_id, new.variable,
+            (new.hour_ts / 86400000) * 86400000,
+            new.cnt, new.sum, new.sumsq, new.min_v, new.max_v)
+    ON CONFLICT(node_id, variable, day_ts) DO UPDATE SET
+        cnt = agg_daily.cnt + excluded.cnt,
+        sum = agg_daily.sum + excluded.sum,
+        sumsq = agg_daily.sumsq + excluded.sumsq,
+        min_v = CASE
+            WHEN agg_daily.min_v IS NULL THEN excluded.min_v
+            WHEN excluded.min_v IS NULL THEN agg_daily.min_v
+            ELSE MIN(agg_daily.min_v, excluded.min_v) END,
+        max_v = CASE
+            WHEN agg_daily.max_v IS NULL THEN excluded.max_v
+            WHEN excluded.max_v IS NULL THEN agg_daily.max_v
+            ELSE MAX(agg_daily.max_v, excluded.max_v) END;
+END;
 
 CREATE TABLE IF NOT EXISTS alert_rules (
     rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,6 +275,12 @@ CREATE TABLE IF NOT EXISTS calibration (
     sensor_id TEXT,
     calibration_date TEXT,
     status TEXT NOT NULL DEFAULT 'applied',
+    -- Absolute uncertainty of the calibrated value, in the variable's own unit,
+    -- plus what kind of estimate it is. NULL means nobody has characterised it,
+    -- which is the honest default: a calibrated number with no uncertainty is a
+    -- number that looks more authoritative than it is.
+    uncertainty REAL,
+    uncertainty_kind TEXT,
     notes TEXT,
     updated_utc_ms INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (site_id, variable)
