@@ -26,7 +26,7 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 132 host tests (Unity)
+pio test -e native          # 134 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
