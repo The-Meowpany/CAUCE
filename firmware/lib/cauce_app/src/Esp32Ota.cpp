@@ -71,15 +71,15 @@ bool Esp32FirmwareReader::open(const char* url) {
   return stream_ != nullptr;
 }
 
-size_t Esp32FirmwareReader::read(uint8_t* buffer, size_t capacity) {
-  if (!stream_ || !buffer || capacity == 0) return 0;
-  uint32_t waited = 0;
-  while (!stream_->available() && waited < 10000) {
-    delay(50);
-    waited += 50;
-  }
-  if (!stream_->available()) return 0;
-  return stream_->readBytes(buffer, capacity);
+ReadStatus Esp32FirmwareReader::read(uint8_t* buffer, size_t capacity,
+                                    size_t* bytesRead) {
+  if (bytesRead != nullptr) *bytesRead = 0;
+  if (!stream_ || !buffer || capacity == 0) return ReadStatus::Error;
+  if (!stream_->available()) return ReadStatus::NoDataYet;
+  const size_t n = stream_->readBytes(buffer, capacity);
+  if (n == 0) return ReadStatus::Eof;
+  if (bytesRead != nullptr) *bytesRead = n;
+  return ReadStatus::Data;
 }
 
 void Esp32FirmwareReader::close() {

@@ -117,8 +117,16 @@ int Esp32LittleFs::listFiles(const char* directory, char (*outPaths)[64],
   if (!dir || !dir.isDirectory()) return 0;
   File entry = dir.openNextFile();
   while (entry && count < maxItems) {
-    snprintf(outPaths[count], 64, "%s/%s", directory, entry.name());
-    count++;
+    // File::name() returns const char* on arduino-esp32 2.x and String on 3.x.
+    // Wrapping in String compiles against both without a version check.
+    const String name = String(entry.name());
+    const char* raw = name.c_str();
+    const bool isDot = raw[0] == '.' &&
+                       (raw[1] == '\0' || (raw[1] == '.' && raw[2] == '\0'));
+    if (!isDot && !entry.isDirectory() && raw[0] != '\0') {
+      snprintf(outPaths[count], 64, "%s/%s", directory, raw);
+      count++;
+    }
     entry.close();
     entry = dir.openNextFile();
   }

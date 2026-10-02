@@ -16,7 +16,7 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/healthz` | Liveness |
 | POST | `/v1/sync` | Batch ingestion (contract: SYNC.md). Provisioned nodes MUST sign with HMAC-SHA256 (`X-CAUCE-Node`, `X-CAUCE-Signature`) |
 | POST | `/v1/provision` | Admin-gated device-key registration, one key per node |
-| GET | `/v1/nodes` · `/v1/nodes/{id}` | List / detail + latest measurement |
+| GET | `/v1/nodes` · `/v1/nodes/{id}` | List (also `cursor`-paginated) / detail + latest measurement |
 | GET | `/v1/nodes/{id}/measurements` | Filterable series (`variable`,`quality`,`from_utc_ms`,`to_utc_ms`,`limit≤10000`,`offset`) with `total` |
 | POST | `/v1/maintenance/retention` | Delete rows older than N days + VACUUM (cron-friendly; nodes resend retained rows unless purged there too) |
 | GET | `/v1/maintenance/retention` | Retention config plus last run: `older_than_days`, `deleted_measurements`, `vacuumed`, `last_run_utc_ms` |
@@ -26,12 +26,14 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/v1/nodes/{id}/diagnostics` | Latest stored bundle summary |
 | GET | `/v1/fleet` | Per-node fleet state: firmware, last sync, storage, flags, `needs_visit` |
 | GET/POST | `/v1/sites` · PUT `/v1/sites/{id}/control` | Installation sites + assignment; flag a site as an untreated control |
+| PUT/GET | `/v1/sites/{id}/calibration` | Per-(site,variable) offset/scale; raw rows are never rewritten, calibrated values are derived on read |
+| POST/GET | `/v1/sites/{id}/maintenance` | Maintenance log: install, calibration, sensor replacement, relocation |
 | GET | `/v1/maintenance/backup` | Download a VACUUM INTO SQLite snapshot (auth-gated) |
 | POST/GET | `/v1/sites` · PUT `/v1/nodes/{id}/site` | Installation sites + assignment |
 | PUT | `/v1/sites/{id}/location` | Set site coordinates (validated lat/lon) |
 | POST/GET/DELETE | `/v1/alerts/rules` · PATCH `/v1/alerts/rules/{id}` · GET `/v1/alerts/log` · POST+GET `/v1/alerts/check` | Threshold/stale rules (webhook/Telegram, validated inputs, enable toggle), delivery log with attempts, manual stale pass + pending redelivery |
 | POST/GET | `/v1/interventions` | Intervention registry (`end_before_start`→422) |
-| GET | `/v1/analytics/summary` | Descriptive stats per node+variable |
+| GET | `/v1/analytics/summary` | Descriptive stats per node+variable; `granularity=auto|raw|hourly` switches between raw rows and the hourly buckets |
 | GET | `/v1/analytics/compare` | Two nodes side by side + mean difference |
 | GET | `/v1/analytics/before-after` | Pre/post split by intervention window; warns under 30 samples per period; with control sites it also returns `control_group.difference_in_differences` |
 | GET | `/v1/analytics/period-compare` | Same node, two windows |
@@ -92,6 +94,20 @@ is usually about placement, not proof. INVALID/MISSING/ESTIMATED are
 excluded from the math; SUSPECT counts but its share is reported next
 to the result.
 
+## Calibration
+
+The central owns calibration: `measurements.value` stays raw and the
+calibrated value is derived on read, so a recalibration replays over the
+whole history without touching a node. `calibrated_value = raw_value *
+scale + offset`, recorded per (site, variable) through
+`PUT /v1/sites/{id}/calibration`. Because the map is linear it is exact
+on the hourly aggregates too, which is why `/summary-fast` and
+`granularity=hourly` correct their buckets instead of re-reading rows.
+Every analytics response says in a `calibration` object whether it was
+applied; when it was not, the `calibrated` key is absent rather than
+identical to the raw number. See `CALIBRATION.md` for the honesty rules
+around what a co-location offset does and does not buy.
+
 ## Evidence hygiene
 
 Two things turn a comparison into evidence, and both are endpoints now:
@@ -135,7 +151,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 88 tests
+pytest tests -q                      # 116 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 

@@ -118,6 +118,7 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
           static_cast<unsigned long>(config.storageMaxBytes));
   c.write("segment_max_bytes=%lu\n",
           static_cast<unsigned long>(config.segmentMaxBytes));
+  c.write("deep_sleep_enabled=%d\n", config.deepSleepEnabled ? 1 : 0);
   c.write("admin_token_sha256=%s\n", config.adminTokenSha256);
 
   for (uint8_t v = 0; v < kVariableCount; ++v) {
@@ -218,6 +219,9 @@ bool parseConfig(const char* text, NodeConfig& out) {
       } else if (std::strcmp(key, "segment_max_bytes") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.segmentMaxBytes = static_cast<uint32_t>(intValue);
+      } else if (std::strcmp(key, "deep_sleep_enabled") == 0) {
+        cfg.deepSleepEnabled = std::strcmp(valueText, "1") == 0 ||
+                               std::strcmp(valueText, "true") == 0;
       } else if (std::strcmp(key, "admin_token_sha256") == 0) {
         copyString(cfg.adminTokenSha256, sizeof(cfg.adminTokenSha256), valueText);
       } else if (std::strncmp(key, "thr_", 4) == 0) {

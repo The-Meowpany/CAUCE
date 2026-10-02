@@ -57,7 +57,45 @@ Chequear `GET http://<server>:8000/healthz`; el dashboard central está
 en `/`. Si `/healthz` no responde, arreglar eso antes de tocar ningún
 nodo.
 
+## 2b. TLS delante del central
+
+El backend habla HTTP plano a propósito y **no se publica a la LAN**. Caddy
+termina TLS y es el único puerto publicado:
+
+```bash
+cd deployment
+export CAUCE_DOMAIN=cauce.local          # el hostname que van a usar los nodos
+docker compose up -d --build
+```
+
+Qué aporta y qué cuesta:
+
+- `http://CAUCE_DOMAIN` redirige a `https://CAUCE_DOMAIN`.
+- El central responde solo en `127.0.0.1:8000`, así el operador puede
+  depurar desde el host mientras la red ve el 443 y nada más.
+- Los lotes van firmados por dispositivo (HMAC-SHA256) además de cifrados:
+  TLS no reemplaza la firma, y la firma no reemplaza a TLS.
+
+**Certificado para un piloto solo en LAN.** El `tls internal` por defecto hace
+que Caddy emita desde su propia CA local. Exportá la raíz una vez e
+instalala en cada nodo y en la máquina del operador, si no los nodos
+rechazan el lote:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
+```
+
+**Certificado para un nombre público.** Borrá la línea `tls internal` del
+`Caddyfile`, definí `ACME_EMAIL`, y Caddy obtiene y renueva un certificado
+real sin intervención. `CAUCE_DOMAIN` tiene que resolver públicamente.
+
+Del lado del nodo: apuntá `sync_server_url` a `https://CAUCE_DOMAIN` e
+instalá el certificado raíz en el ESP32 si no es una CA de confianza
+pública. A partir de ahí queda cubierto el punto del checklist "central
+alcanzable por TLS".
+
 ## 3. Preparar cada nodo
+
 
 1. **Identidad**: un `node_id` único (`CAUCE-001`, …). Jamás dos nodos
    comparten uno — todo el diseño de sync lo asume.
@@ -113,6 +151,8 @@ por período, el endpoint te dice que está adivinando — hacerle caso.
 
 - [ ] `pio test -e native` en verde
 - [ ] Backend con token + rate limit configurados
+- [ ] Central alcanzable por TLS a través del terminador Caddy, con el
+      certificado raíz instalado en cada nodo
 - [ ] `run-e2e.ps1` en verde tras cualquier cambio de protocolo
 - [ ] Cada nodo: identificado, geo-localizado, calidad VALID llegando
       al centro, metadata de instalación anotada

@@ -26,7 +26,8 @@ class Esp32FirmwareReader final : public IFirmwareReader {
  public:
   Esp32FirmwareReader();
   bool open(const char* url) override;
-  size_t read(uint8_t* buffer, size_t capacity) override;
+  ReadStatus read(uint8_t* buffer, size_t capacity,
+                  size_t* bytesRead) override;
   void close() override;
 
  private:

@@ -147,6 +147,27 @@ void test_garbage_input_rejected() {
   TEST_ASSERT_FALSE(parseConfig("", out));
 }
 
+void test_deep_sleep_flag_roundtrips_through_serialization() {
+  NodeConfig cfg;
+  char text[1600];
+  TEST_ASSERT_TRUE(serializeConfig(cfg, text, sizeof(text)));
+  TEST_ASSERT_NOT_NULL(strstr(text, "deep_sleep_enabled=0"));
+  NodeConfig parsed;
+  TEST_ASSERT_TRUE(parseConfig(text, parsed));
+  TEST_ASSERT_FALSE(parsed.deepSleepEnabled);
+
+  cfg.deepSleepEnabled = true;
+  TEST_ASSERT_TRUE(serializeConfig(cfg, text, sizeof(text)));
+  TEST_ASSERT_NOT_NULL(strstr(text, "deep_sleep_enabled=1"));
+  TEST_ASSERT_TRUE(parseConfig(text, parsed));
+  TEST_ASSERT_TRUE(parsed.deepSleepEnabled);
+}
+
+void test_deep_sleep_flag_defaults_to_off_on_empty_config() {
+  NodeConfig cfg;
+  TEST_ASSERT_FALSE(cfg.deepSleepEnabled);
+}
+
 void registerConfigTests() {
 
   RUN_TEST(test_load_on_empty_filesystem_creates_defaults);
@@ -158,5 +179,7 @@ void registerConfigTests() {
   RUN_TEST(test_validation_rejects_bad_intervals);
   RUN_TEST(test_validation_rejects_bad_node_id_charset);
   RUN_TEST(test_validation_rejects_inverted_thresholds);
+  RUN_TEST(test_deep_sleep_flag_roundtrips_through_serialization);
+  RUN_TEST(test_deep_sleep_flag_defaults_to_off_on_empty_config);
   RUN_TEST(test_garbage_input_rejected);
 }

@@ -1409,7 +1409,8 @@ def test_csv_export_format_survives_blocked_streaming(client):
     lines = r.text.strip().splitlines()
     assert lines[0] == ('node_id,sensor_id,sequence,timestamp_utc_ms,'
                         'timestamp_iso,variable,value,unit,quality,'
-                        'reason_bits,time_uncertain')
+                        'reason_bits,time_uncertain,calibrated_value,'
+                        'calibration_scale,calibration_offset')
     assert len(lines) == 701
     first = lines[1].split(',')
     assert first[0] == 'CAUCE-001'
@@ -1422,6 +1423,9 @@ def test_csv_export_format_survives_blocked_streaming(client):
     assert first[7] == 'C'
     assert first[8] == 'VALID'
     assert first[10] == '0'
+    assert first[11] == '20.0'
+    assert first[12] == ''
+    assert first[13] == ''
     last = lines[-1].split(',')
     assert last[2] == '700'
     assert last[4] == '2026-08-22T11:39:00Z'
@@ -1438,3 +1442,468 @@ def test_csv_export_format_survives_blocked_streaming(client):
 
 def test_coverage_csv_404_for_unknown_node(client):
     assert client.get('/v1/nodes/ghost/coverage.csv').status_code == 404
+def _calibrated_site(client, site_id='cal-site', scale=1.0, offset=0.0,
+                     variable='air_temperature', node='CAUCE-001', **kw):
+    client.post('/v1/sites', json={'site_id': site_id})
+    if scale != 1.0 or offset != 0.0:
+        client.put(f'/v1/sites/{site_id}/calibration', json={
+            'variable': variable, 'scale': scale, 'offset': offset, **kw})
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id=? WHERE node_id=?", (site_id, node))
+
+
+def test_put_and_get_calibration_roundtrip(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    r = client.put('/v1/sites/s1/calibration', json={
+        'variable': 'air_temperature', 'scale': 1.0, 'offset': -1.25,
+        'method': 'co-location-relative', 'calibration_reference': 'CAUCE-002',
+        'sensor_id': 'BME280-1', 'calibration_date': '2026-09-01'})
+    assert r.status_code == 200
+    body = r.json()
+    assert body['status'] == 'calibrated'
+    assert body['offset'] == -1.25
+    assert body['calibration_status'] == 'applied'
+    got = client.get('/v1/sites/s1/calibration').json()
+    assert got['model'] == 'calibrated_value = raw_value * scale + offset'
+    assert len(got['calibrations']) == 1
+    entry = got['calibrations'][0]
+    assert entry['offset'] == -1.25
+    assert entry['method'] == 'co-location-relative'
+    assert entry['calibration_reference'] == 'CAUCE-002'
+    assert entry['calibration_date'] == '2026-09-01'
+
+
+def test_calibration_upserts_instead_of_duplicating(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    for offset in (-1.0, -2.0):
+        client.put('/v1/sites/s1/calibration', json={
+            'variable': 'air_temperature', 'offset': offset})
+    rows = client.get('/v1/sites/s1/calibration').json()['calibrations']
+    assert len(rows) == 1
+    assert rows[0]['offset'] == -2.0
+
+
+def test_calibration_validation_rejects_bad_input(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    base = '/v1/sites/s1/calibration'
+    assert client.put(base, json={'scale': 0}).status_code == 422
+    assert client.put(base, json={'variable': 'air_temperature',
+                                  'scale': 1e9}).status_code == 422
+    assert client.put(base, json={'variable': 'air_temperature',
+                                  'offset': 1e9}).status_code == 422
+    assert client.put(base, json={'offset': 0.5}).status_code == 422
+    assert client.put(base, json={'variable': 'air_temperature',
+                                  'method': 'vibes'}).status_code == 422
+    assert client.put(base, json={'variable': 'air_temperature',
+                                  'status': 'nope'}).status_code == 422
+    assert client.put(base, json={'variable': 'air_temperature',
+                                  'calibration_date': '01-09-2026'}
+                      ).status_code == 422
+    assert client.put('/v1/sites/ghost/calibration',
+                      json={'variable': 'air_temperature'}).status_code == 404
+    assert client.get('/v1/sites/ghost/calibration').status_code == 404
+
+
+def test_analytics_summary_reports_raw_and_calibrated(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 10, base=20.0), node_id='CAUCE-001'))
+    _calibrated_site(client, offset=-2.0)
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['mean'] == 20.0
+    assert body['calibrated']['mean'] == 18.0
+    assert body['calibration']['applied'] is True
+    assert body['calibration']['offset'] == -2.0
+    assert 'raw rows are untouched' in body['note']
+
+
+def test_analytics_summary_without_calibration_omits_it(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 10, base=20.0), node_id='CAUCE-001'))
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['calibration']['applied'] is False
+    assert body['calibration']['identity'] is True
+    assert 'calibrated' not in body
+
+
+def test_scale_multiplies_dispersion_in_calibrated_stats(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 5, base=20.0, ramp=1.0),
+        node_id='CAUCE-001'))
+    _calibrated_site(client, scale=2.0, offset=1.0)
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['calibrated']['min'] == body['min'] * 2 + 1
+    assert body['calibrated']['max'] == body['max'] * 2 + 1
+    assert body['calibrated']['stddev'] == round(body['stddev'] * 2, 6)
+
+
+def test_summary_fast_calibrates_aggregates(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 10, base=20.0), node_id='CAUCE-001'))
+    _calibrated_site(client, offset=-3.0)
+    body = client.get('/v1/analytics/summary-fast?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['source'] == 'materialized_hourly'
+    assert body['mean'] == body['calibrated']['mean'] + 3.0
+    assert body['calibrated']['mean'] == 17.0
+    assert body['mean'] == 20.0
+
+
+def test_compare_reports_both_raw_and_calibrated_difference(client):
+    for nid, base in (('CAUCE-001', 20.0), ('CAUCE-002', 23.0)):
+        client.post('/v1/sync', json=sync_payload(
+            _series(nid, BASE_TS, 10, base=base), node_id=nid))
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.put('/v1/sites/s1/calibration', json={
+        'variable': 'air_temperature', 'offset': -2.0})
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1' WHERE node_id='CAUCE-001'")
+    body = client.get('/v1/analytics/compare?node_a=CAUCE-001'
+                      '&node_b=CAUCE-002&variable=air_temperature').json()
+    assert body['mean_difference_raw'] == -3.0
+    assert body['mean_difference'] == -5.0
+    assert body['node_a']['calibration']['applied'] is True
+    assert body['node_b']['calibration']['applied'] is False
+
+
+def test_heat_events_use_calibrated_values(client):
+    recs = _series('CAUCE-001', BASE_TS, 40, base=31.5)
+    client.post('/v1/sync', json=sync_payload(recs, node_id='CAUCE-001'))
+    _calibrated_site(client, offset=-2.0)
+    base_events = client.get('/v1/analytics/heat-events?node_id=CAUCE-001'
+                             '&variable=air_temperature&threshold=32'
+                             ).json()
+    assert base_events['calibration']['applied'] is True
+    assert len(base_events['events']) == 0
+    shifted = client.get('/v1/analytics/heat-events?node_id=CAUCE-001'
+                         '&variable=air_temperature&threshold=29'
+                         '&min_duration_min=10').json()
+    assert len(shifted['events']) >= 1
+    assert shifted['calibration']['applied'] is True
+
+
+def test_before_after_reports_calibrated_shift(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    split = BASE_TS + 30 * 60000
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 30, base=20.0), node_id='CAUCE-001'))
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', split, 30, base=22.0, start_seq=31),
+        node_id='CAUCE-001'))
+    _calibrated_site(client, offset=-1.0)
+    iv = client.post('/v1/interventions', json={
+        'site_id': 's1', 'kind': 'shade', 'start_utc_ms': split}).json()
+    body = client.get(f'/v1/analytics/before-after?intervention_id='
+                      f'{iv["intervention_id"]}&node_id=CAUCE-001'
+                      f'&variable=air_temperature&before_window_days=1').json()
+    assert body['mean_shift'] == 2.0
+    assert body['mean_shift_calibrated'] == 2.0
+    assert body['calibration']['applied'] is True
+
+
+def test_csv_export_appends_calibrated_columns(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 3, base=20.0), node_id='CAUCE-001'))
+    _calibrated_site(client, offset=-1.5)
+    text = client.get('/v1/nodes/CAUCE-001/export.csv').text
+    lines = text.strip().splitlines()
+    header = lines[0].split(',')
+    assert header[-3:] == ['calibrated_value', 'calibration_scale',
+                            'calibration_offset']
+    row = lines[1].split(',')
+    assert row[6] == '20.0'
+    assert row[11] == '18.5'
+    assert row[12] == '1.0'
+    assert row[13] == '-1.5'
+
+
+def test_retired_calibration_is_not_applied(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 5, base=20.0), node_id='CAUCE-001'))
+    _calibrated_site(client, site_id='s1', offset=-5.0)
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['calibrated']['mean'] == 15.0
+    client.put('/v1/sites/s1/calibration', json={
+        'variable': 'air_temperature', 'offset': -5.0, 'status': 'retired'})
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature').json()
+    assert body['mean'] == 20.0
+    assert body['calibration']['applied'] is False
+    assert 'calibrated' not in body
+
+
+def test_colocation_page_marks_calibrated_nodes(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    for nid, base in (('CAUCE-001', 20.0), ('CAUCE-002', 22.0)):
+        client.post('/v1/sync', json=sync_payload(
+            _series(nid, BASE_TS, 5, base=base), node_id=nid))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1' WHERE node_id='CAUCE-001'")
+    plain = client.get('/colocation?lang=en').text
+    assert 'site calibration applied' not in plain
+    client.put('/v1/sites/s1/calibration', json={
+        'variable': 'air_temperature', 'offset': -1.0})
+    marked = client.get('/colocation?lang=en').text
+    assert 'site calibration applied' in marked
+    assert 'CAUCE-001</a> *' in marked
+
+
+def test_maintenance_events_roundtrip_and_validation(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    r = client.post('/v1/sites/s1/maintenance', json={
+        'kind': 'sensor_replacement', 'at_utc_ms': BASE_TS,
+        'notes': 'new BME280'})
+    assert r.status_code == 200
+    event_id = r.json()['event_id']
+    events = client.get('/v1/sites/s1/maintenance').json()['events']
+    assert len(events) == 1
+    assert events[0]['event_id'] == event_id
+    assert events[0]['kind'] == 'sensor_replacement'
+    assert events[0]['notes'] == 'new BME280'
+    assert client.post('/v1/sites/s1/maintenance',
+                       json={'kind': 'nope'}).status_code == 422
+    assert client.post('/v1/sites/s1/maintenance',
+                       json={'kind': 'note', 'at_utc_ms': -1}
+                       ).status_code == 422
+    assert client.post('/v1/sites/ghost/maintenance',
+                       json={'kind': 'note'}).status_code == 404
+    assert client.get('/v1/sites/ghost/maintenance').status_code == 404
+
+
+def test_no_unresolved_template_placeholders(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 5, base=20.0), node_id='CAUCE-001'))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1'")
+    import re
+    token = re.compile(r"\{[a-z_][a-z0-9_]{2,}\}")
+    for lang in ('en', 'es', 'pt'):
+        for path in ('/', '/nodes/CAUCE-001', '/nodes/CAUCE-001/report',
+                     '/colocation', '/compare', '/map', '/system',
+                     '/nodes/CAUCE-001/events', '/alerts'):
+            r = client.get(f'{path}?lang={lang}')
+            assert r.status_code == 200, f'{path}?lang={lang} -> {r.status_code}'
+            leftovers = sorted(set(token.findall(r.text)))
+            assert not leftovers, (
+                f'unresolved placeholder in {path}?lang={lang}: {leftovers}')
+
+
+def test_compose_terminates_tls_and_hides_the_backend():
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / 'deployment' / 'docker-compose.yml').read_text(
+        encoding='utf-8')
+    caddyfile = (root / 'deployment' / 'Caddyfile').read_text(encoding='utf-8')
+
+    assert 'caddy:' in compose, 'no caddy service'
+    assert 'reverse_proxy cauce-central:8000' in caddyfile
+    assert 'tls internal' in caddyfile
+    assert 'Strict-Transport-Security' in caddyfile
+    assert 'CAUCE_DOMAIN' in compose
+    assert 'ACME_EMAIL' in compose
+
+    published = []
+    for mapping in re.findall(r'^\s*-\s*"([^"]+)"', compose, re.MULTILINE):
+        parts = mapping.split(':')
+        published.append((parts[0] if len(parts) == 3 else None, parts[-1]))
+
+    backend = [host for host, container in published if container == '8000']
+    assert backend, 'central does not publish 8000 at all'
+    for host in backend:
+        assert host is not None and host.startswith('127.0.0.'), (
+            f'central published on {host or "all interfaces"}: '
+            'the LAN must reach it through caddy')
+    assert any(container == '443' for _, container in published), (
+        'no 443 published for the terminator')
+    assert any(container == '80' for _, container in published), (
+        'no 80 published for the redirect')
+
+
+def _walk_cursor(client, node_id, page=7):
+    seen = []
+    cursor = None
+    pages = 0
+    while True:
+        url = f'/v1/nodes/{node_id}/measurements?limit={page}'
+        if cursor:
+            url += f'&cursor={cursor}'
+        body = client.get(url).json()
+        seen.extend(m['sequence'] for m in body['measurements'])
+        pages += 1
+        cursor = body.get('next_cursor')
+        if not cursor or pages > 40:
+            break
+    return seen, pages
+
+
+def test_cursor_pages_through_every_measurement_in_order(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 30), node_id='CAUCE-001'))
+    seen, pages = _walk_cursor(client, 'CAUCE-001', page=7)
+    assert pages == 5, 'cursor did not page through the whole set'
+    assert seen == list(range(1, 31))
+
+
+def test_cursor_is_stable_when_rows_are_inserted_older(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 20, start_seq=1), node_id='CAUCE-001'))
+    first = client.get('/v1/nodes/CAUCE-001/measurements?limit=10').json()
+    cursor = first['next_cursor']
+    assert cursor
+    client.post('/v1/sync', json=sync_payload(
+        [make_record(100 - i, BASE_TS - 600000 * i) for i in range(1, 11)],
+        node_id='CAUCE-001'))
+    after = client.get(
+        f'/v1/nodes/CAUCE-001/measurements?limit=10&cursor={cursor}').json()
+    seqs = [m['sequence'] for m in after['measurements']]
+    assert seqs == list(range(11, 21)), (
+        'offset paging would have shifted; cursor must not')
+
+
+def test_cursor_survives_identical_timestamps(client):
+    recs = [dict(make_record(i, BASE_TS), node_id='CAUCE-001')
+            for i in range(1, 13)]
+    client.post('/v1/sync', json=sync_payload(recs, node_id='CAUCE-001'))
+    seen, pages = _walk_cursor(client, 'CAUCE-001', page=5)
+    assert seen == list(range(1, 13)), 'sequence tiebreak missing'
+
+
+def test_invalid_cursor_is_rejected(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 3), node_id='CAUCE-001'))
+    for bad in ('garbage', 'v1:!!!!', 'v1:'):
+        r = client.get(f'/v1/nodes/CAUCE-001/measurements?cursor={bad}')
+        assert r.status_code == 422, f'{bad!r} -> {r.status_code}'
+    assert client.get('/v1/nodes?cursor=nope').status_code == 422
+
+
+def test_nodes_cursor_pages_the_fleet(client):
+    for i in range(1, 8):
+        client.post('/v1/sync', json=sync_payload(
+            [make_record(1, BASE_TS, 20.0)], node_id=f'CAUCE-{i:03d}'))
+    first = client.get('/v1/nodes?limit=3').json()
+    assert [n['node_id'] for n in first['nodes']] == [
+        'CAUCE-001', 'CAUCE-002', 'CAUCE-003']
+    assert first['next_cursor']
+    assert first['total'] == 7
+    second = client.get(f'/v1/nodes?limit=3&cursor={first["next_cursor"]}').json()
+    assert [n['node_id'] for n in second['nodes']] == [
+        'CAUCE-004', 'CAUCE-005', 'CAUCE-006']
+    last = client.get(f'/v1/nodes?limit=3&cursor={second["next_cursor"]}').json()
+    assert [n['node_id'] for n in last['nodes']] == ['CAUCE-007']
+    assert last['next_cursor'] is None
+
+
+def test_offset_paging_still_works_alongside_cursor(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 10), node_id='CAUCE-001'))
+    a = client.get('/v1/nodes/CAUCE-001/measurements?limit=4&offset=0').json()
+    b = client.get('/v1/nodes/CAUCE-001/measurements?limit=4&offset=4').json()
+    assert [m['sequence'] for m in a['measurements']] == [1, 2, 3, 4]
+    assert [m['sequence'] for m in b['measurements']] == [5, 6, 7, 8]
+    assert a['offset'] == 0 and b['offset'] == 4
+
+
+def _fill_hours(client, node_id, hours=48, step_ms=3600000, base=20.0):
+    rows = []
+    for h in range(hours):
+        rows.append(make_record(h + 1, BASE_TS + h * step_ms, base + h * 0.1))
+    client.post('/v1/sync', json=sync_payload(rows, node_id=node_id))
+
+
+def test_summary_auto_stays_raw_below_the_hourly_threshold(client):
+    _fill_hours(client, 'CAUCE-001')
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature'
+                      f'&from_utc_ms={BASE_TS}'
+                      f'&to_utc_ms={BASE_TS + 6 * 24 * 3600000}').json()
+    assert body['granularity'] == 'raw'
+    assert 'source' not in body
+    assert body['count'] == 48
+
+
+def test_summary_auto_switches_to_hourly_on_long_windows(client):
+    _fill_hours(client, 'CAUCE-001', hours=24 * 10)
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature'
+                      f'&from_utc_ms={BASE_TS}'
+                      f'&to_utc_ms={BASE_TS + 10 * 24 * 3600000}').json()
+    assert body['granularity'] == 'hourly'
+    assert body['source'] == 'materialized_hourly'
+    assert body['count'] == 240
+    assert body['buckets'] == 240
+
+
+def test_summary_hourly_agrees_with_raw_on_mean(client):
+    _fill_hours(client, 'CAUCE-001', hours=24 * 10)
+    common = (f'&from_utc_ms={BASE_TS}&to_utc_ms={BASE_TS + 10 * 24 * 3600000}')
+    hourly = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                        f'&variable=air_temperature{common}').json()
+    raw = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                     f'&variable=air_temperature{common}'
+                     '&granularity=raw').json()
+    assert hourly['count'] == raw['count']
+    assert abs(hourly['mean'] - raw['mean']) < 0.001
+    n = raw['count']
+    assert n > 1
+    import math
+    assert abs(hourly['stddev_pop'] * math.sqrt(n / (n - 1))
+               - raw['stddev']) < 1e-3
+
+
+def test_summary_granularity_override_and_validation(client):
+    _fill_hours(client, 'CAUCE-001', hours=24 * 10)
+    common = (f'&from_utc_ms={BASE_TS}&to_utc_ms={BASE_TS + 10 * 24 * 3600000}')
+    forced_raw = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                            f'&variable=air_temperature{common}'
+                            '&granularity=raw').json()
+    assert forced_raw['granularity'] == 'raw'
+    assert 'buckets' not in forced_raw
+    forced_hourly = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                               f'&variable=air_temperature{common}'
+                               '&granularity=hourly').json()
+    assert forced_hourly['granularity'] == 'hourly'
+    assert client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature&granularity=weekly'
+                      ).status_code == 422
+
+
+def test_summary_stays_raw_when_hourly_buckets_are_incomplete(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 600), node_id='CAUCE-001'))
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("DELETE FROM agg_hourly WHERE node_id='CAUCE-001'")
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature'
+                      f'&from_utc_ms={BASE_TS}'
+                      f'&to_utc_ms={BASE_TS + 10 * 24 * 3600000}').json()
+    assert body['granularity'] == 'raw', (
+        'must not report hourly stats when the buckets were purged')
+
+
+def test_summary_hourly_applies_calibration(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    _fill_hours(client, 'CAUCE-001', hours=24 * 10)
+    client.put('/v1/sites/s1/calibration', json={
+        'variable': 'air_temperature', 'offset': -2.0})
+    from cauce_server import db as _db
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s1'")
+    body = client.get('/v1/analytics/summary?node_id=CAUCE-001'
+                      '&variable=air_temperature'
+                      f'&from_utc_ms={BASE_TS}'
+                      f'&to_utc_ms={BASE_TS + 10 * 24 * 3600000}').json()
+    assert body['granularity'] == 'hourly'
+    assert body['calibrated']['mean'] == round(body['mean'] - 2.0, 6)

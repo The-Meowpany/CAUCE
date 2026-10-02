@@ -12,6 +12,7 @@ class Esp32CaptivePortal {
   void begin();
   void processNextRequest();
   void stop();
+  bool started() const { return started_; }
 
  private:
   DNSServer dns_;

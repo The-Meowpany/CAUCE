@@ -3,10 +3,17 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (134 firmware + 88 backend tests, E2E green)
+## Implemented and verified (148 firmware + 116 backend tests, E2E green)
 | **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 5 pruebas nuevas (firmware HMAC RFC4231 x2 + matriz backend valida/firma-mala/sin-firma + device-secret signing x2) |
 
 | Component | Evidence |
+| **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
+| **Central calibration**: `calibration` table per (site, variable) plus a `maintenance_events` log; raw stays intact and the calibrated value is derived on read; applied in summary, compare, period-compare, summary-fast, hourly, heat-events, before-after/DiD, colocation, report and CSV | 16 backend tests |
+| **Long-window analytics**: `granularity=auto` reads `agg_hourly` past 7 days when coverage is sufficient and says so in the response; `raw` remains available for exact min/max | 6 backend tests |
+| **Cursor pagination**: opaque `(timestamp_utc_ms, sequence)` cursor for measurements and `node_id`-based cursor for nodes, stable under concurrent inserts; `limit`/`offset` untouched | 6 backend tests |
+| **Deep sleep**: portable `DeepSleepController` (9 tests) plus `Esp32Sleeper`, behind a `deep_sleep_enabled` flag that is **off by default** until bench power measurement | 9 firmware tests + 2 config tests |
+| **Non-blocking OTA chunks**: tri-state `ReadStatus` reader, no 10 s per-chunk wait, `OTA_STALLED` with a tick budget | 3 firmware tests |
+| **TLS in front of the central**: Caddy with an internal CA and an env-driven domain; central bound to loopback only | 1 backend test + ESP32 build |
 | **Data coverage accounting**: expected vs received, longest gap, gap reasons (`no_data` / `measured_not_delivered` / `clock_uncertain`), node + site + CSV | 8 backend tests |
 | **Control sites and difference-in-differences** in `before-after`, with distance to the treated site and automatic exclusion of under-sampled controls | 2 backend tests + `haversine_m`/`difference_in_differences` unit-covered |
 | **Fleet triage** (`/v1/fleet`): firmware spread, last sync, storage, flags, `needs_visit`; `/system` renders it in en/es/pt | 3 backend tests + dashboard render test |
@@ -27,15 +34,15 @@ not. It overrides any aspirational claim elsewhere.
 | **Metrics**: mean/median/sample stddev/percentiles, window aggregation, trapezoidal exposure hours, quality-aware extraction | 8 tests |
 | ISO-8601 UTC format/parse (civil algorithm, leap years) | Exact roundtrips |
 | **Network FSM logic**: OFFLINE/WAITING_RETRY/CONNECTING/CONNECTED/DEGRADED/AP_FALLBACK, exponential backoff, connect timeout | 7 tests with scripted controller |
-| **Embedded API v1**: all 8 `/api/v1` endpoints, paginated streaming, Bearer?SHA-256 constant-time auth, fail-closed, 422 error lists, secret masking | 12 host router tests |
+| **Embedded API v1**: all 8 `/api/v1` endpoints, paginated streaming, Bearer + SHA-256 constant-time auth, fail-closed, 422 error lists, secret masking | 12 host router tests |
 | **ESP32 HTTP transport** (`Esp32ApiServer` on WebServer, chunked) wired in `main.cpp` | Cross-compile SUCCESS — no board yet |
 | **Sync client**: persistent watermark, idempotent `node_id+sequence` batches, exponential backoff, halt-on-reject | 8 tests |
 | **Central backend** (FastAPI+SQLite): `/v1/sync` idempotent ingestion with honest acks (now HMAC per-device + rate-limit SQLite-backed), nodes/measurements queries (now paginated + per-node CSV export), analytics summary/compare/before-after/period-compare/heat-events/summary-fast, optional token auth (constant-time), sites & interventions, time-reconstruct | 30 pytest tests |
 | **Local web dashboard** (embedded ~10KB SPA, dependency-free canvas chart, quality cards, 1h–7d ranges, export, admin config) with ES/EN switch + **captive portal DNS** | 2 HTML integrity tests; DNS compile-verified |
 | **Central mini-dashboard** with Accept-Language localization (en/es/pt) + full-history CSV export | Localization test |
-| **Scenario simulator CLI**: normal_day / heat_event / sensor_failure / network_outage / power_loss_recovery ? CSV or direct `/v1/sync` feed | Real smoke: 5 nodes loaded into live backend |
+| **Scenario simulator CLI**: normal_day / heat_event / sensor_failure / network_outage / power_loss_recovery, CSV or direct `/v1/sync` feed | Real smoke: 5 nodes loaded into live backend |
 | **OTA decision layer**: semver compare, manifest validation, streaming SHA-256 verification, heap/battery gates, alternate-partition anti-brick rules | 13 tests (10 FSM + 3 manifest-JSON parser) |
-| Node?server **E2E integration**: C++ SyncManager (real sockets) against live FastAPI; initial/incremental/idempotent-replay phases verified directly in SQLite | `scripts/run-e2e.ps1` — caught a real JSON serialization bug |
+| Node-to-server **E2E integration**: C++ SyncManager (real sockets) against live FastAPI; initial/incremental/idempotent-replay phases verified directly in SQLite | `scripts/run-e2e.ps1` — caught a real JSON serialization bug |
 | CI workflow: native tests · ESP32 build · backend pytest · E2E job | `.github/workflows/ci.yml` |
 
 ## Exists but NOT yet validated on physical hardware
@@ -55,26 +62,32 @@ not. It overrides any aspirational claim elsewhere.
 
 ## Not implemented yet
 
-- Volumetric 3D viewer: discarded by design decision — the central keeps
+- Volumetric 3D viewer: discarded by design decision - the central keeps
   the dependency-free 2D schematic SVG map with IDW field and shared-scale
   co-location overlays instead.
-- Deep sleep application (policy evaluator shipped; application requires bench).
-- TLS termination in front of the central (see `deployment/` and
-  `docs/en/DEPLOYMENT.md`).
+- Calibration **uncertainty**: records carry no uncertainty estimate, so
+  `docs/*/CALIBRATION.md` keeps every external claim marked pending. There
+  is no formal calibration process yet.
+- Coverage accounting is still row-bound for very long windows even
+  though `summary` now prefers hourly buckets.
+- TLS ships with an internal CA for a private domain; a public
+  deployment still needs a real certificate.
+- Deep sleep is wired but **disabled by default**: turning it on requires
+  the bench measurement in `docs/en/BENCH_PLAN.md`.
 
 ## Known technical debt / backlog (prioritized)
 
 | # | Sev | Item | Trigger | State |
 |---|---|---|---|---|
-| 1 | HIGH | Transport security (TLS) + node crypto identity | Exposing beyond trusted LAN | HMAC per-device signing shipped; TLS deferred to deployment decision |
+| 1 | HIGH | Transport security (TLS) + node crypto identity | Exposing beyond trusted LAN | Done: HMAC per-device signing plus Caddy TLS with an internal CA (`deployment/`); a real certificate is still required before public exposure |
 | 2 | HIGH | Physical bench validation (B1-B5) | Field expansion | docs/en/BENCH_PLAN.md |
-| 3 | MED | OTA download is synchronous/blocking ? dashboard down during update | First real OTA | Accepted; async FSM proposed |
-| 4 | MED | `LogStorageRepository` open() O(bytes) ✅ **CK01 checkpoint implemented** (fast-path O(segments) + fallback scan; flush every 64 appends) | Storage budget >512 KiB | ? Done |
-| 5 | MED | Backend `_RATE` in-memory; `sync_batches` unbounded; `/v1/nodes` unpaged | Central growth | ? Done: SQLite-backed rate limit, retention cap 5000, pagination `limit`/`offset` |
-| 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) ✅ **increased to 512 B** | Long messages | ? Done |
-| 7 | LOW | Unity single binary — cross-suite isolation via dedicated data dirs | — | — |
-| 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | — |
-| 9 | LOW | `LogStorageRepository` / coverage queries scan rows in Python for very long windows | Windows > 90 days on a node | Coverage caps windows at 400 days and gaps at 20; still row-bound |
+| 3 | MED | OTA download is synchronous/blocking, dashboard down during update | First real OTA | Done: chunked reader with tri-state `ReadStatus`, no per-chunk sleep, `OTA_STALLED` guard. The initial HTTP open is still blocking |
+| 4 | MED | `LogStorageRepository` open() O(bytes) - **CK01 checkpoint implemented** (fast-path O(segments) + fallback scan; flush every 64 appends) | Storage budget >512 KiB | Done |
+| 5 | MED | Backend `_RATE` in-memory; `sync_batches` unbounded; `/v1/nodes` unpaged | Central growth | Done: SQLite-backed rate limit, retention cap 5000, pagination `limit`/`offset` plus opaque cursors |
+| 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) - **increased to 512 B** | Long messages | Done |
+| 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Open |
+| 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
+| 9 | LOW | `LogStorageRepository` / coverage queries scan rows in Python for very long windows | Windows > 90 days on a node | Partly done: `granularity=auto` reads `agg_hourly` past 7 days. Coverage still caps windows at 400 days and gaps at 20, so it remains row-bound |
 
 ### Closed this round
 
@@ -146,9 +159,9 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 112 succeeded
+cd firmware && pio test -e native      # expect: 148 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 68 passed
+python -m pytest tests -q              # expect: 116 passed
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

@@ -26,11 +26,11 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 134 tests en host (Unity)
+pio test -e native          # 148 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 88 tests
+python -m pytest tests -q   # 116 tests
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ..\scripts\verify-all.ps1   # todo lo anterior en un gate
 ```

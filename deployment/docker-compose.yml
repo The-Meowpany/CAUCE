@@ -1,16 +1,42 @@
 services:
   cauce-central:
     build: ../backend
+    # Bound to loopback only: the LAN reaches the central through Caddy, and
+    # this mapping exists so an operator can debug on the host.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       CAUCE_DB_PATH: /data/cauce.sqlite
       CAUCE_SYNC_TOKEN: ${CAUCE_SYNC_TOKEN:-}
       CAUCE_API_TOKEN: ${CAUCE_API_TOKEN:-}
-      CAUCE_RATE_LIMIT: "120"
+      CAUCE_RATE_LIMIT: ${CAUCE_RATE_LIMIT:-120}
+      CAUCE_RETENTION_ENABLED: ${CAUCE_RETENTION_ENABLED:-1}
+      CAUCE_RETENTION_DAYS: ${CAUCE_RETENTION_DAYS:-365}
     volumes:
       - cauce-data:/data
     restart: unless-stopped
 
+  # TLS terminator. The central never leaves this network unencrypted.
+  # Set CAUCE_DOMAIN to the hostname the nodes use; set CAUCE_TLS_INTERNAL=1
+  # for a pilot without a public DNS name.
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - cauce-central
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8443:8443"
+    environment:
+      CAUCE_DOMAIN: ${CAUCE_DOMAIN:-cauce.local}
+      ACME_EMAIL: ${ACME_EMAIL:-ops@cauce.local}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
 volumes:
   cauce-data:
+  caddy-data:
+  caddy-config:

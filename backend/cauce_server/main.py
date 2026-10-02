@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from . import db
 from .alerts import router as alerts_router
 from .api import router
+from .calibration import router as calibration_router
 from .config import settings
 from .coverage import router as coverage_router
 from .dashboard import router as dashboard_router
@@ -72,3 +73,4 @@ app.include_router(dashboard_router)
 app.include_router(legal_router)
 app.include_router(coverage_router)
 app.include_router(fleet_router)
+app.include_router(calibration_router)

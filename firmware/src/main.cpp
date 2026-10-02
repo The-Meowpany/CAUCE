@@ -1,5 +1,6 @@
 #include <cstdio>
 
+#include "cauce/app/DeepSleepController.h"
 #include "cauce/app/MeasurementScheduler.h"
 #include "cauce/core/DataExporter.h"
 #include "cauce/core/LogStorageRepository.h"
@@ -8,6 +9,7 @@
 #include "cauce/core/Types.h"
 #include "cauce/drivers/Bme280Driver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
+#include "cauce/hal/Esp32Sleeper.h"
 #include "cauce/hal/MemoryFileSystem.h"
 
 #ifdef ARDUINO
@@ -43,6 +45,10 @@ static cauce::app::MeasurementScheduler* g_scheduler = nullptr;
 static cauce::drivers::Bme280Driver* g_bme = nullptr;
 static cauce::ConfigManager* g_configManager = nullptr;
 static cauce::app::SystemHealth g_health{};
+static cauce::app::DeepSleepController g_sleepController{};
+static size_t g_lastStoredSeen = 0;
+static uint64_t g_lastMeasurementMs = 0;
+static void maybeDeepSleep();
 static cauce::app::ApiRouter* g_apiRouter = nullptr;
 static WebServer* g_webServer = nullptr;
 static cauce::app::Esp32ApiServer* g_apiServer = nullptr;
@@ -190,6 +196,43 @@ void loop() {
   g_portal->begin();
   g_portal->processNextRequest();
   g_apiServer->handleClient();
+  maybeDeepSleep();
+}
+
+void maybeDeepSleep() {
+  if (!g_activeConfig.deepSleepEnabled) return;
+  const cauce::app::OtaState ota = g_otaManager->state();
+  if (ota == cauce::app::OtaState::Downloading ||
+      ota == cauce::app::OtaState::Checking ||
+      ota == cauce::app::OtaState::RebootPending) {
+    return;
+  }
+  const bool linkUp =
+      (g_health.netState == cauce::app::NetState::Connected ||
+       g_health.netState == cauce::app::NetState::Degraded);
+  const size_t stored = g_store->totalRecords();
+  // Stamp the last *newly stored* measurement, not "a loop where data was
+  // pending". Otherwise msSinceLastMeasurement would reset on every
+  // iteration while records await ack and the node would never sleep.
+  if (stored != g_lastStoredSeen) {
+    g_lastStoredSeen = stored;
+    g_lastMeasurementMs = g_clock.monotonicMs();
+  }
+  cauce::app::DeepSleepInputs in;
+  in.enabled = true;
+  in.samplingIntervalS = g_activeConfig.samplingIntervalS;
+  in.syncIntervalS = g_activeConfig.syncIntervalS;
+  in.batteryV = g_health.batteryVoltageV;
+  in.networkConnected = linkUp;
+  in.portalActive = g_portal->started();
+  in.storageHasPendingSync = stored > g_syncManager->lastAckedSequence();
+  in.msSinceLastMeasurement = g_clock.monotonicMs() - g_lastMeasurementMs;
+  in.msSinceBoot = g_clock.monotonicMs();
+  const cauce::app::SleepPlan plan = g_sleepController.evaluate(in);
+  if (plan.decision != cauce::app::SleepDecision::Sleep) return;
+  g_logger->eventf(cauce::LogLevel::Info, "DEEP_SLEEP_ENTER",
+                   "seconds=%u reason=%s", plan.sleepS, plan.reason);
+  cauce::app::Esp32Sleeper::enterDeepSleep(plan.sleepS);
 }
 
 #else

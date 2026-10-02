@@ -347,7 +347,7 @@ Timestamps in ms UTC; without trusted source stored as 0 with `time_uncertain` f
 
 **Implemented**: admin tokens stored only as SHA-256 (NIST-vector verified), compared constant-time on both node and server; strict validation of all external input (ranges, bounded lengths); static buffers with zero hot-path allocations; public-read/authenticated-write separation; fail-closed (POST /config without token → 503); per-IP rate limiting with bounded SQLite-backed memory on every endpoint; secret masking in GET `/config`; minimum privacy (environmental telemetry + node identifiers only); **per-device HMAC identity** with provisioning endpoint and raw-body signature verification; **OTA manifest authentication gate** before download acceptance.
 
-**Known limitations**: no transport encryption (plain HTTP on LAN; TLS requires certificate/provisioning infrastructure); node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
+**Known limitations**: transport encryption now terminates at a reverse proxy shipped with the project (`deployment/Caddyfile`, automatic internal CA, central bound to loopback), but plain HTTP on a bare LAN deployment remains possible and a public exposure would require a real certificate; node identity is self-declared unless provisioned (unsigned nodes accepted only when no provisioning exists); no asymmetric signatures (Ed25519) for OTA images; captive DNS accepts any domain by design; Wi-Fi password stored plaintext in config (required for use, mitigated by LAN-only exposure). Coherent for community pilot on trusted network; insufficient for hostile public deployment.
 
 # 20. Environmental use case
 
@@ -382,8 +382,8 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Local query latency | HTTP LAN served from local flash/RAM | architecture |
 | Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
 | Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
-| Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets); detail queries O(n) — adequate for 10¹–10² node pilots | backend design |
-| Maintainability | 132 automated tests; CI 6 jobs; reproducible docs | repository |
+| Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
+| Maintainability | 264 automated tests (148 firmware, 116 backend); CI 6 jobs; reproducible docs | repository |
 | Cost | BOM 13–32 USD/node multi-vendor | HARDWARE.md |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
@@ -397,24 +397,24 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 # 24. Limitations
 
 1. **Hardware not physically validated**: everything runs on host or cross-compilation; real BME280, LittleFS, Wi-Fi radio and power cuts await bench testing.
-2. **Security**: no TLS, no asymmetric signatures, self-declared node identity for unsigned nodes, open captive DNS.
-3. **Energy**: no deep sleep; continuous operation incompatible with modest solar without specific sizing.
+2. **Security**: TLS available in front of the central and HMAC-signed batches implemented, but no asymmetric signatures, self-declared node identity for unsigned nodes and open captive DNS remain.
+3. **Energy**: deep sleep policy implemented and host-tested but disabled by default, so continuous operation is still incompatible with modest solar without specific sizing and bench measurement.
 4. **Open-scan O(file)**: acceptable to ≈10⁵ records; CK01 mitigates but scan fallback remains O(bytes).
-5. **Central analytics O(n)** for detail queries beyond hourly aggregates.
+5. **Central analytics**: `granularity=auto` avoids O(n) past 7 days, but coverage accounting and explicit raw queries remain row-bound.
 6. **Single transport** HTTP/JSON; no compact binary or compression for narrow links.
 7. **Incomplete decentralization**: no peer discovery or replica; central concentrates aggregate view (not integrity).
-8. **Scientific precision**: depends on unexecuted relative calibration; no metrological traceability.
-9. **Field maintenance**: sensor replacement requires manual recalibration documentation.
+8. **Scientific precision**: relative calibration is implemented and applied across analytics, exports and dashboard, but it was never physically executed, carries no uncertainty estimate and has no metrological traceability.
+9. **Field maintenance**: maintenance events can be logged through the API, but the physical replacement and its recalibration are still manual acts.
 10. **Multi-profile complexity**: HAL+domain+app+backend demands rare full-stack profile; mitigated by the automated suite.
 
 # 25. Future work
 
 1. **ALEXANDRA [F]**: peer-to-peer exchange via ESP-NOW/mDNS with sequence-based merge; Ed25519-signed manifests/batches; CBOR/CoAP optional transport.
-2. **Physical bench**: BME280/LittleFS/Wi-Fi validation; instrumented power-cut trials; `SleepPolicy` application with deep sleep.
-3. **Full OTA**: native ESP32 HTTP reader, image signing, post-boot boot-counter confirmation.
-4. **Progressive security**: TLS or per-device derived tokens; granular central authorization.
-5. **Time**: NTP + temporal reconstruction of `time_uncertain` records after first sync.
-6. **Persistent central analytics**: precomputed aggregates beyond hourly; calibration-normalized multi-node comparison.
+2. **Physical bench**: BME280/LittleFS/Wi-Fi validation; instrumented power-cut trials; enabling deep sleep once its power saving is measured.
+3. **OTA closure**: the ESP32 HTTP reader and manifest signing ship and the download no longer blocks the scheduler; post-boot boot-counter confirmation and the physical flash/rollback trial remain.
+4. **Progressive security**: TLS termination and per-device derived tokens ship; asymmetric image signing and granular central authorization remain.
+5. **Time**: NTP discipline and central temporal reconstruction ship with an honest margin-of-error statement; tightening that margin remains.
+6. **Persistent central analytics**: hourly aggregates with `auto` selection and calibration-normalized comparison ship; aggregates finer-grained or coarser than hourly remain.
 7. **New topologies**: LoRa gateways for sites without Wi-Fi; regional central replicas.
 8. **Actuators**: resource model extension to idempotent commands with confirmation.
 
@@ -425,8 +425,8 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
 - **What role ALEXANDRA plays**: formal exchange contract —versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format—; core implemented and verified; peer-to-peer and asymmetric-crypto extensions are proposed evolution.
-- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —132 verifications including E2E against live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
-- **Limitations**: pending physical validation, absence of encryption/asymmetric signing, today's continuous-power requirement, scanning and analytics scaled to pilot size.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —264 verifications (148 firmware, 116 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **Limitations**: pending physical validation, absence of asymmetric signing, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
 ---
@@ -542,12 +542,18 @@ Frozen detection: streak ≥6 readings identical within ε = 0.01. Maximum toler
 
 | Suite (firmware/test/) | Count |
 |---|---|
-| validation · codec · storage · config · security · bme280 | 9·5·6·9·6·5 |
-| scheduler_integration · export · metrics · network · sync · api(cpp) · ota | 5·6·8·8·10·14·10 |
-| **Total firmware (host)** | **105** |
-| Backend (pytest): ingestion idempotency/auth/rate-limit/pagination · filters · analytics×6 · dashboard i18n · CSV export · simulator roundtrip | **26** |
+| `test_api` | 15 |
+| `test_export` | 6 |
+| `test_metrics` | 8 |
+| `test_network` | 8 |
+| `test_ota` (includes rollback policy and the LoRa/transport suites pulled in by the same binary) | 47 |
+| `test_security` | 16 |
+| `test_sync` | 12 |
+| `test_main` (validation, codec, storage, config, BME280, scheduler, diagnostics, deep sleep) | 36 |
+| **Total firmware (host)** | **148** |
+| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract | **116** |
 | Integration E2E | 4 phases + SQLite assertions |
-| **Grand total** | **132+** |
+| **Grand total** | **264+** |
 
 ## Annex E. Node configuration (extract)
 
@@ -558,6 +564,7 @@ sync_interval_s=900
 storage_max_bytes=524288
 segment_max_bytes=65536
 wifi_enabled=0
+deep_sleep_enabled=0
 admin_token_sha256=<sha-256 hex>
 sync_device_key=<per-device HMAC secret>
 thr_range_min_air_temperature=-40.00

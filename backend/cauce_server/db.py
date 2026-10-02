@@ -134,6 +134,31 @@ CREATE TABLE IF NOT EXISTS maintenance_state (
     value TEXT,
     updated_utc_ms INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS calibration (
+    site_id TEXT NOT NULL REFERENCES sites(site_id),
+    variable TEXT NOT NULL,
+    scale REAL NOT NULL DEFAULT 1.0,
+    offset REAL NOT NULL DEFAULT 0.0,
+    method TEXT NOT NULL DEFAULT 'unspecified',
+    calibration_reference TEXT,
+    sensor_id TEXT,
+    calibration_date TEXT,
+    status TEXT NOT NULL DEFAULT 'applied',
+    notes TEXT,
+    updated_utc_ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (site_id, variable)
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id TEXT NOT NULL REFERENCES sites(site_id),
+    kind TEXT NOT NULL,
+    at_utc_ms INTEGER NOT NULL,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_maint_site ON maintenance_events(site_id, at_utc_ms);
 """
 
 _write_lock = threading.Lock()

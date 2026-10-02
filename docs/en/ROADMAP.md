@@ -102,6 +102,23 @@ did the pieces that decide whether a field deployment is survivable:
 - Field diagnostics bundles, ingested centrally, plus `/v1/fleet`
   answering which node needs a visit.
 - `simulator/load_pilot.py` to rehearse pilot volume.
+- **TLS termination** via `deployment/Caddyfile`: automatic internal
+  CA, domain from `CAUCE_DOMAIN`, and the central bound to
+  `127.0.0.1` so only the proxy reaches it.
+- **Cursor pagination** on measurements (`timestamp_utc_ms, sequence`)
+  and nodes (`node_id`), so a long export stays consistent while the
+  fleet keeps writing. `limit`/`offset` still work.
+- **Async OTA download**: the firmware reader returns a tri-state per
+  chunk instead of sleeping 10 s waiting for bytes, and the manager
+  gives up with `OTA_STALLED` rather than blocking the scheduler
+  forever. The initial HTTP open is still blocking.
+- **Deep sleep policy**: `DeepSleepController` decides when it is
+  allowed to sleep (not while pending data is unsynced, not while OTA
+  runs, not below the battery gate). It ships **disabled by default**
+  because nobody has measured the power yet.
+- **Long-window analytics**: `granularity=auto` answers a 30-day
+  request from the `agg_hourly` buckets instead of streaming every raw
+  row, and says in the response which granularity it used.
 
 Still open here:
 
@@ -109,7 +126,13 @@ Still open here:
   policy are host-tested and the two-slot partition table ships, but
   nobody has flashed a board, marked an image valid, or watched a bad
   image roll back. Until that happens, updates need physical access.
-- TLS termination, cursor pagination, async OTA.
+- **Calibration uncertainty.** The central applies offsets and
+  scales correctly, but nothing carries an uncertainty estimate and
+  there is no formal procedure. Until then a calibrated reading is a
+  better relative comparison, not a traceable measurement.
+- **Deep sleep power measurement.** The policy is tested; the savings
+  are not.
+- A real certificate if the central is ever exposed publicly.
 
 ## Non-goals for now
 

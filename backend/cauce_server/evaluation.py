@@ -9,6 +9,12 @@ from .analytics import (
     haversine_m,
     summary_stats,
 )
+from .calibration import (
+    apply_value,
+    calibration_for,
+    calibration_summary,
+    is_identity,
+)
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
@@ -233,6 +239,11 @@ def analytics_before_after(
         )
         return [r["value"] for r in raw]
 
+    calibration = calibration_for(node_id, variable)
+
+    def calibrated(lo: int, hi: int) -> list[float]:
+        return [apply_value(v, calibration) for v in values(lo, hi)]
+
     before = summary_stats(values(before_from, start - 1) if start > 0 else [])
     after = summary_stats(values(start, end))
 
@@ -240,11 +251,19 @@ def analytics_before_after(
     if before["count"] and after["count"]:
         mean_shift = round(after["mean"] - before["mean"], 3)
 
+    calibrated_shift = None
+    if start > 0:
+        cal_before = summary_stats(calibrated(before_from, start - 1))
+        cal_after = summary_stats(calibrated(start, end))
+        if cal_before["count"] and cal_after["count"]:
+            calibrated_shift = round(cal_after["mean"] - cal_before["mean"], 3)
+
     sufficient = before["count"] >= 30 and after["count"] >= 30
 
     controls = _control_group(iv["site_id"], variable, before_from, start, end, start)
     control_deltas = [c["mean_shift"] for c in controls if c["included"]]
     did = difference_in_differences(mean_shift, control_deltas)
+    did_calibrated = difference_in_differences(calibrated_shift, control_deltas)
 
     notes = [
         "descriptive comparison; does not imply causality.",
@@ -261,6 +280,8 @@ def analytics_before_after(
             f"difference-in-differences over {len(control_deltas)} control node(s); "
             "controls are unmatched, so check distance and land cover yourself"
         )
+    if calibration and not is_identity(calibration["scale"], calibration["offset"]):
+        notes.append("calibrated shift reported separately; raw rows are untouched")
 
     return {
         "metric_type": "derived_before_after",
@@ -275,6 +296,7 @@ def analytics_before_after(
         },
         "node_id": node_id,
         "variable": variable,
+        "calibration": calibration_summary(calibration),
         "windows": {
             "before_start_utc_ms": before_from,
             "before_end_utc_ms": start - 1,
@@ -284,6 +306,7 @@ def analytics_before_after(
         "before": before,
         "after": after,
         "mean_shift": mean_shift,
+        "mean_shift_calibrated": calibrated_shift,
         "control_group": {
             "control_node_count": len(control_deltas),
             "excluded_node_count": len(controls) - len(control_deltas),
@@ -292,6 +315,7 @@ def analytics_before_after(
                 if control_deltas else None
             ),
             "difference_in_differences": did,
+            "difference_in_differences_calibrated": did_calibrated,
             "controls": controls,
         },
     }

@@ -37,21 +37,32 @@ class FakeReader final : public IFirmwareReader {
   size_t pos{0};
   int openCalls{0};
 
-  bool open(const char*) override {
-    isOpen = true;
-    pos = 0;
-    ++openCalls;
-    return true;
-  }
-  size_t read(uint8_t* buffer, size_t capacity) override {
-    if (pos >= payload.size()) return 0;
-    const size_t n = std::min(capacity, payload.size() - pos);
-    std::memcpy(buffer, payload.data() + pos, n);
-    pos += n;
-    return n;
-  }
-  void close() override { isOpen = false; }
-};
+bool open(const char*) override {
+       isOpen = true;
+       pos = 0;
+       ++openCalls;
+       return true;
+     }
+     ReadStatus read(uint8_t* buffer, size_t capacity,
+                     size_t* bytesRead) override {
+       if (bytesRead != nullptr) *bytesRead = 0;
+       ++readCalls;
+       if (stallEvery > 0 && readCalls % stallEvery == 0) {
+         return ReadStatus::NoDataYet;
+       }
+       if (alwaysStall) return ReadStatus::NoDataYet;
+       if (pos >= payload.size()) return ReadStatus::Eof;
+       const size_t n = std::min(capacity, payload.size() - pos);
+       std::memcpy(buffer, payload.data() + pos, n);
+       pos += n;
+       if (bytesRead != nullptr) *bytesRead = n;
+       return ReadStatus::Data;
+     }
+     void close() override { isOpen = false; }
+     int readCalls{0};
+     int stallEvery{0};
+     bool alwaysStall{false};
+   };
 
 class FakeInstaller final : public IFirmwareInstaller {
  public:
@@ -80,7 +91,16 @@ hal::ManualClock otaClock(1787356800000ULL);
 
 class SilentSink2 final : public ILogSink {
  public:
-  void writeLine(const char*) override {}
+  void writeLine(const char* line) override {
+    lines.push_back(line ? line : "");
+  }
+  bool contains(const char* needle) const {
+    for (const std::string& l : lines) {
+      if (l.find(needle) != std::string::npos) return true;
+    }
+    return false;
+  }
+  std::vector<std::string> lines;
 } sink2;
 
 struct OtaRig {
@@ -93,7 +113,10 @@ struct OtaRig {
   OtaRig()
       : manager(catalog, reader, installer, otaClock, logger) {
     manager.setFirmwareVersion("1.0.0");
+    sink2.lines.clear();
   }
+
+  bool logContains(const char* needle) const { return sink2.contains(needle); }
 };
 
 std::string makeFirmware(int seed, size_t size) {
@@ -337,6 +360,65 @@ void test_manifest_json_missing_sha_rejected();
 void test_manifest_json_truncated_rejected();
 void test_manifest_json_rejects_short_sha_and_non_http_url();
 
+void test_reading_slowly_still_completes() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  const std::string fw = makeFirmware(42, 3000);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+  rig.reader.stallEvery = 3;
+  rig.manager.setMaxStallTicks(50);
+
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::Downloading, rig.manager.state());
+  for (int i = 0; i < 4000 && rig.manager.state() == OtaState::Downloading; ++i) {
+    rig.manager.tick();
+    otaClock.advanceMs(10);
+  }
+  TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
+  TEST_ASSERT_EQUAL(0, rig.manager.stallTicks());
+}
+
+void test_reader_that_never_delivers_aborts_as_stalled() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  const std::string fw = makeFirmware(42, 3000);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+  rig.reader.alwaysStall = true;
+  rig.manager.setMaxStallTicks(5);
+
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::Downloading, rig.manager.state());
+  for (int i = 0; i < 20 && rig.manager.state() == OtaState::Downloading; ++i) {
+    rig.manager.tick();
+    otaClock.advanceMs(10);
+  }
+  TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
+  TEST_ASSERT_TRUE(rig.logContains("OTA_STALLED"));
+  TEST_ASSERT_EQUAL(0, rig.installer.received.size());
+}
+
+void test_zero_stall_budget_is_clamped() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  rig.manager.setMaxStallTicks(0);
+  const std::string fw = makeFirmware(42, 1000);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+  rig.reader.alwaysStall = true;
+
+  rig.manager.tick();
+  for (int i = 0; i < 5 && rig.manager.state() == OtaState::Downloading; ++i) {
+    rig.manager.tick();
+    otaClock.advanceMs(10);
+  }
+  TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
+}
+
 void registerOtaTests() {
   UNITY_BEGIN();
   RUN_TEST(test_compare_semver_pairs);
@@ -354,6 +436,9 @@ void registerOtaTests() {
   RUN_TEST(test_manifest_json_missing_sha_rejected);
   RUN_TEST(test_manifest_json_truncated_rejected);
   RUN_TEST(test_manifest_json_rejects_short_sha_and_non_http_url);
+  RUN_TEST(test_reading_slowly_still_completes);
+  RUN_TEST(test_reader_that_never_delivers_aborts_as_stalled);
+  RUN_TEST(test_zero_stall_budget_is_clamped);
   UNITY_END();
 }
 

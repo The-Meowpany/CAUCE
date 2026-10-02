@@ -32,6 +32,7 @@ class OtaManager {
     size_t chunkSize{512};
     uint32_t minFreeHeapBytes{40960};
     float minBatteryV{0.0f};
+    uint32_t maxStallTicks{600};
   };
 
   using FreeHeapFn = uint32_t (*)();
@@ -48,11 +49,13 @@ class OtaManager {
   void setManifestKey(const uint8_t key[32]);
   void setRebootHook(RebootFn reboot);
   void setInterval(uint32_t checkIntervalS);
+  void setMaxStallTicks(uint32_t ticks);
   void tick();
 
   OtaState state() const { return state_; }
   const char* pendingVersion() const { return pendingVersion_; }
   size_t downloadProgress() const { return downloadReceived_; }
+  uint32_t stallTicks() const { return stallTicks_; }
 
  private:
   bool safetyOk() const;
@@ -83,6 +86,7 @@ class OtaManager {
 
   Sha256Ctx shaCtx_{};
   size_t downloadReceived_{0};
+  uint32_t stallTicks_{0};
   bool readerOpened_{false};
   OtaRelease pendingRelease_{};
 };

@@ -10,6 +10,12 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .analytics import summary_stats
 from .api import analytics_heat_events
+from .calibration import (
+    apply_value,
+    is_identity,
+    site_calibrations,
+    transform_stats,
+)
 from .config import settings
 from .db import engine, query
 from .ratelimit import check_rate
@@ -54,6 +60,10 @@ _LABELS = {
             "last_run": "Last run", "expected": "Expected", "received": "Received",
             "longest_gap": "Longest gap", "worst_node": "Worst node",
             "reason": "Reason", "no_gaps": "No gaps above the sampling interval.",
+            "calibrated_marker": "* calibrated value (site calibration applied)",
+            "calibration_none": "Raw values: no site calibration recorded.",
+            "calibration": "Calibration",
+            "cal_none": "No calibration recorded for this site.",
             "fleet_hint": "A visit is needed when a node is offline, its clock is unset, storage is nearly full or frames are corrupted.",
             "yes": "yes", "no": "no",},
     "es": {"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · se actualiza cada 60 segundos",
@@ -92,6 +102,10 @@ _LABELS = {
             "last_run": "Última corrida", "expected": "Esperadas", "received": "Recibidas",
             "longest_gap": "Brecha máx", "worst_node": "Peor nodo",
             "reason": "Motivo", "no_gaps": "Sin brechas por encima del intervalo de muestreo.",
+            "calibrated_marker": "* valor calibrado (calibración del sitio aplicada)",
+            "calibration_none": "Valores crudos: no hay calibración registrada para el sitio.",
+            "calibration": "Calibración",
+            "cal_none": "No hay calibración registrada para este sitio.",
             "fleet_hint": "Hace falta visita cuando un nodo está caído, su reloj no está fijado, el almacenamiento se llena o hay tramas corruptas.",
             "yes": "sí", "no": "no",},
 
@@ -131,6 +145,10 @@ _LABELS = {
             "last_run": "Última execução", "expected": "Esperadas", "received": "Recebidas",
             "longest_gap": "Maior lacuna", "worst_node": "Pior nó",
             "reason": "Motivo", "no_gaps": "Sem lacunas acima do intervalo de amostragem.",
+            "calibrated_marker": "* valor calibrado (calibração do local aplicada)",
+            "calibration_none": "Valores brutos: não há calibração registrada para o local.",
+            "calibration": "Calibração",
+            "cal_none": "Não há calibração registrada para este local.",
             "fleet_hint": "É preciso visitar quando um nó está offline, o relógio não está ajustado, o armazenamento está cheio ou há quadros corrompidos.",
             "yes": "sim", "no": "não",},
 
@@ -310,7 +328,6 @@ var series = {series_json};
 })();
 </script>
 <h2>{h_stats}</h2>
-<div class="tbl"><table><tr><th>{h_var}</th><th>{h_min}</th><th>{h_max}</th><th>{h_mean}</th><th>{h_n}</th></tr>
 {statrows}
 </table></div>
 <h2>{h_qbreak}</h2>
@@ -405,7 +422,8 @@ var series = {series_json};
 })();
 </script>
 <h2>{h_div}</h2>
-<div class="tbl"><table><tr><th>{h_node}</th><th>{h_n}</th><th>{h_mean}</th><th>{h_bias}</th><th>{h_maxdev}</th></tr>
+  <p class="mut">{cal_note}</p>
+  <div class="tbl"><table><tr><th>{h_node}</th><th>{h_n}</th><th>{h_mean}</th><th>{h_bias}</th><th>{h_maxdev}</th></tr>
 {divrows}
 </table></div>
 <p class="mut">{disclaimer}</p></main></body></html>"""
@@ -516,7 +534,8 @@ input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:
 <h1>{title} — {nid} — {h_report}</h1>
 <p class="mut">{gen}: {gentime} · {h_range}: {wfrom} → {wto}</p>
 <h2>{h_stats}</h2>
-<div class="tbl"><table><tr><th>{h_var}</th><th>{h_min}</th><th>{h_max}</th><th>{h_mean}</th><th>{h_n}</th></tr>
+  <p class="mut">{cal_note}</p>
+<div class="tbl"><table><tr><th>{h_var}</th><th>{h_min}</th><th>{h_max}</th><th>{h_mean}</th><th>{h_n}</th><th>{h_cal_min}</th><th>{h_cal_max}</th><th>{h_cal_mean}</th></tr>
 {statrows}
 </table></div>
 <h2>{h_qbreak}</h2>
@@ -934,7 +953,8 @@ def node_events_page(node_id: str, request: Request,
 
 
 _CSV_HEADER = ("node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,"
-               "variable,value,unit,quality,reason_bits,time_uncertain\n")
+               "variable,value,unit,quality,reason_bits,time_uncertain,"
+               "calibrated_value,calibration_scale,calibration_offset\n")
 
 _CSV_SELECT = """
     SELECT node_id, COALESCE(sensor_id,''), sequence, timestamp_utc_ms,
@@ -944,14 +964,17 @@ _CSV_SELECT = """
     FROM measurements
     """
 
-_CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}\n")
+_CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13}\n")
 _CSV_CHUNK_LINES = 500
 
 
 def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
     """Formats rows in SQL and streams them in blocks, so a 60-day export
     does not spend its time in Python datetime formatting nor in one HTTP
-    chunk per row."""
+    chunk per row. Calibration is resolved once for the whole fleet."""
+    from .calibration import node_calibration_map
+
+    calibrations = node_calibration_map()
     yield _CSV_HEADER
     cursor = engine().execute(sql, params)
     block: list[str] = []
@@ -961,10 +984,15 @@ def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
             if not rows:
                 break
             for r in rows:
+                cal = calibrations.get(r[0], {}).get(r[5])
                 value = "" if r[6] is None else f"{r[6]}"
-                block.append(_CSV_ROW.format(r[0], r[1], r[2], r[3], r[4],
-                                             r[5], value, r[7], r[8], r[9],
-                                             r[10]))
+                calibrated = apply_value(r[6], cal)
+                block.append(_CSV_ROW.format(
+                    r[0], r[1], r[2], r[3], r[4], r[5], value, r[7], r[8],
+                    r[9], r[10],
+                    "" if calibrated is None else f"{calibrated}",
+                    "" if not cal else f"{cal['scale']}",
+                    "" if not cal else f"{cal['offset']}"))
                 if len(block) >= _CSV_CHUNK_LINES:
                     yield "".join(block)
                     block = []
@@ -1088,6 +1116,8 @@ def alerts_page(request: Request):
             .replace("{h_rules}", labels["rules"])
             .replace("{h_node}", labels["node"])
             .replace("{h_kind}", labels["kind_heat"] + "/" + labels["kind_stale"])
+            .replace("{kind_heat}", labels["kind_heat"])
+            .replace("{kind_stale}", labels["kind_stale"])
             .replace("{h_thr}", labels["threshold"])
             .replace("{h_chan}", labels["channel"])
             .replace("{h_target}", labels["target"])
@@ -1134,11 +1164,21 @@ def colocation_page(request: Request, variable: str = "air_temperature",
     divrows = []
     all_vals: list[float] = []
     per_node: list[tuple] = []
+    calibrations = {
+        r["node_id"]: site_calibrations(r["site_id"]).get(variable)
+        for r in query("SELECT node_id, site_id FROM nodes")
+    }
+    calibrated_any = False
     for i, nid in enumerate(nodes[:8]):
         pts = query(
             "SELECT timestamp_utc_ms, value FROM measurements"
             " WHERE node_id=? AND variable=? AND value IS NOT NULL"
             " AND timestamp_utc_ms>=? ORDER BY sequence", (nid, variable, since))
+        cal = calibrations.get(nid)
+        if cal and not is_identity(cal["scale"], cal["offset"]):
+            calibrated_any = True
+            pts = [{"timestamp_utc_ms": p["timestamp_utc_ms"],
+                    "value": apply_value(p["value"], cal)} for p in pts]
         step = max(1, len(pts) // 400)
         thin = pts[::step]
         vals = [p["value"] for p in thin]
@@ -1154,12 +1194,16 @@ def colocation_page(request: Request, variable: str = "air_temperature",
                 if st["mean"] is not None and gmean is not None else "—")
         maxdev = ("—" if gmean is None or not vals else
                   round(max(abs(st["min"] - gmean), abs(st["max"] - gmean)), 3))
+        cal = calibrations.get(nid)
+        flag = "" if not cal or is_identity(cal["scale"], cal["offset"]) else " *"
         divrows.append(
-            f"<tr><td><a href=\"/nodes/{html.escape(nid)}\">{html.escape(nid)}</a></td>"
+            f"<tr><td><a href=\"/nodes/{html.escape(nid)}\">{html.escape(nid)}</a>{flag}</td>"
             f"<td>{st['count']}</td><td>{st['mean']}</td>"
             f"<td>{bias}</td><td>{maxdev}</td></tr>")
     if not divrows:
         divrows.append(f"<tr><td colspan=\"5\">{labels['no_data']}</td></tr>")
+    cal_note = (labels["calibrated_marker"] if calibrated_any
+                else labels["calibration_none"])
     opts_v = "".join(
         f"<option value=\"{html.escape(v)}\""
         f"{' selected' if v == variable else ''}>{html.escape(_human_var(v))}</option>"
@@ -1183,6 +1227,7 @@ def colocation_page(request: Request, variable: str = "air_temperature",
             .replace("{h_bias}", labels["bias"])
             .replace("{h_maxdev}", labels["maxdev"])
             .replace("{divrows}", "\n".join(divrows))
+            .replace("{cal_note}", cal_note)
             .replace("{disclaimer}", labels["disclaimer"]))
     return HTMLResponse(_with_legal(page, labels, code))
 
@@ -1334,15 +1379,26 @@ def node_report(node_id: str, request: Request):
         "SELECT DISTINCT variable FROM measurements WHERE node_id=?"
         " ORDER BY variable", (node_id,))]
     statrows = []
+    cals = site_calibrations(node["site_id"])
     for v in variables:
         vals = [r["value"] for r in query(
             "SELECT value FROM measurements WHERE node_id=? AND variable=?"
             " AND value IS NOT NULL", (node_id, v))]
         st = summary_stats(vals)
+        cal = cals.get(v)
+        if cal and not is_identity(cal["scale"], cal["offset"]):
+            cal_st = transform_stats(st, cal)
+            extra = (f"<td>{cal_st['min']}</td><td>{cal_st['max']}</td>"
+                     f"<td>{cal_st['mean']}</td>")
+            marker = " *"
+        else:
+            extra = "<td>—</td><td>—</td><td>—</td>"
+            marker = ""
         statrows.append(
-            f"<tr><td>{html.escape(_human_var(v))}</td>"
+            f"<tr><td>{html.escape(_human_var(v))}{marker}</td>"
             f"<td>{st['min']}</td><td>{st['max']}</td>"
-            f"<td>{st['mean']}</td><td>{st['count']}</td></tr>")
+            f"<td>{st['mean']}</td><td>{st['count']}</td>{extra}</tr>")
+    cal_note = labels["calibrated_marker"] if cals else labels["cal_none"]
     qbreak = query("SELECT quality, COUNT(*) AS c FROM measurements"
                    " WHERE node_id=? GROUP BY quality ORDER BY c DESC",
                    (node_id,))
@@ -1384,6 +1440,11 @@ def node_report(node_id: str, request: Request):
             .replace("{h_max}", labels["stat_max"])
             .replace("{h_mean}", labels["stat_mean"])
             .replace("{h_n}", labels["stat_n"])
+            .replace("{h_cal}", labels["calibration"])
+            .replace("{cal_note}", cal_note)
+            .replace("{h_cal_min}", labels["stat_min"] + " (cal)")
+            .replace("{h_cal_max}", labels["stat_max"] + " (cal)")
+            .replace("{h_cal_mean}", labels["stat_mean"] + " (cal)")
             .replace("{statrows}", "\n".join(statrows))
             .replace("{h_qbreak}", labels["qbreak"])
             .replace("{h_q}", labels["quality"])

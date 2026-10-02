@@ -105,8 +105,13 @@ void OtaManager::setManifestKey(const uint8_t key[32]) {
 void OtaManager::setRebootHook(RebootFn reboot) { reboot_ = reboot; }
 
 void OtaManager::setInterval(uint32_t checkIntervalS) {
-  tuning_.checkIntervalS = checkIntervalS;
-}
+   tuning_.checkIntervalS = checkIntervalS;
+ }
+
+ void OtaManager::setMaxStallTicks(uint32_t ticks) {
+   tuning_.maxStallTicks = ticks == 0 ? 1 : ticks;
+ }
+
 
 bool OtaManager::safetyOk() const {
   if (freeHeap_ && freeHeap_() < tuning_.minFreeHeapBytes) return false;
@@ -125,9 +130,10 @@ void OtaManager::scheduleFailure(OtaState failureState, const char* event,
 }
 
 void OtaManager::resetDownload() {
-  downloadReceived_ = 0;
-  readerOpened_ = false;
-}
+     downloadReceived_ = 0;
+     stallTicks_ = 0;
+     readerOpened_ = false;
+   }
 
 void OtaManager::runCheck() {
   OtaRelease release{};
@@ -206,24 +212,38 @@ bool OtaManager::startDownload() {
 }
 
 bool OtaManager::pumpChunk() {
-  uint8_t chunk[512];
-  const size_t readSize = tuning_.chunkSize < sizeof(chunk)
-                              ? tuning_.chunkSize
-                              : sizeof(chunk);
-  const size_t n = reader_.read(chunk, readSize);
-  if (n == 0) return true;  // EOF
-  if (downloadReceived_ + n > pendingRelease_.totalSize) {
-    abortDownload("OTA_SIZE_EXCEEDED", OtaState::VerifyFailed, LogLevel::Error);
-    return false;
-  }
-  sha256Append(&shaCtx_, chunk, n);
-  if (!installer_.writeChunk(chunk, n)) {
-    abortDownload("OTA_WRITE_FAILED", OtaState::InstallFailed, LogLevel::Error);
-    return false;
-  }
-  downloadReceived_ += n;
-  return true;
-}
+     uint8_t chunk[512];
+     const size_t readSize = tuning_.chunkSize < sizeof(chunk)
+                                 ? tuning_.chunkSize
+                                 : sizeof(chunk);
+     size_t n = 0;
+     const ReadStatus status = reader_.read(chunk, readSize, &n);
+     if (status == ReadStatus::NoDataYet) {
+       if (++stallTicks_ > tuning_.maxStallTicks) {
+         abortDownload("OTA_STALLED", OtaState::VerifyFailed, LogLevel::Warn);
+         return false;
+       }
+       return true;
+     }
+     if (status == ReadStatus::Error) {
+       scheduleFailure(OtaState::CheckFailed, "OTA_READ_FAILED",
+                       LogLevel::Warn);
+       return false;
+     }
+     if (status == ReadStatus::Eof || n == 0) return true;
+     stallTicks_ = 0;
+     if (downloadReceived_ + n > pendingRelease_.totalSize) {
+       abortDownload("OTA_SIZE_EXCEEDED", OtaState::VerifyFailed, LogLevel::Error);
+       return false;
+     }
+     sha256Append(&shaCtx_, chunk, n);
+     if (!installer_.writeChunk(chunk, n)) {
+       abortDownload("OTA_WRITE_FAILED", OtaState::InstallFailed, LogLevel::Error);
+       return false;
+     }
+     downloadReceived_ += n;
+     return true;
+   }
 
 bool OtaManager::finishDownload() {
   if (downloadReceived_ != pendingRelease_.totalSize) {

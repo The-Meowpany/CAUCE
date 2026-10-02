@@ -52,6 +52,31 @@ Three rules with no exceptions:
 Stuck detection: 6 or more identical readings within epsilon 0.01 —
 that's a dead sensor pretending to work.
 
+## Calibration and maintenance (central)
+
+`measurements.value` is the raw reading and is never rewritten. The
+calibrated value is derived on read:
+
+```
+calibrated_value = value * scale + offset
+```
+
+| Table | Key | Holds |
+|---|---|---|
+| `calibration` | `(site_id, variable)` | `scale`, `offset`, `method`, `calibration_reference`, `sensor_id`, `calibration_date`, `status`, `notes`, `updated_utc_ms` |
+| `maintenance_events` | `event_id` | `site_id`, `kind`, `at_utc_ms`, `notes` |
+
+`status` is `applied`, `provisional`, `retired` or `rejected`; anything
+but `retired` is applied to analytics, CSV and the dashboard, and retired
+rows stay for audit. Because the map is linear the transform is exact on
+the `agg_hourly` buckets: location statistics shift and dispersion scales
+by `|scale|`.
+
+Design note: the `CALIBRATED` / `UNCALIBRATED` quality codes remain
+reserved. Calibration is an overlay applied at read time, not a property
+of the record, so the stored quality keeps describing what the validation
+engine saw.
+
 ## Repository
 
 - Interface `IStorageRepository`: append / paginated query / query-by-
@@ -74,11 +99,14 @@ before each save, and a recovery chain of main→backup→defaults.
 **CSV (RFC4180)** — opens in Excel/LibreOffice/Python/R:
 
 ```
-node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,variable,value,unit,quality,reason_bits,time_uncertain
-CAUCE-001,BME280-1,1842,1787356860000,2026-08-22T00:01:00Z,air_temperature,21.50,C,VALID,0,0
+node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,variable,value,unit,quality,reason_bits,time_uncertain,calibrated_value,calibration_scale,calibration_offset
+CAUCE-001,BME280-1,1842,1787356860000,2026-08-22T00:01:00Z,air_temperature,21.50,C,VALID,0,0,21.50,1.0,0.0
+CAUCE-002,BME280-1,91,1787356860000,2026-08-22T00:01:00Z,air_temperature,22.60,C,VALID,0,0,21.50,1.0,-1.1
 ```
 
-Text fields quoted/escaped per RFC4180. ASCII encoding.
+Text fields quoted/escaped per RFC4180. ASCII encoding. The three
+calibration columns are appended at the end so older readers keep
+working; they are empty for a variable with no calibration record.
 
 **JSON array** — one object per measurement, same schema as the
 protocol v1 payload.

@@ -34,6 +34,7 @@ struct NodeConfig {
   char loraRegion[16]{"EU868"};
   uint32_t storageMaxBytes{512u * 1024u};
   uint32_t segmentMaxBytes{64u * 1024u};
+  bool deepSleepEnabled{false};
   char adminTokenSha256[65]{};
   Thresholds thresholds;
 };

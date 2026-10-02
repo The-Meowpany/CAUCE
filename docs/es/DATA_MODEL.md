@@ -51,6 +51,32 @@ Tres reglas sin excepciones:
 Detección de stuck: 6 o más lecturas idénticas dentro de epsilon 0.01 —
 eso es un sensor muerto haciéndose el vivo.
 
+## Calibración y mantenimiento (central)
+
+`measurements.value` es la lectura cruda y nunca se reescribe. El valor
+calibrado se deriva en la lectura:
+
+```
+calibrated_value = value * scale + offset
+```
+
+| Tabla | Clave | Contiene |
+|---|---|---|
+| `calibration` | `(site_id, variable)` | `scale`, `offset`, `method`, `calibration_reference`, `sensor_id`, `calibration_date`, `status`, `notes`, `updated_utc_ms` |
+| `maintenance_events` | `event_id` | `site_id`, `kind`, `at_utc_ms`, `notes` |
+
+`status` es `applied`, `provisional`, `retired` o `rejected`; todo lo que
+no sea `retired` se aplica en analítica, CSV y dashboard, y los registros
+retirados se quedan para auditoría. Como el mapa es lineal, la
+transformación es exacta sobre los buckets de `agg_hourly`: las
+estadísticas de ubicación se trasladan y la dispersión escala por
+`|scale|`.
+
+Nota de diseño: los códigos de calidad `CALIBRATED` / `UNCALIBRATED`
+siguen reservados. La calibración es una capa aplicada en la lectura, no
+una propiedad del registro, así que la calidad almacenada sigue
+describiendo lo que vio el motor de validación.
+
 ## Repositorio
 
 - Interfaz `IStorageRepository`: append / query paginada / query-por-
@@ -74,11 +100,14 @@ de cada save, y cadena de recuperación main→backup→defaults.
 **CSV (RFC4180)** — abre en Excel/LibreOffice/Python/R:
 
 ```
-node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,variable,value,unit,quality,reason_bits,time_uncertain
-CAUCE-001,BME280-1,1842,1787356860000,2026-08-22T00:01:00Z,air_temperature,21.50,C,VALID,0,0
+node_id,sensor_id,sequence,timestamp_utc_ms,timestamp_iso,variable,value,unit,quality,reason_bits,time_uncertain,calibrated_value,calibration_scale,calibration_offset
+CAUCE-001,BME280-1,1842,1787356860000,2026-08-22T00:01:00Z,air_temperature,21.50,C,VALID,0,0,21.50,1.0,0.0
+CAUCE-002,BME280-1,91,1787356860000,2026-08-22T00:01:00Z,air_temperature,22.60,C,VALID,0,0,21.50,1.0,-1.1
 ```
 
-Campos de texto quoted/escaped per RFC4180. Encoding ASCII.
+Campos de texto quoted/escaped per RFC4180. Encoding ASCII. Las tres
+columnas de calibración van al final para que los lectores antigos
+sigan funcionando; van vacías en una variable sin calibración.
 
 **Arreglo JSON** — un objeto por medición, mismo esquema que el payload
 del protocolo v1.

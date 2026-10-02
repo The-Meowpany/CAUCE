@@ -1,0 +1,35 @@
+# Caddy terminates TLS in front of the central; the backend stays plain HTTP
+# on the internal network and is not published.
+#
+# Pilot default is `tls internal`: Caddy issues a certificate from its own
+# local CA. Install that root certificate (caddy_data volume, under
+# /data/caddy/pki/authorities/local/root.crt) on every node and on the
+# operator machine, otherwise the nodes will refuse the batch.
+#
+# For a deployment with a public DNS name, delete the `tls internal` line and
+# set ACME_EMAIL; Caddy then issues and renews a real certificate unattended.
+{
+	email {$ACME_EMAIL}
+}
+
+{$CAUCE_DOMAIN} {
+	tls internal
+
+	encode zstd gzip
+
+	reverse_proxy cauce-central:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

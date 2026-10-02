@@ -56,7 +56,44 @@ docker compose -f deployment/docker-compose.yml up -d --build
 Check `GET http://<server>:8000/healthz`; the central dashboard is at
 `/`. If `/healthz` doesn't answer, fix that before touching any node.
 
+## 2b. TLS in front of the central
+
+The backend speaks plain HTTP on purpose and is **not published to the
+LAN**. Caddy terminates TLS and is the only published port:
+
+```bash
+cd deployment
+export CAUCE_DOMAIN=cauce.local          # hostname the nodes will use
+docker compose up -d --build
+```
+
+What this buys and what it costs:
+
+- `http://CAUCE_DOMAIN` redirects to `https://CAUCE_DOMAIN`.
+- The central answers on `127.0.0.1:8000` only, so an operator can debug
+  from the host while the network sees 443 and nothing else.
+- Batches are signed per device (HMAC-SHA256) as well as encrypted; TLS
+  does not replace signing, and signing does not replace TLS.
+
+**Certificate for a LAN-only pilot.** The default `tls internal` makes
+Caddy issue from its own local CA. Export the root once and install it on
+every node and on the operator machine, otherwise the nodes reject the
+batch:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./cauce-root.crt
+```
+
+**Certificate for a public name.** Delete the `tls internal` line from
+`Caddyfile`, set `ACME_EMAIL`, and Caddy obtains and renews a real
+certificate unattended. `CAUCE_DOMAIN` must resolve publicly.
+
+Node side: point `sync_server_url` at `https://CAUCE_DOMAIN`, and install
+the root certificate on the ESP32 if it is not a publicly trusted CA. From
+there the checklist item "backend reachable over TLS" is satisfied.
+
 ## 3. Prepare each node
+
 
 1. **Identity**: a unique `node_id` (`CAUCE-001`, …). No two nodes ever
    share one — the whole sync design assumes this.
@@ -110,6 +147,8 @@ it.
 
 - [ ] `pio test -e native` green
 - [ ] Backend up with token + rate limit configured
+- [ ] Central reachable over TLS through the Caddy terminator, and the
+      root certificate installed on every node
 - [ ] `run-e2e.ps1` green after any protocol change
 - [ ] Every node: identified, geo-located, VALID quality reaching the
       center, installation metadata written down

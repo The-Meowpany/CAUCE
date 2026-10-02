@@ -16,6 +16,7 @@ void registerOtaTests();
 void registerOtaRollbackTests();
 void registerLoRaTests();
 void registerDiagnosticsTests();
+void registerDeepSleepTests();
 
 int main() {
   UNITY_BEGIN();
@@ -34,6 +35,7 @@ int main() {
   registerOtaTests();
   registerOtaRollbackTests();
   registerLoRaTests();
-  registerDiagnosticsTests();
+registerDiagnosticsTests();
+  registerDeepSleepTests();
   return UNITY_END();
 }

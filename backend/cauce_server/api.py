@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import time
@@ -8,6 +9,13 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from .alerts import evaluate_heat_rules
 from .analytics import summary_stats
+from .calibration import (
+    apply_value,
+    calibration_for,
+    calibration_summary,
+    is_identity,
+    transform_stats,
+)
 from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
@@ -18,6 +26,59 @@ router = APIRouter(prefix="/v1")
 
 def _check_rate(request: Request) -> None:
     check_rate(request)
+
+
+CURSOR_PREFIX = "v1:"
+
+
+def encode_cursor(timestamp_utc_ms: int, sequence: int) -> str:
+    raw = f"{timestamp_utc_ms}:{sequence}".encode()
+    return CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def decode_cursor(cursor: str | None) -> tuple[int, int] | None:
+    if not cursor:
+        return None
+    if not isinstance(cursor, str) or not cursor.startswith(CURSOR_PREFIX):
+        raise HTTPException(status_code=422, detail="invalid_cursor")
+    body = cursor[len(CURSOR_PREFIX):]
+    padding = "=" * (-len(body) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(body + padding).decode()
+        ts_text, seq_text = decoded.split(":", 1)
+        ts, seq = int(ts_text), int(seq_text)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="invalid_cursor") from exc
+    if ts < 0 or seq < 0:
+        raise HTTPException(status_code=422, detail="invalid_cursor")
+    return ts, seq
+
+
+def page_cursor(rows, limit: int) -> str | None:
+    """A short page means the caller reached the end, so no cursor."""
+    if not rows or len(rows) < limit:
+        return None
+    last = rows[-1]
+    return encode_cursor(last["timestamp_utc_ms"], last["sequence"])
+
+
+NODE_CURSOR_PREFIX = "n1:"
+
+
+def decode_node_cursor(cursor: str | None) -> str | None:
+    if not cursor:
+        return None
+    if not isinstance(cursor, str) or not cursor.startswith(NODE_CURSOR_PREFIX):
+        raise HTTPException(status_code=422, detail="invalid_cursor")
+    body = cursor[len(NODE_CURSOR_PREFIX):]
+    padding = "=" * (-len(body) % 4)
+    try:
+        node_id = base64.urlsafe_b64decode(body + padding).decode()
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="invalid_cursor") from exc
+    if not node_id:
+        raise HTTPException(status_code=422, detail="invalid_cursor")
+    return node_id
 
 
 def _acknowledged_sequence(conn, node_id: str, records: list[dict]) -> int | None:
@@ -258,22 +319,38 @@ def list_nodes(
     request: Request,
     limit: int = 100,
     offset: int = 0,
+    cursor: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
-    total = query("SELECT COUNT(*) AS c FROM nodes")[0]["c"]
-    rows = query(
-        """SELECT node_id, site_id, firmware_version,
-                  first_seen_utc_ms, last_seen_utc_ms,
-                  (SELECT COUNT(*) FROM measurements m WHERE m.node_id=n.node_id) AS measurement_count,
-                  (SELECT MAX(timestamp_utc_ms) FROM measurements m WHERE m.node_id=n.node_id) AS last_measurement_utc_ms
-           FROM nodes n ORDER BY node_id LIMIT ? OFFSET ?""",
-        (limit, offset),
-    )
+    after = decode_node_cursor(cursor)
+    where = ""
+    params: list = []
+    if after is not None:
+        where = " WHERE node_id>?"
+        params.append(after)
+    total = query(f"SELECT COUNT(*) AS c FROM nodes{where}",
+                  tuple(params))[0]["c"]
+    sql = ("SELECT node_id, site_id, firmware_version,"
+           " first_seen_utc_ms, last_seen_utc_ms,"
+           " (SELECT COUNT(*) FROM measurements m WHERE m.node_id=n.node_id)"
+           "   AS measurement_count,"
+           " (SELECT MAX(timestamp_utc_ms) FROM measurements m"
+           "   WHERE m.node_id=n.node_id) AS last_measurement_utc_ms"
+           " FROM nodes n" + where + " ORDER BY node_id LIMIT ? OFFSET ?")
+    if cursor:
+        offset = 0
+    params.extend([limit, offset])
+    rows = query(sql, tuple(params))
+    next_cursor = None
+    if rows and len(rows) == limit:
+        next_cursor = NODE_CURSOR_PREFIX + base64.urlsafe_b64encode(
+            rows[-1]["node_id"].encode()).decode().rstrip("=")
     return {"total": total, "limit": limit, "offset": offset,
+            "next_cursor": next_cursor,
             "nodes": [dict(r) for r in rows]}
 
 
@@ -304,12 +381,14 @@ def node_measurements(
     to_utc_ms: int | None = None,
     limit: int = 1000,
     offset: int = 0,
+    cursor: str | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)
+    after = decode_cursor(cursor)
     sql = "SELECT * FROM measurements WHERE node_id=?"
     params: list = [node_id]
     if variable:
@@ -324,13 +403,19 @@ def node_measurements(
     if to_utc_ms is not None:
         sql += " AND timestamp_utc_ms<=?"
         params.append(to_utc_ms)
+    if after is not None:
+        sql += " AND (timestamp_utc_ms>? OR (timestamp_utc_ms=? AND sequence>?))"
+        params.extend([after[0], after[0], after[1]])
     total = query(f"SELECT COUNT(*) AS c FROM ({sql})",
                   tuple(params))[0]["c"]
-    sql += " ORDER BY timestamp_utc_ms LIMIT ? OFFSET ?"
+    sql += " ORDER BY timestamp_utc_ms, sequence LIMIT ? OFFSET ?"
+    if cursor:
+        offset = 0
     params.extend([limit, offset])
     rows = query(sql, tuple(params))
     return {"node_id": node_id, "total": total, "limit": limit,
             "offset": offset,
+            "next_cursor": page_cursor(rows, limit),
             "measurements": [dict(r) for r in rows]}
 
 
@@ -415,19 +500,101 @@ def analytics_summary(
     variable: str,
     from_utc_ms: int | None = None,
     to_utc_ms: int | None = None,
+    granularity: str = "auto",
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
+    if granularity not in ("auto", "raw", "hourly"):
+        raise HTTPException(status_code=422, detail="invalid_granularity")
+    calibration = calibration_for(node_id, variable)
+
+    span_ms = None
+    if from_utc_ms is not None and to_utc_ms is not None:
+        span_ms = to_utc_ms - from_utc_ms
+    elif to_utc_ms is not None:
+        span_ms = to_utc_ms - (from_utc_ms or 0)
+
+    use_hourly = granularity == "hourly" or (
+        granularity == "auto" and span_ms is not None
+        and span_ms >= HOURLY_MIN_SPAN_MS
+        and _hourly_coverage_ok(node_id, variable, from_utc_ms, to_utc_ms)
+    )
+    if use_hourly:
+        raw_hourly = _hourly_stats(node_id, variable, from_utc_ms, to_utc_ms)
+        calibrated_hourly = transform_stats(raw_hourly, calibration)
+        return {
+            "node_id": node_id,
+            "variable": variable,
+            "metric_type": "derived",
+            "source": "materialized_hourly",
+            "granularity": "hourly",
+            "note": (
+                "descriptive statistics only; does not imply causality. "
+                "hourly buckets, not raw rows; extremes inside an hour are lost. "
+                "use granularity=raw for exact min/max"
+            ),
+            "calibration": calibration_summary(calibration),
+            **({"calibrated": calibrated_hourly} if calibration else {}),
+            **raw_hourly,
+        }
+
     values = _values_for(node_id, variable, from_utc_ms, to_utc_ms)
     stats = summary_stats(values)
+    calibrated = transform_stats(stats, calibration)
     return {
         "node_id": node_id,
         "variable": variable,
         "metric_type": "derived",
-        "note": "descriptive statistics only; does not imply causality",
+        "granularity": "raw",
+        "note": (
+            "descriptive statistics only; does not imply causality. "
+            + ("raw rows are untouched; calibrated values are derived"
+               if calibration else "")
+        ),
+        "calibration": calibration_summary(calibration),
+        **({"calibrated": calibrated} if calibration else {}),
         **stats,
     }
+
+
+HOUR_MS = 3600000
+# Below a week the raw rows are cheap to read and give exact extremes, so
+# `auto` stays on raw. Above it the hourly buckets are the cheaper answer and
+# the response says which one it used.
+HOURLY_MIN_SPAN_MS = 7 * 24 * HOUR_MS
+
+
+def _hourly_stats(node_id: str, variable: str, from_utc_ms: int | None,
+                  to_utc_ms: int | None) -> dict:
+    sql = ("SELECT hour_ts, cnt, sum, sumsq, min_v, max_v FROM agg_hourly"
+           " WHERE node_id=? AND variable=?")
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        sql += " AND hour_ts>=?"
+        params.append((from_utc_ms // HOUR_MS) * HOUR_MS)
+    if to_utc_ms is not None:
+        sql += " AND hour_ts<=?"
+        params.append((to_utc_ms // HOUR_MS) * HOUR_MS)
+    sql += " ORDER BY hour_ts"
+    return _agg_stats(query(sql, tuple(params)))
+
+
+def _hourly_coverage_ok(node_id: str, variable: str, from_utc_ms: int | None,
+                        to_utc_ms: int | None) -> bool:
+    """Only trust the hourly view when the buckets are actually populated."""
+    rows = query(
+        "SELECT COUNT(*) AS buckets, COALESCE(SUM(cnt),0) AS samples"
+        " FROM agg_hourly WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]
+    if rows["buckets"] == 0:
+        return False
+    raw = query(
+        "SELECT COUNT(*) AS c FROM measurements WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]["c"]
+    return raw == 0 or rows["samples"] >= raw * 0.9
 
 
 @router.get("/analytics/compare")
@@ -442,18 +609,29 @@ def analytics_compare(
 ) -> dict:
     _check_rate(request)
     require_bearer_token(authorization, settings.api_token)
-    a = summary_stats(_values_for(node_a, variable, from_utc_ms, to_utc_ms))
-    b = summary_stats(_values_for(node_b, variable, from_utc_ms, to_utc_ms))
+    raw_a = summary_stats(_values_for(node_a, variable, from_utc_ms, to_utc_ms))
+    raw_b = summary_stats(_values_for(node_b, variable, from_utc_ms, to_utc_ms))
+    cal_a = calibration_for(node_a, variable)
+    cal_b = calibration_for(node_b, variable)
+    a = transform_stats(raw_a, cal_a)
+    b = transform_stats(raw_b, cal_b)
     mean_diff = None
     if a["count"] and b["count"]:
         mean_diff = round(a["mean"] - b["mean"], 3)
+    raw_diff = None
+    if raw_a["count"] and raw_b["count"]:
+        raw_diff = round(raw_a["mean"] - raw_b["mean"], 3)
     return {
         "variable": variable,
         "metric_type": "derived_comparison",
-        "note": "differences may reflect placement or calibration; not causality",
-        "node_a": {"node_id": node_a, **a},
-        "node_b": {"node_id": node_b, **b},
+        "note": ("differences may reflect placement or calibration; not causality. "
+                 "means are calibrated when the site has a calibration record"),
+        "node_a": {"node_id": node_a, "calibration": calibration_summary(cal_a),
+                   **a},
+        "node_b": {"node_id": node_b, "calibration": calibration_summary(cal_b),
+                   **b},
         "mean_difference": mean_diff,
+        "mean_difference_raw": raw_diff,
     }
 
 
@@ -500,6 +678,11 @@ def analytics_heat_events(
         params.append(to_utc_ms)
     sql += " ORDER BY timestamp_utc_ms"
     rows = query(sql, tuple(params))
+    calibration = calibration_for(node_id, variable)
+    if calibration and not is_identity(calibration["scale"],
+                                      calibration["offset"]):
+        rows = [{"timestamp_utc_ms": r["timestamp_utc_ms"],
+                 "value": apply_value(r["value"], calibration)} for r in rows]
 
     events: list[dict] = []
     start_ms: int | None = None
@@ -541,6 +724,7 @@ def analytics_heat_events(
         "min_duration_min": min_duration_min,
         "metric_type": "derived",
         "note": "duration estimated between consecutive above-threshold samples; not causality",
+        "calibration": calibration_summary(calibration),
         "events": events,
     }
 
@@ -571,6 +755,12 @@ def analytics_period_compare(
         mean_shift = round(period_b["mean"] - period_a["mean"], 3)
 
     sufficient = period_a["count"] >= 30 and period_b["count"] >= 30
+    calibration = calibration_for(node_id, variable)
+    cal_a = transform_stats(period_a, calibration)
+    cal_b = transform_stats(period_b, calibration)
+    cal_shift = None
+    if cal_a["count"] and cal_b["count"]:
+        cal_shift = round(cal_b["mean"] - cal_a["mean"], 3)
     return {
         "metric_type": "derived_period_comparison",
         "note": (
@@ -580,9 +770,11 @@ def analytics_period_compare(
         "sufficient_sample": sufficient,
         "node_id": node_id,
         "variable": variable,
+        "calibration": calibration_summary(calibration),
         "period_a": {"start_utc_ms": a_start, "end_utc_ms": a_end, **period_a},
         "period_b": {"start_utc_ms": b_start, "end_utc_ms": b_end, **period_b},
         "mean_shift": mean_shift,
+        "mean_shift_calibrated": cal_shift,
     }
 
 
@@ -633,15 +825,19 @@ def analytics_summary_fast(
         params.append(last_hour)
     sql += " ORDER BY hour_ts"
     rows = query(sql, tuple(params))
-    stats = _agg_stats(rows)
+    calibration = calibration_for(node_id, variable)
+    raw_stats = _agg_stats(rows)
+    calibrated = transform_stats(raw_stats, calibration)
     return {
         "node_id": node_id,
         "variable": variable,
         "metric_type": "derived",
         "source": "materialized_hourly",
         "note": ("descriptive statistics only; does not imply causality"
-                 if stats.get("count") else "no data in range"),
-        **stats,
+                 if raw_stats.get("count") else "no data in range"),
+        "calibration": calibration_summary(calibration),
+        **({"calibrated": calibrated} if calibration else {}),
+        **raw_stats,
     }
 
 

@@ -19,11 +19,16 @@ class IManifestSource {
   virtual bool fetchLatest(const char* currentVersion, OtaRelease& out) = 0;
 };
 
+enum class ReadStatus : uint8_t { Data = 0, NoDataYet = 1, Eof = 2, Error = 3 };
+
 class IFirmwareReader {
  public:
   virtual ~IFirmwareReader() = default;
   virtual bool open(const char* url) = 0;
-  virtual size_t read(uint8_t* buffer, size_t capacity) = 0;
+  // Non-blocking by contract: NoDataYet means "nothing arrived right now,
+  // call again on the next tick". It must never wait inside.
+  virtual ReadStatus read(uint8_t* buffer, size_t capacity,
+                          size_t* bytesRead) = 0;
   virtual void close() = 0;
 };
 

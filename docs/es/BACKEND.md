@@ -17,7 +17,7 @@ PostgreSQL, la migración está acotada a `db.py` y a ningún otro lado.
 | POST | `/v1/sync` | Ingesta de lotes (contrato: SYNC.md). Los nodos provisionados DEBEN firmar con HMAC-SHA256 (`X-CAUCE-Node`, `X-CAUCE-Signature`) |
 | POST | `/v1/provision` | Registro de device-key (gated por admin), una key por nodo |
 | GET | `/v1/nodes` · `/v1/nodes/{id}` | Listado / detalle + última medición |
-| GET | `/v1/nodes/{id}/measurements` | Serie filtrable (`variable`,`quality`,`from_utc_ms`,`to_utc_ms`,`limit≤10000`,`offset`) con `total` |
+| GET | `/v1/nodes/{id}/measurements` | Serie filtrable (con `cursor` para paginado estable y `next_cursor` de vuelta) (`variable`,`quality`,`from_utc_ms`,`to_utc_ms`,`limit≤10000`,`offset`) con `total` |
 | POST | `/v1/maintenance/retention` | Borra filas viejas de N días + VACUUM (apto cron; los nodos reenvían lo borrado salvo purga allá también) |
 | GET | `/v1/maintenance/retention` | Config de retención y última corrida: `older_than_days`, `deleted_measurements`, `vacuumed`, `last_run_utc_ms` |
 | GET | `/v1/nodes/{id}/coverage` | Esperado vs recibido por nodo y variable: `coverage_pct`, brecha máxima, top de brechas con motivo |
@@ -26,6 +26,8 @@ PostgreSQL, la migración está acotada a `db.py` y a ningún otro lado.
 | GET | `/v1/nodes/{id}/diagnostics` | último bundle almacenado |
 | GET | `/v1/fleet` | Estado por nodo: firmware, último sync, storage, señales, `needs_visit` |
 | GET/POST | `/v1/sites` · PUT `/v1/sites/{id}/control` | Sitios de instalación + asignación; marcar un sitio como control sin tratamiento |
+| PUT/GET | `/v1/sites/{id}/calibration` | Offset/escala por (sitio,variable); las filas crudas nunca se reescriben, el valor calibrado se deriva en la lectura |
+| POST/GET | `/v1/sites/{id}/maintenance` | Bitácora: instalación, calibración, recambio de sensor, traslado |
 | GET | `/v1/maintenance/backup` | Descarga snapshot SQLite vía VACUUM INTO (con auth) |
 | POST/GET | `/v1/sites` · PUT `/v1/nodes/{id}/site` | Sitios de instalación + asignación |
 | PUT | `/v1/sites/{id}/location` | Setear coordenadas del sitio (lat/lon validados) |
@@ -93,6 +95,20 @@ casi siempre es emplazamiento, no prueba. INVALID/MISSING/ESTIMATED
 quedan fuera de la matemática; SUSPECT cuenta pero su proporción se
 reporta junto al resultado.
 
+## Calibración
+
+El central es dueño de la calibración: `measurements.value` sigue crudo y el
+valor calibrado se deriva en la lectura, para que una recaliibración se
+vuelva a aplicar sobre todo el histórico sin tocar un nodo.
+`calibrated_value = raw_value * scale + offset`, registrado por (sitio,
+variable) con `PUT /v1/sites/{id}/calibration`. Como el mapa es lineal
+también es exacto sobre los agregados horarios, por eso `/summary-fast` y
+`granularity=hourly` corrigen sus buckets en vez de releer filas crudas.
+Toda respuesta de analítica dice en un objeto `calibration` si se aplicó;
+cuando no, la clave `calibrated` está ausente en vez de ser idéntica al
+valor crudo. Ver `CALIBRATION.md` para las reglas de honestidad sobre lo
+que un offset de co-localización compra y lo que no.
+
 ## Higiene de la evidencia
 
 Dos cosas convierten una comparación en evidencia, y las dos son endpoints:
@@ -147,7 +163,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 88 tests
+pytest tests -q                      # 116 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
