@@ -186,7 +186,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 170 tests
+pytest tests -q                      # 182 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -278,6 +278,50 @@ learns nothing about the endpoint beyond its existence:
 Site scoping is the half that stops data leaking. Scopes alone limit *what* an
 operator can do but never *where*, which would leave a per-site operator free to
 read another site's data through a URL it guessed.
+
+
+## Gateway
+
+`LoRaGateway` is the node-side counterpart of the encoder: it receives frames,
+reassembles batches, forwards them to `POST /v1/sync` and acknowledges what the
+central stored. The whole loop is exercised against the real FastAPI app
+through an injected transport, so `tests/test_lora_gateway.py` drives frames
+made exactly as the firmware makes them and then reads the rows back out of
+SQLite.
+
+Everything except the radio driver is therefore ordinary tested logic. What
+remains for M2 is an SX1276 driver, a process to run this on hardware, and a
+link budget.
+
+**The loop mirrors the node's**, because the two have to agree:
+
+1. Frames are buffered until a batch is complete.
+2. The batch is forwarded as one `POST /v1/sync`.
+3. The acknowledgement carries the highest sequence the central **durably
+   stored**, not the highest sequence that was sent. If they differ the node
+   resends the remainder and the central dedupes, which is the correct outcome.
+4. The reassembly buffer is released in a `finally`, so a forwarding failure
+   does not leak the batch.
+
+Noise is counted rather than raised. A radio delivers corrupt frames routinely
+and a gateway that raised on every bad CRC would restart on every storm.
+
+**Trust boundary, stated rather than implied.** A provisioned node is
+authenticated with an HMAC over the raw request body, so a gateway forwarding
+on a node's behalf must hold that node's `device_key`. That makes the gateway a
+trusted party equivalent to every node it serves: whoever compromises it can
+forge any of them. Key distribution to gateways is therefore a real cost of
+this topology, not a detail.
+
+The alternative is the node signing the compact frame and the central verifying
+against the frame rather than the reconstructed body, which would move the
+verification surface onto the wire format. That is not implemented here.
+
+What *is* enforced is that a gateway configured without a key does not
+silently downgrade a provisioned node to unsigned: the central returns 401, the
+gateway raises, and nothing is acknowledged, so the node keeps its rows and
+retries. A silent downgrade would have been the failure mode worth worrying
+about, because it would look like working.
 
 
 ## Serverless notes

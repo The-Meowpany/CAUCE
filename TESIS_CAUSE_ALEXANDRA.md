@@ -384,7 +384,7 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
 | Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
 | Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
-| Maintainability | 381 automated tests (211 firmware, 170 backend); CI 6 jobs; reproducible docs | repository |
+| Maintainability | 376 automated tests (194 firmware, 182 backend); CI 6 jobs; reproducible docs | repository |
 | Cost | BOM 13–32 USD/node multi-vendor | HARDWARE.md |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
@@ -417,7 +417,7 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 5. **Time**: NTP discipline and central temporal reconstruction ship with an honest margin-of-error statement; tightening that margin remains.
 6. **Persistent central analytics**: hourly aggregates with `auto` selection and calibration-normalized comparison ship; aggregates finer-grained or coarser than hourly remain.
 7. **New topologies**: LoRa gateways for sites without Wi-Fi; regional central replicas.
-8. **Actuators**: the idempotent command channel with confirmation ships, and the LoRa path now has a compact 68-byte frame with fragmentation and gateway acknowledgement rather than raw JSON; only the actuation handlers are missing, and they should stay validation only until there is hardware whose actuation is safe to repeat.
+8. **Actuators**: the idempotent command channel with confirmation ships, and the LoRa path now carries a compact 68-byte frame whose forwarding loop is verified end to end against the central; what remains is the radio driver, the link budget, and the actuation handlers, which should stay validation only until there is hardware whose actuation is safe to repeat.
 
 # 26. Conclusions
 
@@ -426,7 +426,7 @@ ALEXANDRA functionally corresponds to consolidated patterns —ingestion cursor/
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
 - **What role ALEXANDRA plays**: formal exchange contract —versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format—; core implemented and verified; peer-to-peer and asymmetric-crypto extensions are proposed evolution.
-- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —381 verifications (211 firmware, 170 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —376 verifications (194 firmware, 182 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
 - **Limitations**: pending physical validation, absence of asymmetric signing, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
@@ -551,10 +551,10 @@ Frozen detection: streak ≥6 readings identical within ε = 0.01. Maximum toler
 | `test_security` | 16 |
 | `test_sync` | 12 |
 | `test_main` (validation, codec, storage, config, BME280, scheduler, diagnostics, deep sleep) | 36 |
-| **Total firmware (host)** | **211** |
-| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly/daily granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract, downlink commands, LoRa frame codec, calibration uncertainty, API scopes | **170** |
+| **Total firmware (host)** | **194** |
+| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly/daily granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract, downlink commands, LoRa frame codec, calibration uncertainty, API scopes, daily aggregates, LoRa gateway loop | **182** |
 | Integration E2E | 4 phases + SQLite assertions |
-| **Grand total** | **381+** |
+| **Grand total** | **376+** |
 
 ## Annex E. Node configuration (extract)
 

@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (211 firmware + 170 backend tests, E2E green)
+## Implemented and verified (194 firmware + 182 backend tests, E2E green)
 | **Seguridad de identidad por dispositivo**: provisioning admin-gated con clave HMAC por nodo; lotes ALEXANDRA firmados sobre el cuerpo crudo; OTA valida firma de manifiesto antes de descargar | 5 pruebas nuevas (firmware HMAC RFC4231 x2 + matriz backend valida/firma-mala/sin-firma + device-secret signing x2) |
 
 | Component | Evidence |
@@ -23,6 +23,8 @@ not. It overrides any aspirational claim elsewhere.
 | **Calibration uncertainty**: absolute uncertainty plus its kind, scaling with `|scale|`, `null` kept distinct from zero, surviving partial updates, exported to CSV | 8 backend tests |
 | **Per-principal authorization**: `api_tokens` with read/write/admin scopes and an optional site, digests stored, constant-time comparison; the shared admin token still works untouched | 10 backend tests |
 | **Daily aggregates**: `agg_daily` maintained by trigger from `agg_hourly`, `granularity=daily`, and `auto` switching to it past 120 days | 14 backend tests |
+| **Gateway forwarding loop**: frames to reassembly to `POST /v1/sync` to acknowledgement, driven against the real app and verified by reading rows back out of SQLite; noise counted, failures never acknowledged | 11 backend tests |
+| **Acknowledgement pinned cross-language**: the exact bytes the gateway builds are asserted by the firmware parser and vice versa, so the two cannot drift apart while each still passes its own tests | 1 firmware + 1 backend test |
 | **Data coverage accounting**: expected vs received, longest gap, gap reasons (`no_data` / `measured_not_delivered` / `clock_uncertain`), node + site + CSV | 8 backend tests |
 | **Control sites and difference-in-differences** in `before-after`, with distance to the treated site and automatic exclusion of under-sampled controls | 2 backend tests + `haversine_m`/`difference_in_differences` unit-covered |
 | **Fleet triage** (`/v1/fleet`): firmware spread, last sync, storage, flags, `needs_visit`; `/system` renders it in en/es/pt | 3 backend tests + dashboard render test |
@@ -74,19 +76,20 @@ not. It overrides any aspirational claim elsewhere.
 - Volumetric 3D viewer: discarded by design decision - the central keeps
   the dependency-free 2D schematic SVG map with IDW field and shared-scale
   co-location overlays instead.
-- Calibration **uncertainty**: records carry no uncertainty estimate, so
-  `docs/*/CALIBRATION.md` keeps every external claim marked pending. There
-  is no formal calibration process yet.
+- Calibration **uncertainty**: records can carry an absolute uncertainty and
+  the kind it came from, and it scales with the correction, so a report can
+  separate measurement from method. There is still no formal calibration
+  procedure and no metrological traceability.
 - Coverage accounting caps a query at 400 days and reports the top 20
   gaps with `gaps_truncated` set when there are more, so a very long
   window is bounded rather than complete.
-- TLS ships ACME by default (`CAUCE_TLS_MODE` empty); a public deployment still needs a real DNS name.
-  deployment still needs a real certificate.
+- TLS ships ACME by default (`CAUCE_TLS_MODE` empty). A public deployment
+  still needs a real DNS name pointing at the host.
 - Deep sleep is wired but **disabled by default**: turning it on requires
   the bench measurement in `docs/en/BENCH_PLAN.md`.
-- The LoRa frame format, fragmentation and acknowledgement are written and
-  cross-checked, but there is no gateway firmware, no radio driver and no
-  link budget: the air interface is unproven.
+- The LoRa frame format, fragmentation, acknowledgement and the forwarding
+  loop are written and tested end to end against the central, but there is
+  no radio driver and no link budget: the air interface is still unproven.
 - Downlink kinds validate and report but do not reconfigure the node; real
   actuation needs hardware that can be actuated.
 
@@ -174,9 +177,9 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 211 succeeded
+cd firmware && pio test -e native      # expect: 194 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 170 passed
+python -m pytest tests -q              # expect: 182 passed
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

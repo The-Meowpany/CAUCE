@@ -198,7 +198,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 170 tests
+pytest tests -q                      # 182 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -279,6 +279,50 @@ scope no aprende nada del endpoint más allá de que existe:
 El scoping por sitio es la mitad que evita que se filtren datos. Los scopes
 solos limitan *qué* puede hacer un operador pero nunca *dónde*, lo que dejaría a
 un operador de sitio libre de leer datos de otro sitio por una URL que adivinara.
+
+
+## Gateway
+
+`LoRaGateway` es la contraparte en el gateway del encoder: recibe frames,
+ rearma lotes, los reenvía a `POST /v1/sync` y acusa lo que el central guardó.
+Todo el bucle se ejercita contra la app real de FastAPI mediante un transport
+inyectado, así que `tests/test_lora_gateway.py` maneja frames construidos
+exactamente como los construye el firmware y después lee las filas de SQLite.
+
+Todo excepto el driver de radio es, por tanto, lógica normal y testeada. Lo que
+falta para M2 es un driver SX1276, un proceso que corra esto en hardware, y un
+link budget.
+
+**El bucle refleja el del nodo**, porque los dos tienen que coincidir:
+
+1. Los frames se bufferean hasta completar un lote.
+2. El lote se reenvía como un solo `POST /v1/sync`.
+3. El acuse lleva la secuencia más alta que el central **guardó de verdad**, no
+   la más alta que se envió. Si difieren, el nodo reenvía el resto y el central
+   deduplica, que es el resultado correcto.
+4. El buffer de reensamblado se libera en un `finally`, así que un fallo al
+   reenviar no filtra el lote.
+
+El ruido se cuenta en vez de lanzar excepción. Una radio entrega frames corruptos
+a rutina y un gateway que lanzara con cada CRC malo reiniciaría en cada
+tormenta.
+
+**Límite de confianza, enunciado y no insinuado.** Un nodo provisionado se
+autentica con un HMAC sobre el body crudo de la petición, así que un gateway que
+reenvía en nombre de un nodo debe tener la `device_key` de ese nodo. Eso hace
+del gateway una parte de confianza equivalente a todos los nodos que sirve: quien
+lo comprometa puede falsificar cualquiera. La distribución de claves a gateways
+es por tanto un costo real de esta topología, no un detalle.
+
+La alternativa es que el nodo firme el frame compacto y el central verifique
+contra el frame en vez de contra el body reconstruido, lo que movería la
+superficie de verificación al formato de radio. Eso no está implementado aquí.
+
+Lo que sí se exige es que un gateway configurado sin clave no degrade en
+silencio a un nodo provisionado a no firmado: el central devuelve 401, el gateway
+lanza, y no se acusa nada, así que el nodo conserva sus filas y reintenta. Un
+downgrade silencioso habría sido el fallo preocupante, porque parecería que
+funciona.
 
 
 ## Notas serverless

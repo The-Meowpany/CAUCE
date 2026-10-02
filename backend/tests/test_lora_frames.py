@@ -147,6 +147,29 @@ def test_acknowledgement_round_trips_and_validates():
         decode_ack(b"\x00\x00\x00")
 
 
+def test_acknowledgement_matches_the_vectors_the_firmware_parses():
+    """Cross-language check for the ack, not just the data frames.
+
+    `test_lora_batch.py` pins the uplink frames; this pins the downlink
+    acknowledgement. Without it the two implementations could disagree on byte
+    order or checksum convention and every test on both sides would still pass,
+    because each would only ever exercise its own encoder.
+    """
+    vectors = {
+        0x00000000: "a500000000a5",
+        0x00000001: "a500000001a4",
+        0x00001092: "a50000109227",
+        0xFFFFFFFF: "a5ffffffffa5",
+        0xDEADBEEF: "a5deadbeef87",
+    }
+    for sequence, expected in vectors.items():
+        produced = encode_ack(sequence)
+        assert produced.hex() == expected, (
+            f"ack for {sequence:#010x} drifted from the firmware vector"
+        )
+        assert decode_ack(produced) == sequence
+
+
 def test_spreading_factor_budgets_match_the_firmware():
     assert max_payload_bytes(7) == 222
     assert max_payload_bytes(8) == 222

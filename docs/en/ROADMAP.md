@@ -55,7 +55,13 @@ The goal is link budget on your real sites, not protocol elegance.
 - Policy: one uplink per 10–15 min, SF7–9, hourly aggregates and
   events only. No raw 60 s firehose over LoRa, ever.
 - Gateway: an ESP32 + SX1276 forwarding to `POST /v1/sync` with
-  `"transport": "lora"`.
+  `"transport": "lora"`. The forwarding logic now exists and is tested end to
+  end against the central (`lora_gateway.py`, including reassembly, the
+  acknowledgement and the signature), so what is missing is the radio driver and
+  a process to run it on hardware. One consequence is written down rather than
+  assumed: because a provisioned node is authenticated by an HMAC over the
+  request body, the gateway must hold that node's device key, which makes it as
+  trusted as the nodes it serves.
 - OTA over LoRa is out. Manifest check at most.
 
 Done means: RSSI/SNR vs distance, delivery %, and a documented SF and

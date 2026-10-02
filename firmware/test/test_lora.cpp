@@ -374,10 +374,47 @@ void test_lora_refuses_a_payload_it_cannot_frame_honestly() {
   TEST_ASSERT_TRUE(radio.sent.empty());
 }
 
+void test_lora_ack_matches_the_vectors_the_gateway_produces() {
+  // Pinned cross-language vectors. `backend/cauce_server/lora_frames.py`
+  // builds the acknowledgement the gateway sends; these are the exact bytes it
+  // produces for the same sequences. If either side changes byte order or
+  // checksum convention, the node stops understanding its gateway, and nothing
+  // else in the suite would notice because both sides test in isolation.
+  struct Vector {
+    uint32_t sequence;
+    const char* hex;
+  };
+  const Vector vectors[] = {
+      {0u, "a500000000a5"},
+      {1u, "a500000001a4"},
+      {4242u, "a50000109227"},
+      {0xFFFFFFFFu, "a5ffffffffa5"},
+      {0xDEADBEEFu, "a5deadbeef87"},
+  };
+
+  for (const Vector& v : vectors) {
+    uint8_t frame[LoRaSyncTransport::kAckFrameSize];
+    LoRaSyncTransport::encodeAck(frame, v.sequence);
+    char produced[2 * LoRaSyncTransport::kAckFrameSize + 1] = {0};
+    static const char* digits = "0123456789abcdef";
+    for (size_t i = 0; i < LoRaSyncTransport::kAckFrameSize; ++i) {
+      produced[i * 2] = digits[(frame[i] >> 4) & 0xF];
+      produced[i * 2 + 1] = digits[frame[i] & 0xF];
+    }
+    TEST_ASSERT_EQUAL_STRING(v.hex, produced);
+
+    uint32_t parsed = 0;
+    TEST_ASSERT_TRUE(LoRaSyncTransport::parseAck(
+        frame, LoRaSyncTransport::kAckFrameSize, parsed));
+    TEST_ASSERT_EQUAL_UINT32(v.sequence, parsed);
+  }
+}
+
 void registerLoRaTests() {
   RUN_TEST(test_lora_batch_json_parses_into_compact_records);
   RUN_TEST(test_lora_batch_json_refuses_what_it_cannot_carry);
   RUN_TEST(test_lora_batch_json_stops_at_the_capacity_it_is_given);
+  RUN_TEST(test_lora_ack_matches_the_vectors_the_gateway_produces);
   RUN_TEST(test_lora_sends_compact_frames_not_json);
   RUN_TEST(test_lora_a_wider_budget_sends_fewer_uplinks);
   RUN_TEST(test_lora_refuses_a_payload_it_cannot_frame_honestly);
