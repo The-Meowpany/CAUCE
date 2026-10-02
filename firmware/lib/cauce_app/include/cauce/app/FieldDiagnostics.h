@@ -49,7 +49,8 @@ class IDiagnosticsSink {
                       size_t bodyLen) = 0;
 };
 
-size_t diagnosticsSignatureHex(const char* deviceKey, const char* body,
-                               size_t bodyLen, char outHex[65]);
+size_t diagnosticsSignatureHex(const char* deviceKey, size_t keyLen,
+                               const char* body, size_t bodyLen,
+                               char outHex[65]);
 
 }  // namespace cauce::app

@@ -23,7 +23,8 @@ bool Esp32DiagnosticsSink::upload(const char* baseUrl, const char* nodeId,
 
   char signature[65] = {0};
   if (deviceKey != nullptr && deviceKey[0] != '\0') {
-    diagnosticsSignatureHex(deviceKey, body, bodyLen, signature);
+    diagnosticsSignatureHex(deviceKey, std::strlen(deviceKey), body, bodyLen,
+                            signature);
   }
 
   HTTPClient http;

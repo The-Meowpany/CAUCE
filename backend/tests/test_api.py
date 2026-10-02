@@ -1389,7 +1389,7 @@ def test_coverage_csv_export_summarises_and_lists_gaps(client):
     assert r.status_code == 200
     assert 'text/csv' in r.headers['content-type']
     assert 'CAUCE-001-coverage.csv' in r.headers['content-disposition']
-    lines = [l for l in r.text.strip().splitlines() if l]
+    lines = [row for row in r.text.strip().splitlines() if row]
     assert lines[0].startswith('node_id,variable,from_utc_ms')
     assert lines[1].startswith('CAUCE-001,air_temperature,')
     assert lines[1].endswith(',64,6,6,9.38,3480000,0,0')

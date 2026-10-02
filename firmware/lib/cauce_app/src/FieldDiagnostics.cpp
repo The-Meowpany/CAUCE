@@ -111,15 +111,16 @@ size_t buildDiagnosticsJson(char* out, size_t capacity,
   return static_cast<size_t>(n);
 }
 
-size_t diagnosticsSignatureHex(const char* deviceKey, const char* body,
-                               size_t bodyLen, char outHex[65]) {
+size_t diagnosticsSignatureHex(const char* deviceKey, size_t keyLen,
+                               const char* body, size_t bodyLen,
+                               char outHex[65]) {
   if (outHex == nullptr) return 0;
   outHex[0] = '\0';
   if (deviceKey == nullptr || body == nullptr) return 0;
+  if (keyLen == 0 || bodyLen == 0) return 0;
   uint8_t digest[32];
-  hmacSha256(reinterpret_cast<const uint8_t*>(deviceKey),
-             std::strlen(deviceKey), reinterpret_cast<const uint8_t*>(body),
-             bodyLen, digest);
+  hmacSha256(reinterpret_cast<const uint8_t*>(deviceKey), keyLen,
+             reinterpret_cast<const uint8_t*>(body), bodyLen, digest);
   static const char kHex[] = "0123456789abcdef";
   for (size_t i = 0; i < 32; ++i) {
     outHex[i * 2] = kHex[(digest[i] >> 4) & 0x0F];
