@@ -1,7 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from . import db
 from .alerts import router as alerts_router
@@ -67,6 +67,23 @@ def healthz() -> dict:
             "tables": tables,
             "db_size_bytes": db_bytes,
             "rate_limit_per_minute": settings.rate_limit_per_minute}
+
+
+@app.middleware("http")
+async def harden_api_responses(request: Request, call_next):
+    """Stops a browser from sniffing a JSON response as HTML.
+
+    The dashboard escapes everything it renders, but the JSON API echoes stored
+    identifiers verbatim, and `json.dumps` does not escape `<`, `>` or `&`. Served
+    as `application/json` that is inert; served, sniffed or mis-typed it is not.
+    Declaring the type removes the guesswork. The dashboard pages keep their own
+    CSP-friendly headers.
+    """
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type:
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 app.include_router(router)

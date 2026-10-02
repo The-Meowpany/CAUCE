@@ -5,9 +5,18 @@ on:
     branches: [main, master]
   pull_request:
 
+# Least privilege. None of these jobs writes to the repository, pushes a
+# release, or reads secrets, so every job gets read-only contents and nothing
+# else. Without this block a job inherits whatever the repository default is,
+# which on a public repo can include write scopes.
+permissions:
+  contents: read
+
 jobs:
   firmware-native-tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -29,6 +38,8 @@ jobs:
 
   firmware-esp32-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,6 +52,8 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,6 +64,8 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -65,6 +80,8 @@ jobs:
 
   integration-e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [firmware-native-tests, backend]
     steps:
       - uses: actions/checkout@v4

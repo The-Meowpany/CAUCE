@@ -186,7 +186,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 182 tests
+pytest tests -q                      # 192 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -322,6 +322,40 @@ silently downgrade a provisioned node to unsigned: the central returns 401, the
 gateway raises, and nothing is acknowledged, so the node keeps its rows and
 retries. A silent downgrade would have been the failure mode worth worrying
 about, because it would look like working.
+
+
+## Input shape and response hardening
+
+Two rules that came out of reviewing the static-analysis findings, both because
+the obvious version turned out to be weaker than it looked.
+
+**Identifiers are restricted, free text is escaped.** A `site_id` must match
+`[A-Za-z0-9_-]` and stay under 64 characters, the same shape `NodeConfig`
+already enforces for a node id. It used to accept any non-empty string, which
+meant a value containing markup could be stored and then served back inside an
+API response. Restricting it at the door is the right layer, because a site id
+also reaches URLs and export filenames. A site *name* stays free text, since
+that is what a name is for, and is escaped on the way out instead.
+
+**JSON responses declare their type.** `json.dumps` does not escape `<`, `>` or
+`&`, so a stored identifier containing markup appears literally in the body.
+Served as `application/json` that is inert, but a browser that guessed the type
+would not be, so every non-HTML response carries
+`X-Content-Type-Options: nosniff`. The dashboard pages deliberately do not get
+it: they are the one place the browser is meant to render what we sent, and they
+carry their own headers.
+
+### What the XSS alert was and was not
+
+The reflected-XSS finding pointed at the events dashboard. Investigated rather
+than dismissed, and it is a **false positive on that route**: every reflected
+value there is escaped, and a hostile `node_id` cannot even reach a 200 because
+the path routing rejects it first. `tests/test_security.py` pins both halves, so
+a change that unescapes something fails there instead of in a browser.
+
+The investigation did find a real weakness next door, which is the `site_id`
+rule above. Reporting an alert as a false positive should not mean the review
+was wasted.
 
 
 ## Serverless notes

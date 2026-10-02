@@ -198,7 +198,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 182 tests
+pytest tests -q                      # 192 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -323,6 +323,42 @@ silencio a un nodo provisionado a no firmado: el central devuelve 401, el gatewa
 lanza, y no se acusa nada, así que el nodo conserva sus filas y reintenta. Un
 downgrade silencioso habría sido el fallo preocupante, porque parecería que
 funciona.
+
+
+## Forma de entrada y endurecimiento de respuestas
+
+Dos reglas que salieron de revisar los hallazgos del análisis estático, las dos
+porque la versión obvia resultó más débil de lo que parecía.
+
+**Los identificadores se restringen, el texto libre se escapa.** Un `site_id`
+debe cumplir `[A-Za-z0-9_-]` y medir menos de 64 caracteres, la misma forma que
+`NodeConfig` ya exige para un node id. Antes aceptaba cualquier string no vacío,
+lo que permitía almacenar un valor con markup y luego devolverlo dentro de una
+respuesta de la API. Restringirlo en la puerta es la capa correcta, porque un
+site id además llega a URLs y a nombres de archivo de exportación. El *nombre*
+del sitio sigue siendo texto libre, que es justo para lo que es un nombre, y se
+escapa a la salida.
+
+**Las respuestas JSON declaran su tipo.** `json.dumps` no escapa `<`, `>` ni `&`,
+así que un identificador almacenado con markup aparece literal en el body.
+Servido como `application/json` eso es inerte, pero un navegador que adivinara el
+tipo no lo sería, así que toda respuesta que no sea HTML lleva
+`X-Content-Type-Options: nosniff`. Las páginas del dashboard deliberadamente no
+lo llevan: son el único sitio donde el navegador debe renderizar lo que
+enviamos, y llevan sus propias cabeceras.
+
+### Qué era y qué no era el alert de XSS
+
+El hallazgo de XSS reflected señalaba el dashboard de eventos. Se investigó en
+vez de descartarse, y es un **falso positivo en esa ruta**: ahí todos los
+valores reflejados van escapados, y un `node_id` hostil ni siquiera llega a un
+200 porque el routing del path lo rechaza primero.
+`tests/test_security.py` fija ambas mitades, así que un cambio que quite el
+escape falla ahí y no en un navegador.
+
+La investigación sí encontró una debilidad real al lado, que es la regla de
+`site_id` de arriba. Reportar un alert como falso positivo no debería
+significar que la revisión fue perdida.
 
 
 ## Notas serverless

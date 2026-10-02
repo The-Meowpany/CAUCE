@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -22,6 +23,26 @@ from .security import require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
+# A site id reaches URLs, export filenames, the dashboard and the JSON API, so
+# it is held to the same shape the firmware already enforces for a node id
+# (`NodeConfig`: [A-Za-z0-9_-]). Before this, any non-empty string was accepted,
+# which meant a value containing markup could be stored and then served back.
+SITE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+MAX_SITE_ID_LENGTH = 64
+
+
+def _require_site_id(site_id: str) -> str:
+    if len(site_id) > MAX_SITE_ID_LENGTH or not SITE_ID_PATTERN.fullmatch(site_id):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_site_id",
+                "allowed": "[A-Za-z0-9_-]",
+                "max_length": MAX_SITE_ID_LENGTH,
+            },
+        )
+    return site_id
+
 
 @router.post("/sites")
 def create_site(
@@ -34,6 +55,7 @@ def create_site(
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
+    _require_site_id(site_id)
     is_control = _control_flag(payload.get("control"))
     with transaction() as conn:
         existing = conn.execute(
@@ -130,6 +152,7 @@ def assign_node_site(
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
+    _require_site_id(site_id)
     with transaction() as conn:
         node = conn.execute(
             "SELECT 1 FROM nodes WHERE node_id=?", (node_id,)
@@ -160,6 +183,7 @@ def create_intervention(
 
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
+    _require_site_id(site_id)
     if not isinstance(kind, str) or not kind:
         raise HTTPException(status_code=422, detail="missing_kind")
     if not isinstance(start_utc_ms, int):

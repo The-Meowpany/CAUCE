@@ -1,5 +1,7 @@
 #include "cauce/app/SyncManager.h"
 
+#include "cauce/core/TextBuffer.h"
+
 #include "cauce/app/CommandExecutor.h"
 
 #include <cstdio>
@@ -149,13 +151,14 @@ bool SyncManager::syncOneBatch() {
   }
   char nodeIdJson[64];
   escapeJsonString(nodeId_, nodeIdJson, sizeof(nodeIdJson));
-  used += static_cast<size_t>(std::snprintf(
-      payload + used, payloadCapacity - used,
-      "{\"protocol_version\":%u,\"node_id\":%s,\"batch_size\":",
-      Versions::kProtocol, nodeIdJson));
-  const size_t batchSizePos = used;
-  std::memcpy(payload + used, "00000", 5);
-  used += 5;
+  // Bounded appends throughout: `used` can never pass `payloadCapacity`, so the
+  // remaining-capacity arithmetic below cannot underflow. See core/TextBuffer.h.
+  TextBuffer payloadText(batchPayload_, payloadCapacity);
+  appendText(payloadText, "{\"protocol_version\":%u,\"node_id\":%s,\"batch_size\":",
+             Versions::kProtocol, nodeIdJson);
+  const size_t batchSizePos = payloadText.used;
+  appendRaw(payloadText, "00000");
+  used = payloadText.used;
   // Receipts for commands run on the previous round trip go out with this
   // batch, so acknowledgement and delivery share one request.
   if (receiptsJson_[0] != '\0') {
@@ -165,11 +168,12 @@ bool SyncManager::syncOneBatch() {
       ++used;
       std::memcpy(payload + used, receiptsJson_, receiptsLen);
       used += receiptsLen;
+      batchPayload_[used] = '\0';
     }
   }
-  used += static_cast<size_t>(
-      std::snprintf(payload + used, payloadCapacity - used,
-                    ",\"measurements\":["));
+  payloadText.used = used;
+  appendText(payloadText, ",\"measurements\":[");
+  used = payloadText.used;
 
   uint32_t emitted = 0;
   uint32_t maxSentSeq = lastAckedSeq_;

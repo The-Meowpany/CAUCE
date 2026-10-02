@@ -20,6 +20,7 @@ void registerLoRaBatchTests();
 void registerDiagnosticsTests();
 void registerDeepSleepTests();
 void registerCommandTests();
+void registerTextBufferTests();
 
 int main() {
   UNITY_BEGIN();
@@ -43,5 +44,6 @@ int main() {
   registerDiagnosticsTests();
   registerDeepSleepTests();
   registerCommandTests();
+  registerTextBufferTests();
   return UNITY_END();
 }

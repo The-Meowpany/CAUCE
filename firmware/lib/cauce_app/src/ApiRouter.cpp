@@ -9,6 +9,7 @@
 #include "cauce/app/NetworkManager.h"
 #include "cauce/app/WebAssets.h"
 #include "cauce/core/SecurityUtils.h"
+#include "cauce/core/TextBuffer.h"
 #include "cauce/core/TimeUtils.h"
 
 namespace cauce::app {
@@ -414,19 +415,21 @@ ApiRouter::Response ApiRouter::routePostConfig(const Request& req, char* out,
 
   const ConfigValidation validation = ConfigManager::validate(candidate);
   if (!validation.ok) {
+    // Bounded appends: with four 63-character messages this could reach 512
+    // bytes, and an unguarded snprintf return value would then hand the next
+    // call an underflowed remaining-size. See core/TextBuffer.h.
     char errors[512];
-    size_t used = 0;
-    used += static_cast<size_t>(
-        std::snprintf(errors + used, sizeof(errors) - used, "{\"errors\":["));
+    TextBuffer errorText(errors, sizeof(errors));
+    appendText(errorText, "{\"errors\":[");
     for (uint8_t i = 0; i < validation.errorCount && i < 4; ++i) {
+      if (errorText.full()) break;
       char errEsc[140];
       escapeJsonString(validation.errors[i], errEsc, sizeof(errEsc));
-      used += static_cast<size_t>(std::snprintf(
-          errors + used, sizeof(errors) - used, "%s%s", i ? "," : "", errEsc));
+      if (i > 0) appendRaw(errorText, ",");
+      appendRaw(errorText, errEsc);
     }
-    used += static_cast<size_t>(
-        std::snprintf(errors + used, sizeof(errors) - used, "]}"));
-    return respond(422, errors, used, out, capacity);
+    appendRaw(errorText, "]}");
+    return respond(422, errors, errorText.used, out, capacity);
   }
 
   if (!config_.save(candidate))

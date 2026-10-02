@@ -4,14 +4,14 @@
 
 ```powershell
 cd firmware
-pio test -e native          # 194 tests en PC (Unity)
+pio test -e native          # 202 tests en PC (Unity)
 pio run -e native           # compila el demo de simulación en host
 pio run -e esp32dev         # compila el firmware objetivo
 ```
 
 ```bash
 cd backend
-python -m pytest tests -q   # 182 tests de backend
+python -m pytest tests -q   # 192 tests de backend
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ```
 
