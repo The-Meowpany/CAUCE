@@ -21,6 +21,14 @@ from .db import engine, query, transaction
 from .ratelimit import check_rate
 from .retention import purge_older_than, read_state
 from .security import require_bearer_token
+from .signing import (
+    DEFAULT_ALGORITHM,
+    ED25519,
+    ED25519_PUBLIC_KEY_BYTES,
+    SignatureError,
+    decode_key_material,
+    get_algorithm,
+)
 
 router = APIRouter(prefix="/v1")
 
@@ -106,16 +114,45 @@ def provision_node(
     device_key = payload.get("device_key")
     if not isinstance(node_id, str) or not node_id:
         raise HTTPException(status_code=422, detail="missing_node_id")
-    if not isinstance(device_key, str) or len(device_key) < 16:
+
+    algorithm_name = payload.get("device_key_algorithm") or DEFAULT_ALGORITHM
+    try:
+        algorithm = get_algorithm(algorithm_name)
+    except SignatureError as exc:
+        raise HTTPException(status_code=422,
+                            detail="unknown_signature_algorithm") from exc
+
+    if algorithm.name == ED25519:
+        # An Ed25519 "device key" stored by the central is a public key. It has
+        # to be exactly 32 bytes: any other length is a truncated paste or a
+        # seed pasted where a public key belongs, and accepting it would store
+        # something that can never verify.
+        try:
+            decode_key_material(device_key, ED25519_PUBLIC_KEY_BYTES)
+        except SignatureError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_ed25519_public_key") from exc
+    elif not isinstance(device_key, str) or len(device_key) < 16:
         raise HTTPException(status_code=422, detail="weak_device_key")
+
     with transaction() as conn:
         conn.execute(
-            """INSERT INTO nodes(node_id, device_key, first_seen_utc_ms, last_seen_utc_ms)
-               VALUES(?,?,?,?)
-               ON CONFLICT(node_id) DO UPDATE SET device_key=excluded.device_key""",
-            (node_id, device_key, int(time.time() * 1000), int(time.time() * 1000)),
+            """INSERT INTO nodes(node_id, device_key, device_key_algorithm,
+                                  first_seen_utc_ms, last_seen_utc_ms)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                   device_key=excluded.device_key,
+                   device_key_algorithm=excluded.device_key_algorithm""",
+            (node_id, device_key, algorithm.name, int(time.time() * 1000),
+             int(time.time() * 1000)),
         )
-    return {"status": "provisioned", "node_id": node_id}
+    return {
+        "status": "provisioned",
+        "node_id": node_id,
+        "device_key_algorithm": algorithm.name,
+        "signature_bytes": algorithm.signature_bytes,
+    }
 
 
 @router.post("/sync")

@@ -3,13 +3,14 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (207 firmware + 234 backend tests, E2E green)
+## Implemented and verified (207 firmware + 273 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
 | **Retention breadth**: `agg_daily`, `alert_log`, `node_diagnostics`, `maintenance_events` and `sync_batches` purged alongside raw measurements; only `acked` commands age out, `pending`/`delivered` survive, orphaned receipts are cleaned; every counter reported | 8 backend tests |
 | **Node-signed LoRa frames**: the node appends HMAC-SHA-256 over header, payload **and CRC** to every frame it transmits; the gateway holds no key and verifies nothing, relaying bytes verbatim; the central verifies each frame against the provisioned key. Restores A-8 for the relay path | 5 firmware tests (known-answer HMAC vector, unsigned/small-buffer refusal, signed == unsigned + 32 bytes, tampering, CRC coverage) + 19 backend tests |
 | **Coverage resolution cap**: the window guard bounds implied sample count as well as span, so a 400-day window at 1 s is refused as `too_many_buckets` while two years at hourly is allowed and points at `agg_hourly`/`agg_daily` | 4 backend tests |
+| **Ed25519 frame signatures (RFC 8032)**: `device_key_algorithm` fixed at provisioning decides the check, so a frame cannot relabel itself into the cheaper one; a 32-byte trailer is HMAC and a 64-byte trailer is Ed25519, which is why the pinned frame header did not change. Central stores the public key only. **The firmware cannot sign Ed25519 yet**, so this is reachable from the replay path and the gateway but not from a deployed node | 30 signing tests incl. RFC 4231 and RFC 8032 §7.1 known-answer vectors, plus 9 backend tests on the relayed path |
 | **Central calibration**: `calibration` table per (site, variable) plus a `maintenance_events` log; raw stays intact and the calibrated value is derived on read; applied in summary, compare, period-compare, summary-fast, hourly, heat-events, before-after/DiD, colocation, report and CSV | 16 backend tests |
 | **Long-window analytics**: `granularity=auto` reads `agg_hourly` past 7 days when coverage is sufficient and says so in the response; `raw` remains available for exact min/max | 6 backend tests |
 | **Cursor pagination**: opaque `(timestamp_utc_ms, sequence)` cursor for measurements and `node_id`-based cursor for nodes, stable under concurrent inserts; `limit`/`offset` untouched | 6 backend tests |

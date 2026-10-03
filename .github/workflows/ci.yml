@@ -89,7 +89,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install platformio
-      - run: pip install fastapi "uvicorn[standard]" httpx pytest
+      # From requirements.txt rather than a hand-written list, so a dependency
+      # added for the server cannot be missing here and only fail in CI.
+      - run: pip install -r requirements.txt
+        working-directory: backend
       - name: Build integration binary
         run: pio run -e integration
         working-directory: firmware

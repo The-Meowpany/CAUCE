@@ -22,13 +22,25 @@ from .lora_frames import (
     DecodeError,
     Reassembler,
     decode_frame,
-    verify_frame,
+    split_signed_frame,
 )
+from .signing import SignatureError, verify_frame
 
 
-def _node_device_key(node_id: str) -> str | None:
-    rows = query("SELECT device_key FROM nodes WHERE node_id=?", (node_id,))
-    return rows[0]["device_key"] if rows else None
+def _node_key_material(node_id: str) -> tuple[str | None, str | None]:
+    """The node's key and the algorithm that key belongs to.
+
+    Both come from provisioning, never from the request. A frame cannot choose
+    its own verification algorithm, because that would let an attacker relabel an
+    HMAC frame as Ed25519 and have the central run whichever check it liked.
+    """
+    rows = query(
+        "SELECT device_key, device_key_algorithm FROM nodes WHERE node_id=?",
+        (node_id,),
+    )
+    if not rows:
+        return None, None
+    return rows[0]["device_key"], rows[0]["device_key_algorithm"]
 
 
 def expand_signed_frames(payload: dict) -> dict:
@@ -49,7 +61,7 @@ def expand_signed_frames(payload: dict) -> dict:
     if len(raw_frames) > 32:
         raise HTTPException(status_code=422, detail="too_many_frames")
 
-    device_key = _node_device_key(node_id)
+    device_key, algorithm = _node_key_material(node_id)
     if not device_key:
         # Without a key there is nothing to verify against, and accepting the
         # batch anyway would be exactly the downgrade the frame signature
@@ -65,14 +77,14 @@ def expand_signed_frames(payload: dict) -> dict:
         except Exception as exc:
             raise HTTPException(status_code=422,
                                 detail="invalid_frame") from exc
-        if not verify_frame(frame, device_key):
+        if not verify_frame(frame, device_key, algorithm):
             raise HTTPException(status_code=401, detail="invalid_frame_signature")
         frames.append(frame)
 
     # The header is read for grouping only; the bytes that carry records were
     # verified above and are not re-read from the relay in any trusted way.
     try:
-        first = decode_frame(_body_of(frames[0]))
+        first = decode_frame(_body_of(frames[0], algorithm))
     except DecodeError as exc:
         raise HTTPException(status_code=422, detail="unparsable_frame") from exc
 
@@ -80,7 +92,7 @@ def expand_signed_frames(payload: dict) -> dict:
     reassembler = Reassembler(batch_id=batch_id)
     try:
         for frame in frames:
-            reassembler.add(_body_of(frame))
+            reassembler.add(_body_of(frame, algorithm))
     except DecodeError as exc:
         raise HTTPException(status_code=422, detail="bad_reassembly") from exc
     if not reassembler.complete:
@@ -107,11 +119,13 @@ def expand_signed_frames(payload: dict) -> dict:
     }
 
 
-def _body_of(frame: bytes) -> bytes:
-    """Strips the trailing signature so structural checks see the framed data."""
-    from .lora_frames import split_signed_frame
+def _body_of(frame: bytes, algorithm: str | None = None) -> bytes:
+    """Strips the trailing signature so structural checks see the framed data.
 
+    The trailer length depends on the node's algorithm, so this cannot assume
+    32 bytes and get the right answer for an Ed25519 node.
+    """
     try:
-        return split_signed_frame(frame)[0]
-    except DecodeError:
+        return split_signed_frame(frame, algorithm)[0]
+    except SignatureError:
         return frame

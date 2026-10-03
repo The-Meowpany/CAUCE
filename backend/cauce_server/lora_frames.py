@@ -36,6 +36,15 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
+from .signing import (
+    DEFAULT_ALGORITHM,
+    SignatureError,
+    signature_bytes,
+)
+from .signing import sign_frame as _sign_frame
+from .signing import split_signed_frame as _split_signed_frame
+from .signing import verify_frame as _verify_frame
+
 MAGIC = 0xCA
 VERSION = 1
 HEADER_SIZE = 10
@@ -364,35 +373,35 @@ def records_per_frame(budget: int) -> int:
 #
 # The signature is over the whole frame as transmitted, including the header and
 # the CRC, so a fragment index or a record payload cannot be swapped in flight.
-SIGNATURE_BYTES = 32  # HMAC-SHA-256
+#
+# The algorithm itself lives in `signing`, because the central and the frame
+# layer must agree on it exactly: two implementations of "verify a signature"
+# is one more than a wire format should have. These are the framing-aware
+# wrappers, which is all that belongs here.
+
+# Kept for the HMAC case, which is what the fleet and the firmware use.
+SIGNATURE_BYTES = signature_bytes(DEFAULT_ALGORITHM)
 
 
-def sign_frame(frame: bytes, device_key: str) -> bytes:
-    """Appends an HMAC over `frame` and returns the signed frame."""
-    import hashlib
-    import hmac
-
-    if not device_key:
-        raise DecodeError("cannot sign a frame without a device key")
-    return frame + hmac.new(device_key.encode("utf-8"), frame,
-                            hashlib.sha256).digest()
+def sign_frame(frame: bytes, device_key: str,
+               algorithm: str | None = None) -> bytes:
+    """Appends a signature trailer for `algorithm` and returns the frame."""
+    try:
+        return _sign_frame(frame, device_key, algorithm)
+    except SignatureError as exc:
+        raise DecodeError(str(exc)) from exc
 
 
-def verify_frame(frame: bytes, device_key: str) -> bool:
-    """Checks a signed frame's HMAC. Does not validate the payload itself."""
-    import hashlib
-    import hmac
-
-    if not device_key or len(frame) <= SIGNATURE_BYTES:
-        return False
-    body, signature = frame[:-SIGNATURE_BYTES], frame[-SIGNATURE_BYTES:]
-    expected = hmac.new(device_key.encode("utf-8"), body,
-                        hashlib.sha256).digest()
-    return hmac.compare_digest(signature, expected)
+def verify_frame(frame: bytes, device_key: str,
+                 algorithm: str | None = None) -> bool:
+    """Checks a signed frame's signature. Does not validate the payload itself."""
+    return _verify_frame(frame, device_key, algorithm)
 
 
-def split_signed_frame(frame: bytes) -> tuple[bytes, bytes]:
+def split_signed_frame(frame: bytes,
+                       algorithm: str | None = None) -> tuple[bytes, bytes]:
     """Splits a signed frame into its body and its signature."""
-    if len(frame) <= SIGNATURE_BYTES:
-        raise DecodeError("frame is too short to carry a signature")
-    return frame[:-SIGNATURE_BYTES], frame[-SIGNATURE_BYTES:]
+    try:
+        return _split_signed_frame(frame, algorithm)
+    except SignatureError as exc:
+        raise DecodeError(str(exc)) from exc

@@ -70,15 +70,19 @@ class GatewayStats:
         }
 
 
-def frame_body(frame: bytes) -> bytes:
+def frame_body(frame: bytes, algorithm: str | None = None) -> bytes:
     """The framed data with any trailing signature removed.
 
-    A node-signed frame is the framed bytes plus a 32-byte HMAC. Reading the
-    framing does not mean reading the key: the signature is verified by the
-    central, not here.
+    A node-signed frame is the framed bytes plus a signature. Reading the framing
+    means knowing the trailer length, which means knowing which algorithm the node
+    uses. That is public metadata rather than a secret: it is configured on the
+    gateway out of band and reveals nothing an attacker could not infer from the
+    length of a single frame. The key stays on the node and the central.
+
+    The signature itself is verified by the central, not here.
     """
     try:
-        return split_signed_frame(frame)[0]
+        return split_signed_frame(frame, algorithm)[0]
     except DecodeError:
         return frame
 
@@ -90,8 +94,8 @@ class LoRaGateway:
     Injecting it is what lets the whole loop be tested against the real FastAPI
     app without opening a socket to it.
 
-    Deliberately takes no device keys: there is no constructor argument for
-    them, so the weak configuration cannot be written by accident.
+    Deliberately takes no device keys: there is no constructor argument for them,
+    so the weak configuration cannot be written by accident.
     """
 
     def __init__(self, sync_url: str, transport):
@@ -99,6 +103,53 @@ class LoRaGateway:
         self.transport = transport
         self.stats = GatewayStats()
         self._pending: dict[int, tuple[Reassembler, list[bytes]]] = {}
+        # node_id -> algorithm name. Public, and in practice only a trailer length.
+        self._algorithms: dict[str, str | None] = {}
+
+    def set_node_algorithm(self, node_id: str,
+                           algorithm: str | None) -> None:
+        """Records which signature algorithm a node's frames use.
+
+        Without this the gateway cannot tell a 32-byte trailer from the first
+        half of a 64-byte one, and it would hand the central a corrupted frame.
+        It is configuration, not authority: naming the algorithm confers no
+        ability to sign anything.
+        """
+        self._algorithms[node_id] = algorithm
+
+    def _algorithm_for(self, node_id: str | None) -> str | None:
+        if not isinstance(node_id, str):
+            return None
+        return self._algorithms.get(node_id)
+
+    def _node_of(self, frame: bytes) -> str | None:
+        """The node id a frame claims, read with a candidate trailer length.
+
+        Only ever used to look up that node's algorithm, so a wrong guess costs a
+        rejected frame rather than a misattributed batch: the central re-reads
+        every record and refuses a foreign one.
+        """
+        for algorithm in self._candidate_algorithms():
+            try:
+                header = decode_frame(frame_body(frame, algorithm))
+            except DecodeError:
+                continue
+            records = header["records"]
+            if records:
+                return records[0].node_id
+        return None
+
+    def _candidate_algorithms(self) -> list[str | None]:
+        """Trailer lengths worth trying, configured ones plus the default.
+
+        A gateway serving a mixed fleet meets HMAC and Ed25519 nodes, so it
+        cannot assume one length. It never *verifies* anything with them; it only
+        needs to find where the framing ends.
+        """
+        seen = list(self._algorithms.values())
+        if None not in seen:
+            seen.append(None)
+        return seen
 
     # -- receive side -------------------------------------------------
 
@@ -110,8 +161,10 @@ class LoRaGateway:
         raised: a radio delivers noise routinely, and a gateway that raised on
         every bad CRC would restart on every storm.
         """
+        algorithm = self._algorithm_for(self._node_of(frame))
+        body = frame_body(frame, algorithm)
         try:
-            header = decode_frame(frame_body(frame))
+            header = decode_frame(body)
         except DecodeError:
             self.stats.frames_rejected += 1
             return None
@@ -130,7 +183,7 @@ class LoRaGateway:
         reassembler, frames = entry
 
         try:
-            complete = reassembler.add(frame_body(frame))
+            complete = reassembler.add(body)
         except DecodeError:
             self.stats.frames_rejected += 1
             self._pending.pop(batch_id, None)

@@ -2,3 +2,6 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 httpx>=0.26
 pytest>=8.0
+# Ed25519 frame signatures (RFC 8032). The central verifies, so the
+# implementation is a maintained library rather than curve arithmetic of our own.
+cryptography>=42.0

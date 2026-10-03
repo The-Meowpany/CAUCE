@@ -30,7 +30,7 @@ pio test -e native          # 202 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 234 tests
+python -m pytest tests -q   # 273 tests
 ..\scripts\run-e2e.ps1      # C++ node → FastAPI → SQLite (3 phases)
 ..\scripts\verify-all.ps1   # everything above in one gate
 ```

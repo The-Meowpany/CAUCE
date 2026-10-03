@@ -320,6 +320,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()}
     if "device_key" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN device_key TEXT")
+    if "device_key_algorithm" not in cols:
+        # Which algorithm this node's key belongs to. Stored rather than sent
+        # with the frame so a request cannot relabel itself into whichever
+        # check is cheaper to pass. NULL means HMAC, which is what every node
+        # provisioned before Ed25519 has.
+        conn.execute("ALTER TABLE nodes ADD COLUMN device_key_algorithm TEXT")
     mcols = {
         r["name"]
         for r in conn.execute("PRAGMA table_info(measurements)").fetchall()

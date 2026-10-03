@@ -36,10 +36,25 @@ from cauce_server.lora_frames import (  # noqa: E402
 )
 from cauce_server.lora_gateway import GatewayError, LoRaGateway  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from cauce_server.signing import ED25519  # noqa: E402
 
 RADIO_BUDGET = 115
 DEVICE_KEY = "clave-dispositivo-0123456789"
 OTHER_KEY = "otra-clave-del-atacante-999"
+
+# RFC 8032 section 7.1 TEST 2, used where a real key pair is needed.
+ED25519_SEED = "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
+ED25519_PUBLIC = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+# RFC 8032 section 7.1 TEST 1: a different, equally valid key pair.
+OTHER_ED25519_SEED = (
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+
+
+def ed25519_frames_for(batch, batch_id=1000, seed=ED25519_SEED):
+    """Frames as an Ed25519 node would transmit them."""
+    return [sign_frame(f, seed, ED25519)
+            for f in fragment_batch(batch, batch_id=batch_id,
+                                    budget=RADIO_BUDGET)]
 
 
 @pytest.fixture()
@@ -79,13 +94,19 @@ def signed_frames_for(batch, batch_id=1000, key=DEVICE_KEY,
             for f in fragment_batch(batch, batch_id=batch_id, budget=budget)]
 
 
-def gateway_for(client):
-    return LoRaGateway("/v1/sync", LoopbackTransport(client))
+def gateway_for(client, node_id="CAUCE-001", algorithm=None):
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    if algorithm is not None:
+        gateway.set_node_algorithm(node_id, algorithm)
+    return gateway
 
 
-def provision(client, node_id="CAUCE-001", key=DEVICE_KEY):
-    return client.post("/v1/provision", json={"node_id": node_id,
-                                              "device_key": key})
+def provision(client, node_id="CAUCE-001", key=DEVICE_KEY,
+              algorithm=None):
+    body = {"node_id": node_id, "device_key": key}
+    if algorithm is not None:
+        body["device_key_algorithm"] = algorithm
+    return client.post("/v1/provision", json=body)
 
 
 def relay_body(frames, node_id="CAUCE-001", batch_id=1000, record_count=None):
@@ -321,6 +342,102 @@ def test_frames_from_a_second_node_do_not_mix(client):
     rows = query("SELECT node_id FROM measurements")
     assert [r["node_id"] for r in rows] == ["CAUCE-002"]
 
+
+
+# --- Ed25519 nodes -------------------------------------------------------
+
+def test_an_ed25519_node_reaches_sqlite_and_is_acknowledged(client):
+    response = provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    assert response.status_code == 200
+    assert response.json()["device_key_algorithm"] == ED25519
+    assert response.json()["signature_bytes"] == 64
+
+    gateway = gateway_for(client, algorithm=ED25519)
+    frames = ed25519_frames_for(records(3))
+    acks = [gateway.on_frame(frame) for frame in frames]
+    assert decode_ack(acks[-1]) == 3
+    assert [r["sequence"] for r in query(
+        "SELECT sequence FROM measurements ORDER BY sequence")] == [1, 2, 3]
+
+
+def test_the_central_rejects_an_ed25519_frame_signed_with_another_key(client):
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    frames = ed25519_frames_for(records(2), seed=OTHER_ED25519_SEED)
+    response = client.post("/v1/sync", json=relay_body(frames, record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_frame_signature"
+    assert query("SELECT 1 FROM measurements") == []
+
+
+def test_an_hmac_node_cannot_be_downgraded_onto_the_ed25519_path(client):
+    """Relabelling a frame must not pick the verification the attacker prefers.
+
+    The algorithm comes from provisioning, so an HMAC frame presented to an
+    Ed25519 node is checked as Ed25519 and fails. Without that, an attacker
+    could send the cheaper construction and let the server believe it.
+    """
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    frames = signed_frames_for(records(2))
+    plain = fragment_batch(records(1), batch_id=1000,
+                      budget=RADIO_BUDGET)[0]
+    assert len(frames[0]) - len(plain) == 32
+    assert client.post("/v1/sync", json=relay_body(
+        frames, record_count=2)).status_code == 401
+
+
+def test_an_ed25519_node_cannot_be_downgraded_onto_the_hmac_path(client):
+    provision(client, key=DEVICE_KEY)
+    frames = ed25519_frames_for(records(2))
+    assert client.post("/v1/sync", json=relay_body(
+        frames, record_count=2)).status_code == 401
+    assert query("SELECT 1 FROM measurements") == []
+
+
+def test_tampering_with_an_ed25519_frame_is_caught_by_the_central(client):
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    frames = ed25519_frames_for(records(2))
+    tampered = bytearray(frames[0])
+    tampered[HEADER_SIZE + 20] ^= 0xFF
+    response = client.post("/v1/sync", json=relay_body(
+        [bytes(tampered)] + frames[1:], record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_frame_signature"
+
+
+def test_provisioning_refuses_an_ed25519_key_of_the_wrong_length(client):
+    for bad in ("", "abcd", ED25519_PUBLIC[:-2], ED25519_PUBLIC + "00"):
+        response = provision(client, key=bad, algorithm=ED25519)
+        assert response.status_code == 422, bad
+        assert response.json()["detail"] == "invalid_ed25519_public_key"
+
+
+def test_provisioning_refuses_an_unknown_algorithm(client):
+    response = client.post("/v1/provision", json={
+        "node_id": "CAUCE-001", "device_key": DEVICE_KEY,
+        "device_key_algorithm": "rot13"})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "unknown_signature_algorithm"
+
+
+def test_provisioning_defaults_to_hmac_and_reports_it(client):
+    body = provision(client).json()
+    assert body["device_key_algorithm"] == "hmac-sha256"
+    assert body["signature_bytes"] == 32
+
+
+def test_reprovisioning_switches_the_algorithm(client):
+    provision(client)
+    assert client.post("/v1/sync", json=relay_body(
+        signed_frames_for(records(2)), record_count=2)).status_code == 200
+
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    # The old HMAC frames stop verifying the moment the algorithm changes,
+    # rather than continuing to work against the new key.
+    assert client.post("/v1/sync", json=relay_body(
+        signed_frames_for(records(2, first_seq=3)),
+        record_count=2)).status_code == 401
+    assert client.post("/v1/sync", json=relay_body(
+        ed25519_frames_for(records(2)), record_count=2)).status_code == 200
 
 # --- the frame format the replay harness depends on ---------------------
 
