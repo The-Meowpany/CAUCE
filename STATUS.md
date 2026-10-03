@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (230 firmware + 303 backend tests, E2E green)
+## Implemented and verified (239 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -16,6 +16,7 @@ not. It overrides any aspirational claim elsewhere.
 | **`agg_15min`**: quarter-hour aggregates fed from the raw row at insert time, `granularity=15min`, and `auto` selecting them between 2 h and 2 days. Cannot be derived from `agg_hourly` the way `agg_daily` is, because an hour's sum/min/max do not say how the hour was distributed inside it. Capped at two days on purpose: past that a quarter-hour table returns more rows than the raw one it replaced | 20 tests: bucket alignment, null values skipped, min/max/sum agreeing with raw, mean equality, refusal when buckets are purged or mostly missing, retention counter, healthz |
 | **P2P merge semantics** (C1, the correctness half): a set union on `(node_id, sequence)` with no coordinator, so merges are commutative, associative, idempotent and monotonic. The union element is the `(key, payload)` pair, not the key: keying on the key alone made a repeated conflicting merge from the same peer append a row every sync, so a diverging replica grew without bound and stopped being idempotent. Conflicts keep the incoming row and count the divergence rather than resolving it, because dropping a peer's measurement is the loss this exists to prevent, and there is no "last writer wins" because a node with a reconstructed clock would otherwise overwrite good data. Deletion is deliberately not propagated | 15 tests including convergence from both directions and out of order, repeated retries, a full replica refusing, and a repeated conflict not growing |
 | **P2P transport interfaces** (`IPeerLink.h`): `IPeerDiscovery`, `IPeerRadio` and `PeerExchange` shaped like `ILoRaRadio`. The ESP-NOW driver and mDNS responder are **not** implemented; an untested driver behind a tested merge would make the merge look proven in a way it is not | Compiles on host and ESP32 |
+| **Ed25519 field, group and point encoding** (firmware): radix-2^16 field arithmetic, twisted Edwards points, and compressed point decode/encode. `decode(encode(p))` is proven to be the identity against the RFC 8032 encodings, and the parity bit in 255 round-trips explicitly | 9 firmware tests: round trip over every public key and every R component, parity asserted directly, negating x shown to flip exactly bit 255, base point derived and matched, curve membership, non-canonical y refused, off-curve y refused, null arguments refused |
 | **Central calibration**: `calibration` table per (site, variable) plus a `maintenance_events` log; raw stays intact and the calibrated value is derived on read; applied in summary, compare, period-compare, summary-fast, hourly, heat-events, before-after/DiD, colocation, report and CSV | 16 backend tests |
 | **Long-window analytics**: `granularity=auto` reads `agg_hourly` past 7 days when coverage is sufficient and says so in the response; `raw` remains available for exact min/max | 6 backend tests |
 | **Cursor pagination**: opaque `(timestamp_utc_ms, sequence)` cursor for measurements and `node_id`-based cursor for nodes, stable under concurrent inserts; `limit`/`offset` untouched | 6 backend tests |
@@ -132,26 +133,36 @@ is the first thing that stops being affordable as node count grows.
 
 The central verifies Ed25519 frame signatures today, checked against RFC 8032
 section 7.1 known-answer vectors and interoperating with `cryptography`
-(`backend/cauce_server/signing.py`). The firmware cannot produce them yet: only
-HMAC.
+(`backend/cauce_server/signing.py`). The firmware cannot produce them yet.
 
-The field and scalar layers were brought up and **mechanically verified against
-Python** (14/14 field, 6/6 scalar, and the public key matches all three RFC 8032
-vectors). Two real defects were found and fixed on the way: the usual carry pass
-leaves limb 0 large because the 2^256 fold lands back on it, so limb magnitudes
-compound until `int64` overflows; and a shift loop written high-to-low dropped
-bit 31 of every limb, which made scalar reduction return the input's low 32 bits
-without reducing.
+**What is verified, mechanically, against values computed independently:**
 
-What remains is **one bit**. For a non-empty message the encoded `R` ends in
-`0x5A` where the standard says `0xDA` - the parity bit of `x`, and nothing else
-differs. The empty-message vector passes completely, the public key matches for
-all three vectors, and bit-flip rejection passes. Three independent references
-(RFC text, `cryptography`, and a group implementation written from the curve
-definition) agree on `0xDA`. So the fault is in `scalarMult`/`encodePoint`
-returning the negated point for this scalar, while the same code path returns the
-correct public key. It is deliberately **not** committed: a signing function that
-compiles and returns garbage is worse than an absent one.
+- Field layer: 14/14 (multiply, square, invert, `powP58`, limb normalisation,
+  canonical encode/decode, curve constant, base y, sqrt(-1), squaring chains).
+- Scalar layer: 6/6 (reduction mod L including all-ones and a random 511-bit
+  value, and `scMulAdd`).
+- Point layer: `decode(encode(p))` is the identity over every RFC 8032 public key
+  and every signature's R component, with the parity bit asserted directly and
+  shown to be the only thing negating x changes.
+
+**Two real defects were found on the way and are fixed**, both now explained in
+the source so they are not reintroduced: the usual carry pass leaves limb 0 large
+because the 2^256 fold lands back on it, so limb magnitudes compound until
+`int64` overflows; and a shift loop written high-to-low dropped bit 31 of every
+limb, which made scalar reduction return the input's low 32 bits unreduced.
+
+**What remains.** With the point layer proven, the only untested stage left is
+`scalarMult` and the signing entry points that use it. The earlier report that
+"R differed from the standard in one bit" should now be treated as **unconfirmed**:
+that came from a hand-transcribed expected value in a debug harness, and the same
+harness also produced a wrong reference for `powP58(2)` that cost two sessions.
+The fixtures are now generated from `cryptography` so that failure mode is closed.
+
+The next step is therefore short and well defined: implement `scalarMult` on the
+verified point layer, then test signing against the generated RFC 8032 vectors -
+`TEST 1`, `TEST 2` and `TEST 3` public keys, R and S - and see whether the earlier
+one-bit discrepancy reproduces at all. If it does not, the arithmetic was right
+and the diagnosis was wrong, which is worth knowing more than the bug was.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
