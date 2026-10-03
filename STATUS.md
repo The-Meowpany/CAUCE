@@ -151,18 +151,31 @@ because the 2^256 fold lands back on it, so limb magnitudes compound until
 `int64` overflows; and a shift loop written high-to-low dropped bit 31 of every
 limb, which made scalar reduction return the input's low 32 bits unreduced.
 
-**What remains.** With the point layer proven, the only untested stage left is
-`scalarMult` and the signing entry points that use it. The earlier report that
-"R differed from the standard in one bit" should now be treated as **unconfirmed**:
-that came from a hand-transcribed expected value in a debug harness, and the same
-harness also produced a wrong reference for `powP58(2)` that cost two sessions.
-The fixtures are now generated from `cryptography` so that failure mode is closed.
+**What remains, and where the fault is.** With the point layer proven, the
+remaining stage is the scalar ladder. It was implemented and tested, and it
+**failed** - so the localisation is now narrower than "one bit somewhere":
 
-The next step is therefore short and well defined: implement `scalarMult` on the
-verified point layer, then test signing against the generated RFC 8032 vectors -
-`TEST 1`, `TEST 2` and `TEST 3` public keys, R and S - and see whether the earlier
-one-bit discrepancy reproduces at all. If it does not, the arithmetic was right
-and the diagnosis was wrong, which is worth knowing more than the bug was.
+- `scalarMult` with `scalar = 1` returns the base point correctly. That case only
+  ever evaluates `identity + P`; the ladder doubles the identity 255 times, which
+  is free.
+- The public key derived from a real seed does **not** match. The first differing
+  element is byte 0 of `y`, not the parity bit.
+
+So the ladder breaks as soon as it has to double a point that is not the
+identity, which points at `addPoints(P, P)` - the general addition formula being
+used for doubling without having been tested on its own. The addition formula was
+never tested in isolation: every previous check went through `decode`/`encode`,
+which does not touch it.
+
+The next step is therefore short and specific: a test that adds a point to itself
+and checks the result against the affine doubling formula
+(`x2 = 2xy / (1 + d x^2 y^2)`, `y2 = (y^2 - x^2) / (1 - d x^2 y^2)`), plus one
+that checks `addPoints(identity, P) == P`. If the doubling formula disagrees, that
+is the bug and it is a sign or a factor of two in four multiplications.
+
+The signing entry points were removed again rather than committed in a state that
+returns wrong answers. Everything needed to re-add them is in place: the field
+layer, the scalars mod L, and the generated RFC 8032 fixtures.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
