@@ -48,7 +48,7 @@ def healthz() -> dict:
     tables = {}
     for name in ("sites", "interventions", "sync_batches", "alert_rules",
                  "alert_log", "commands", "calibration",
-                 "maintenance_events", "agg_hourly",
+                 "maintenance_events", "agg_15min", "agg_hourly",
                  "agg_daily", "api_tokens"):
         try:
             tables[name] = query(f"SELECT COUNT(*) AS c FROM {name}")[0]["c"]

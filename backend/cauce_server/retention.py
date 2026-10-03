@@ -61,6 +61,9 @@ def purge_older_than(days: int, vacuum: bool = True) -> dict:
         gone_buckets = conn.execute(
             "DELETE FROM agg_hourly WHERE hour_ts<?", (cutoff,)
         ).rowcount
+        gone_q15 = conn.execute(
+            "DELETE FROM agg_15min WHERE bucket_ts<?", (cutoff,)
+        ).rowcount
         gone_daily = conn.execute(
             "DELETE FROM agg_daily WHERE day_ts<?", (cutoff,)
         ).rowcount
@@ -90,7 +93,7 @@ def purge_older_than(days: int, vacuum: bool = True) -> dict:
             "DELETE FROM sync_batches WHERE received_at_utc_ms<?", (cutoff,)
         ).rowcount
 
-    total_gone = (gone_measurements + gone_buckets + gone_daily + gone_log
+    total_gone = (gone_measurements + gone_buckets + gone_q15 + gone_daily + gone_log
                   + gone_diagnostics + gone_maintenance + gone_commands
                   + gone_receipts + gone_batches)
     state = read_state()
@@ -106,6 +109,7 @@ def purge_older_than(days: int, vacuum: bool = True) -> dict:
             "older_than_days": days,
             "deleted_measurements": gone_measurements,
             "deleted_hourly_buckets": gone_buckets,
+        "deleted_quarter_hourly_buckets": gone_q15,
             "deleted_daily_buckets": gone_daily,
             "deleted_alert_log": gone_log,
             "deleted_diagnostics": gone_diagnostics,

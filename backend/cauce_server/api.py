@@ -20,7 +20,7 @@ from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
 from .retention import purge_older_than, read_state
-from .security import require_bearer_token
+from .security import require_bearer_token, require_scope, require_site_access
 from .signing import (
     DEFAULT_ALGORITHM,
     ED25519,
@@ -109,7 +109,7 @@ def provision_node(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "write")
     node_id = payload.get("node_id")
     device_key = payload.get("device_key")
     if not isinstance(node_id, str) or not node_id:
@@ -276,6 +276,26 @@ async def sync_batch(
         for rec in inserted_rows:
             if rec["value"] is None:
                 continue
+            value = rec["value"]
+            sumsq = value ** 2
+
+            # 15-minute bucket, then hourly. Both are fed from the raw row
+            # rather than derived from each other: an hour's aggregates do not
+            # say how the hour was distributed inside it.
+            bucket_ts = (rec["timestamp_utc_ms"] // 900000) * 900000
+            conn.execute(
+                """INSERT INTO agg_15min(node_id,variable,bucket_ts,cnt,sum,sumsq,min_v,max_v)
+                   VALUES(?,?,?,?,?,?,?,?)
+                   ON CONFLICT(node_id,variable,bucket_ts) DO UPDATE SET
+                     cnt = cnt + excluded.cnt,
+                     sum = sum + excluded.sum,
+                     sumsq = sumsq + excluded.sumsq,
+                     min_v = MIN(min_v, excluded.min_v),
+                     max_v = MAX(max_v, excluded.max_v)""",
+                (node_id, rec["variable"], bucket_ts, 1, value, sumsq,
+                 value, value),
+            )
+
             hour_ts = (rec["timestamp_utc_ms"] // 3600000) * 3600000
             conn.execute(
                 """INSERT INTO agg_hourly(node_id,variable,hour_ts,cnt,sum,sumsq,min_v,max_v)
@@ -286,16 +306,8 @@ async def sync_batch(
                      sumsq = sumsq + excluded.sumsq,
                      min_v = MIN(min_v, excluded.min_v),
                      max_v = MAX(max_v, excluded.max_v)""",
-                (
-                    node_id,
-                    rec["variable"],
-                    hour_ts,
-                    1,
-                    rec["value"],
-                    (rec["value"] or 0.0) ** 2 if rec["value"] is not None else 0.0,
-                    rec["value"],
-                    rec["value"],
-                ),
+                (node_id, rec["variable"], hour_ts, 1, value, sumsq,
+                 value, value),
             )
 
         conn.execute(
@@ -395,7 +407,7 @@ def list_nodes(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "read")
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
     after = decode_node_cursor(cursor)
@@ -426,10 +438,16 @@ def list_nodes(
             "nodes": [dict(r) for r in rows]}
 
 
+def _site_of_node(node_id: str) -> str | None:
+    """The site a node belongs to, for site-scoped principals."""
+    rows = query("SELECT site_id FROM nodes WHERE node_id=?", (node_id,))
+    return rows[0]["site_id"] if rows else None
+
 @router.get("/nodes/{node_id}")
 def get_node(node_id: str, request: Request, authorization: str | None = Header(default=None)) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_site_access(require_scope(authorization, "read"),
+                        _site_of_node(node_id))
     rows = query("SELECT * FROM nodes WHERE node_id=?", (node_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="node_not_found")
@@ -457,7 +475,8 @@ def node_measurements(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_site_access(require_scope(authorization, "read"),
+                        _site_of_node(node_id))
     limit = max(1, min(limit, 10000))
     offset = max(0, offset)
     after = decode_cursor(cursor)
@@ -503,7 +522,7 @@ def download_backup(
     from starlette.background import BackgroundTask
 
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "admin")
     tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
     tmp.close()
     try:
@@ -534,7 +553,7 @@ def run_retention(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "admin")
     days = payload.get("older_than_days", 90)
     if not isinstance(days, int) or not 1 <= days <= 3650:
         raise HTTPException(status_code=422, detail="invalid_retention_days")
@@ -563,7 +582,7 @@ def retention_state(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "read")
     state = read_state()
     return {
         "enabled": settings.retention_enabled,
@@ -585,8 +604,8 @@ def analytics_summary(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
-    if granularity not in ("auto", "raw", "hourly", "daily"):
+    require_scope(authorization, "read")
+    if granularity not in ("auto", "raw", "15min", "hourly", "daily"):
         raise HTTPException(status_code=422, detail="invalid_granularity")
     calibration = calibration_for(node_id, variable)
 
@@ -608,6 +627,34 @@ def analytics_summary(
             and _hourly_coverage_ok(node_id, variable, from_utc_ms, to_utc_ms)
         )
     )
+    # Between raw and hourly. `auto` takes it only for a window long enough that
+    # reading raw is wasteful but short enough that hourly would hide the shape
+    # of the period asked about.
+    use_q15 = not use_daily and not use_hourly and (
+        granularity == "15min" or (
+            granularity == "auto" and span_ms is not None
+            and Q15_MIN_SPAN_MS <= span_ms <= Q15_MAX_SPAN_MS
+            and _q15_coverage_ok(node_id, variable)
+        )
+    )
+    if use_q15:
+        raw_q15 = _q15_stats(node_id, variable, from_utc_ms, to_utc_ms)
+        calibrated_q15 = transform_stats(raw_q15, calibration)
+        return {
+            "node_id": node_id,
+            "variable": variable,
+            "metric_type": "derived",
+            "source": "materialized_15min",
+            "granularity": "15min",
+            "note": (
+                "descriptive statistics only; does not imply causality. "
+                "15-minute buckets: sub-quarter-hour variation is averaged away. "
+                "use granularity=raw to see every sample"
+            ),
+            "calibration": calibration_summary(calibration),
+            **({"calibrated": calibrated_q15} if calibration else {}),
+            **raw_q15,
+        }
     if use_daily:
         raw_daily = _daily_stats(node_id, variable, from_utc_ms, to_utc_ms)
         calibrated_daily = transform_stats(raw_daily, calibration)
@@ -669,12 +716,58 @@ DAY_MS = 24 * HOUR_MS
 # Below a week the raw rows are cheap to read and give exact extremes, so
 # `auto` stays on raw. Above it the hourly buckets are the cheaper answer and
 # the response says which one it used.
+Q15_MS = 15 * 60 * 1000
+# Below a day there are enough raw rows to be worth folding, and not enough
+# hours for an hourly bucket to say anything about the shape of the period.
+Q15_MIN_SPAN_MS = 2 * HOUR_MS
+# Above two days, 15-minute buckets stop being a saving: two days is 192 buckets
+# against at most 2880 hourly... and an hourly table is only eligible past seven
+# days, so the window between the two ceilings reads raw. Deliberate. An
+# aggregate that returns more rows than the raw table it replaced is not an
+# optimisation, and this tier only earns its place where it is genuinely fewer.
+Q15_MAX_SPAN_MS = 2 * 24 * HOUR_MS
 HOURLY_MIN_SPAN_MS = 7 * 24 * HOUR_MS
 # Past a season the question is a trend, not an extreme, and daily buckets
 # turn ~500 hourly rows into ~90. Set high on purpose: a daily bucket hides
 # every intra-day peak, so it is only a fair answer when nobody is asking for
 # one.
 DAILY_MIN_SPAN_MS = 120 * 24 * HOUR_MS
+
+
+def _q15_stats(node_id: str, variable: str, from_utc_ms: int | None,
+               to_utc_ms: int | None) -> dict:
+    sql = ("SELECT bucket_ts, cnt, sum, sumsq, min_v, max_v"
+           " FROM agg_15min WHERE node_id=? AND variable=?")
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        sql += " AND bucket_ts>=?"
+        params.append((from_utc_ms // Q15_MS) * Q15_MS)
+    if to_utc_ms is not None:
+        sql += " AND bucket_ts<=?"
+        params.append((to_utc_ms // Q15_MS) * Q15_MS)
+    sql += " ORDER BY bucket_ts"
+    return _agg_stats(query(sql, tuple(params)), "15min")
+
+
+def _q15_coverage_ok(node_id: str, variable: str) -> bool:
+    """Whether the 15-minute table holds enough of this variable to use.
+
+    The same 90% rule the hourly and daily paths use: a materialised aggregate
+    that is silently missing samples reports a mean over a subset, which looks
+    exactly like a real change in the data.
+    """
+    rows = query(
+        "SELECT COUNT(*) AS buckets, COALESCE(SUM(cnt),0) AS samples"
+        " FROM agg_15min WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]
+    if rows["buckets"] == 0:
+        return False
+    raw = query(
+        "SELECT COUNT(*) AS c FROM measurements WHERE node_id=? AND variable=?",
+        (node_id, variable),
+    )[0]["c"]
+    return raw == 0 or rows["samples"] >= raw * 0.9
 
 
 def _daily_stats(node_id: str, variable: str, from_utc_ms: int | None,
@@ -750,7 +843,9 @@ def analytics_compare(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "read")
+    for _peer in (node_a, node_b):
+        require_site_access(principal, _site_of_node(_peer))
     raw_a = summary_stats(_values_for(node_a, variable, from_utc_ms, to_utc_ms))
     raw_b = summary_stats(_values_for(node_b, variable, from_utc_ms, to_utc_ms))
     cal_a = calibration_for(node_a, variable)
@@ -807,7 +902,7 @@ def analytics_heat_events(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "read")
     sql = """SELECT timestamp_utc_ms, value FROM measurements
              WHERE node_id=? AND variable=? AND value IS NOT NULL
                AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')"""
@@ -883,7 +978,7 @@ def analytics_period_compare(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "read")
     if min(a_start, a_end, b_start, b_end) < 0 or a_end <= a_start or b_end <= b_start:
         raise HTTPException(status_code=422, detail="invalid_windows")
 
@@ -953,7 +1048,7 @@ def analytics_summary_fast(
 ) -> dict:
     """Reads precomputed hourly aggregates; O(buckets) instead of O(records)."""
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_scope(authorization, "read")
     sql = """SELECT hour_ts, cnt, sum, sumsq, min_v, max_v FROM agg_hourly
              WHERE node_id=? AND variable=?"""
     params: list = [node_id, variable]
@@ -993,7 +1088,8 @@ def time_reconstruct(
     anchored sample and the median interval between consecutive anchored
     samples. Marks reconstructed rows and never touches anchored ones."""
     _check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_site_access(require_scope(authorization, "write"),
+                        _site_of_node(node_id))
 
     with transaction() as conn:
         rows = conn.execute(

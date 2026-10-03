@@ -186,7 +186,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 273 tests
+pytest tests -q                      # 303 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 

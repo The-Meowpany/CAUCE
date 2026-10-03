@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (215 firmware + 273 backend tests, E2E green)
+## Implemented and verified (215 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -12,6 +12,8 @@ not. It overrides any aspirational claim elsewhere.
 | **Coverage resolution cap**: the window guard bounds implied sample count as well as span, so a 400-day window at 1 s is refused as `too_many_buckets` while two years at hourly is allowed and points at `agg_hourly`/`agg_daily` | 4 backend tests |
 | **Ed25519 frame signatures (RFC 8032)**: `device_key_algorithm` fixed at provisioning decides the check, so a frame cannot relabel itself into the cheaper one; a 32-byte trailer is HMAC and a 64-byte trailer is Ed25519, which is why the pinned frame header did not change. Central stores the public key only. **The firmware cannot sign Ed25519 yet**, so this is reachable from the replay path and the gateway but not from a deployed node | 30 signing tests incl. RFC 4231 and RFC 8032 §7.1 known-answer vectors, plus 9 backend tests on the relayed path |
 | **SHA-512 in firmware** (FIPS 180-4), streaming, 128-byte blocks with the 128-bit length field. Present because Ed25519 is defined over a 512-bit hash: the seed is stretched into a signing scalar and a per-message nonce is derived from it, and no narrower hash substitutes | 8 firmware tests: empty/abc/two-block/896-byte/one-million-a from the standard, streaming equals one-shot at ten chunk splits, null and zero-length appends, exact block-boundary padding |
+| **Capability scopes actually enforced**: every endpoint in `api.py` now calls `require_scope`, so a `read` token is refused on writes and admin work with 403 instead of being compared against the shared admin token; site-scoped principals are confined to their own site on node reads, measurements, compare and the node write path | 14 tests that fail against the previous state; the shared admin token still works everywhere |
+| **`agg_15min`**: quarter-hour aggregates fed from the raw row at insert time, `granularity=15min`, and `auto` selecting them between 2 h and 2 days. Cannot be derived from `agg_hourly` the way `agg_daily` is, because an hour's sum/min/max do not say how the hour was distributed inside it. Capped at two days on purpose: past that a quarter-hour table returns more rows than the raw one it replaced | 20 tests: bucket alignment, null values skipped, min/max/sum agreeing with raw, mean equality, refusal when buckets are purged or mostly missing, retention counter, healthz |
 | **Central calibration**: `calibration` table per (site, variable) plus a `maintenance_events` log; raw stays intact and the calibrated value is derived on read; applied in summary, compare, period-compare, summary-fast, hourly, heat-events, before-after/DiD, colocation, report and CSV | 16 backend tests |
 | **Long-window analytics**: `granularity=auto` reads `agg_hourly` past 7 days when coverage is sufficient and says so in the response; `raw` remains available for exact min/max | 6 backend tests |
 | **Cursor pagination**: opaque `(timestamp_utc_ms, sequence)` cursor for measurements and `node_id`-based cursor for nodes, stable under concurrent inserts; `limit`/`offset` untouched | 6 backend tests |
@@ -98,6 +100,68 @@ not. It overrides any aspirational claim elsewhere.
   no radio driver and no link budget: the air interface is still unproven.
 - Downlink kinds validate and report but do not reconfigure the node; real
   actuation needs hardware that can be actuated.
+
+## Roadmap: what is left, and why
+
+Ordered by what unblocks the most, with the honest reason each item exists. This
+replaces the old 400-day coverage note, which is resolved: the window guard now
+bounds implied sample count as well as span.
+
+### D1 - capability scopes on every endpoint (DONE)
+
+`security.require_scope` resolves the caller from `api_tokens` and enforces
+`read`/`write`/`admin` plus optional site scoping, but **no endpoint calls it**.
+Every one still calls `require_bearer_token`, which only compares against the
+shared admin token and accepts a `scope` argument it cannot enforce. So the
+per-principal authorization that ships is currently inert: a `read`-only token
+can still delete a node's data. The work is mechanical but it is the difference
+between the feature existing and being real.
+
+Also in scope: `/v1/ota/manifest` currently has **no authentication at all** and
+returns the release descriptor to anyone who asks.
+
+### D3 - sub-hourly aggregates (DONE)
+
+`agg_hourly` and `agg_daily` exist. There is no `agg_15min`, so a query over the
+last six hours reads `measurements` directly. That is affordable for a pilot and
+is the first thing that stops being affordable as node count grows.
+
+### C2 - Ed25519 signing in the firmware
+
+The central verifies Ed25519 frame signatures today, checked against RFC 8032
+section 7.1 known-answer vectors and interoperating with `cryptography`
+(`backend/cauce_server/signing.py`). The firmware cannot produce them yet: only
+HMAC.
+
+The field and scalar layers were brought up and **mechanically verified against
+Python** (14/14 field, 6/6 scalar, and the public key matches all three RFC 8032
+vectors). Two real defects were found and fixed on the way: the usual carry pass
+leaves limb 0 large because the 2^256 fold lands back on it, so limb magnitudes
+compound until `int64` overflows; and a shift loop written high-to-low dropped
+bit 31 of every limb, which made scalar reduction return the input's low 32 bits
+without reducing.
+
+What remains is **one bit**. For a non-empty message the encoded `R` ends in
+`0x5A` where the standard says `0xDA` - the parity bit of `x`, and nothing else
+differs. The empty-message vector passes completely, the public key matches for
+all three vectors, and bit-flip rejection passes. Three independent references
+(RFC text, `cryptography`, and a group implementation written from the curve
+definition) agree on `0xDA`. So the fault is in `scalarMult`/`encodePoint`
+returning the negated point for this scalar, while the same code path returns the
+correct public key. It is deliberately **not** committed: a signing function that
+compiles and returns garbage is worse than an absent one.
+
+### C1 - peer-to-peer exchange
+
+`mDNS` discovery, `ESP-NOW` transport, node-to-node replication and CRDT merge
+do not exist. This is greenfield rather than a fix, and the thesis treats it as
+proposed evolution. It has no dependency on C2.
+
+### Hardware-only
+
+SX1276 driver and link budget, OTA rollback on real flash, BME280/LittleFS/Wi-Fi
+on the bench, deep-sleep power measurement, and real actuators. None of these can
+be closed from a desk, and `docs/en/BENCH_PLAN.md` is the procedure.
 
 ## Known technical debt / backlog (prioritized)
 

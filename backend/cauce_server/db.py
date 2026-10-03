@@ -125,6 +125,32 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     PRIMARY KEY (node_id, variable, hour_ts)
 );
 
+-- One row per 15 minutes. Between raw and hourly.
+--
+-- A short query - "this afternoon", "since the alert" - has to read `measurements`
+-- today, and raw is where the row count lives: a node at 60 s produces 2400 rows
+-- an hour, so an afternoon across a site is tens of thousands of rows to compute
+-- a mean over. 15-minute buckets turn that into 4 rows an hour while still
+-- resolving the shape of a single afternoon, which hourly cannot.
+--
+-- It cannot be derived from `agg_hourly` the way `agg_daily` is: an hour's sum,
+-- min and max do not say how the hour was distributed within it, so a
+-- quarter-hour aggregate has to be fed from the raw rows at insert time.
+CREATE TABLE IF NOT EXISTS agg_15min (
+    node_id TEXT NOT NULL,
+    variable TEXT NOT NULL,
+    bucket_ts INTEGER NOT NULL,
+    cnt INTEGER NOT NULL,
+    sum REAL NOT NULL,
+    sumsq REAL NOT NULL,
+    min_v REAL,
+    max_v REAL,
+    PRIMARY KEY (node_id, variable, bucket_ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agg_15min_lookup
+    ON agg_15min(node_id, variable, bucket_ts);
+
 -- Same shape as agg_hourly, one row per UTC day. Two years of 60 s samples is
 -- ~1M raw rows per variable; hourly is 17.5k and daily is 730. `auto` picks
 -- daily only when the window is long enough that the savings matter and the
