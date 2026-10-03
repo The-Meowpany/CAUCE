@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (215 firmware + 303 backend tests, E2E green)
+## Implemented and verified (230 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -14,6 +14,8 @@ not. It overrides any aspirational claim elsewhere.
 | **SHA-512 in firmware** (FIPS 180-4), streaming, 128-byte blocks with the 128-bit length field. Present because Ed25519 is defined over a 512-bit hash: the seed is stretched into a signing scalar and a per-message nonce is derived from it, and no narrower hash substitutes | 8 firmware tests: empty/abc/two-block/896-byte/one-million-a from the standard, streaming equals one-shot at ten chunk splits, null and zero-length appends, exact block-boundary padding |
 | **Capability scopes actually enforced**: every endpoint in `api.py` now calls `require_scope`, so a `read` token is refused on writes and admin work with 403 instead of being compared against the shared admin token; site-scoped principals are confined to their own site on node reads, measurements, compare and the node write path | 14 tests that fail against the previous state; the shared admin token still works everywhere |
 | **`agg_15min`**: quarter-hour aggregates fed from the raw row at insert time, `granularity=15min`, and `auto` selecting them between 2 h and 2 days. Cannot be derived from `agg_hourly` the way `agg_daily` is, because an hour's sum/min/max do not say how the hour was distributed inside it. Capped at two days on purpose: past that a quarter-hour table returns more rows than the raw one it replaced | 20 tests: bucket alignment, null values skipped, min/max/sum agreeing with raw, mean equality, refusal when buckets are purged or mostly missing, retention counter, healthz |
+| **P2P merge semantics** (C1, the correctness half): a set union on `(node_id, sequence)` with no coordinator, so merges are commutative, associative, idempotent and monotonic. The union element is the `(key, payload)` pair, not the key: keying on the key alone made a repeated conflicting merge from the same peer append a row every sync, so a diverging replica grew without bound and stopped being idempotent. Conflicts keep the incoming row and count the divergence rather than resolving it, because dropping a peer's measurement is the loss this exists to prevent, and there is no "last writer wins" because a node with a reconstructed clock would otherwise overwrite good data. Deletion is deliberately not propagated | 15 tests including convergence from both directions and out of order, repeated retries, a full replica refusing, and a repeated conflict not growing |
+| **P2P transport interfaces** (`IPeerLink.h`): `IPeerDiscovery`, `IPeerRadio` and `PeerExchange` shaped like `ILoRaRadio`. The ESP-NOW driver and mDNS responder are **not** implemented; an untested driver behind a tested merge would make the merge look proven in a way it is not | Compiles on host and ESP32 |
 | **Central calibration**: `calibration` table per (site, variable) plus a `maintenance_events` log; raw stays intact and the calibrated value is derived on read; applied in summary, compare, period-compare, summary-fast, hourly, heat-events, before-after/DiD, colocation, report and CSV | 16 backend tests |
 | **Long-window analytics**: `granularity=auto` reads `agg_hourly` past 7 days when coverage is sufficient and says so in the response; `raw` remains available for exact min/max | 6 backend tests |
 | **Cursor pagination**: opaque `(timestamp_utc_ms, sequence)` cursor for measurements and `node_id`-based cursor for nodes, stable under concurrent inserts; `limit`/`offset` untouched | 6 backend tests |
@@ -151,7 +153,7 @@ returning the negated point for this scalar, while the same code path returns th
 correct public key. It is deliberately **not** committed: a signing function that
 compiles and returns garbage is worse than an absent one.
 
-### C1 - peer-to-peer exchange
+### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
 `mDNS` discovery, `ESP-NOW` transport, node-to-node replication and CRDT merge
 do not exist. This is greenfield rather than a fix, and the thesis treats it as

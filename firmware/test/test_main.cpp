@@ -13,6 +13,7 @@ void registerNetworkTests();
 void registerApiTests();
 void registerSyncTests();
 void registerSha512Tests();
+void registerReplicationTests();
 void registerOtaTests();
 void registerOtaRollbackTests();
 void registerOtaBootConfirmTests();
@@ -38,6 +39,7 @@ int main() {
   registerApiTests();
   registerSyncTests();
   registerSha512Tests();
+  registerReplicationTests();
   registerOtaTests();
   registerOtaRollbackTests();
   registerOtaBootConfirmTests();
