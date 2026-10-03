@@ -312,6 +312,90 @@ bool ed25519IsOnCurve(const uint8_t x[32], const uint8_t y[32]) {
   return onCurve(fx, fy);
 }
 
+// --- the group law, exposed so it can be tested on its own ----------------
+
+struct Point {
+  Gf x;
+  Gf y;
+  Gf z;
+  Gf t;
+};
+
+void identityPoint(Point& p) {
+  setZero(p.x);
+  setOne(p.y);
+  setOne(p.z);
+  setZero(p.t);
+}
+
+// Extended twisted Edwards coordinates with a = -1: x = X/Z, y = Y/Z, xy = T/Z.
+// The same formula serves addition and doubling; `C` carries the factor 2d and
+// `D` the factor 2 because that is what keeps a doubling to eight multiplies.
+void addPoints(Point& out, const Point& p, const Point& q) {
+  Gf a, b, c, d, e, f, g, h, u, v;
+  subGf(u, p.y, p.x);
+  subGf(v, q.y, q.x);
+  mulGf(a, u, v);
+
+  addGf(u, p.y, p.x);
+  addGf(v, q.y, q.x);
+  mulGf(b, u, v);
+
+  mulGf(c, p.t, q.t);
+  mulGf(c, c, curveD());
+  addGf(c, c, c);  // C = 2*d*T1*T2
+
+  mulGf(d, p.z, q.z);
+  addGf(d, d, d);  // D = 2*Z1*Z2
+
+  subGf(e, b, a);
+  subGf(f, d, c);
+  addGf(g, d, c);
+  addGf(h, b, a);
+
+  mulGf(out.x, e, f);
+  mulGf(out.y, g, h);
+  mulGf(out.t, e, h);
+  mulGf(out.z, f, g);
+}
+
+void pointFromAffine(Point& p, const uint8_t x[32], const uint8_t y[32]) {
+  loadGf(p.x, x);
+  loadGf(p.y, y);
+  normalizeLimbs(p.x);
+  normalizeLimbs(p.y);
+  setOne(p.z);
+  mulGf(p.t, p.x, p.y);
+}
+
+// Converts back to affine, canonical bytes out.
+void affineFromPoint(uint8_t outX[32], uint8_t outY[32], const Point& p) {
+  Gf inverseZ, x, y;
+  invertGf(inverseZ, p.z);
+  mulGf(x, p.x, inverseZ);
+  mulGf(y, p.y, inverseZ);
+  gfToBytes(outX, x);
+  gfToBytes(outY, y);
+}
+
+void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
+                         const uint8_t y[32]) {
+  if (!out || !x || !y) return;
+  ed25519EncodePoint(out, x, y);
+}
+
+bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
+                      const uint8_t ax[32], const uint8_t ay[32],
+                      const uint8_t bx[32], const uint8_t by[32]) {
+  if (!outX || !outY || !ax || !ay || !bx || !by) return false;
+  Point pa, pb, sum;
+  pointFromAffine(pa, ax, ay);
+  pointFromAffine(pb, bx, by);
+  addPoints(sum, pa, pb);
+  affineFromPoint(outX, outY, sum);
+  return true;
+}
+
 bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]) {
   if (!outX || !outY) return false;
   // y = 4/5, encoded with the sign bit clear, which is a complete encoding of

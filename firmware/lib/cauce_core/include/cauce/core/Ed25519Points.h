@@ -56,4 +56,24 @@ bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]);
 // d = -121665/121666, the curve Ed25519 signs on.
 bool ed25519IsOnCurve(const uint8_t x[32], const uint8_t y[32]);
 
+// Point addition on affine coordinates.
+//
+// Exposed for its own sake, not for signing. The group law had never been tested
+// in isolation: every earlier check went through decode/encode, which does not
+// touch it, and the scalar ladder that does depend on it failed. Adding a point to
+// itself has to be checked against the affine doubling formula
+//
+//   x2 = 2xy / (1 + d x^2 y^2)
+//   y2 = (y^2 - x^2) / (1 - d x^2 y^2)
+//
+// because that is where a wrong sign or a factor of two in one of the four
+// multiplications shows up, and nowhere else.
+bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
+                      const uint8_t ax[32], const uint8_t ay[32],
+                      const uint8_t bx[32], const uint8_t by[32]);
+
+// Encodes an affine point, for comparing an addition against a reference.
+void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
+                         const uint8_t y[32]);
+
 }  // namespace cauce

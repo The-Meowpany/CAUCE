@@ -15,6 +15,7 @@ void registerSyncTests();
 void registerSha512Tests();
 void registerReplicationTests();
 void registerEd25519PointsTests();
+void registerEd25519GroupTests();
 void registerOtaTests();
 void registerOtaRollbackTests();
 void registerOtaBootConfirmTests();
@@ -42,6 +43,7 @@ int main() {
   registerSha512Tests();
   registerReplicationTests();
   registerEd25519PointsTests();
+  registerEd25519GroupTests();
   registerOtaTests();
   registerOtaRollbackTests();
   registerOtaBootConfirmTests();
