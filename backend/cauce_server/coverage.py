@@ -14,6 +14,11 @@ router = APIRouter(prefix="/v1")
 USABLE_QUALITIES = ("VALID", "CALIBRATED", "SUSPECT", "UNCALIBRATED")
 DEFAULT_INTERVAL_MS = 60_000
 MIN_INTERVAL_MS = 1_000
+# Long enough for any real archive, short enough that a forgotten
+# to_utc_ms cannot ask the database for the whole table.
+MAX_WINDOW_MS = 730 * 86400_000
+# Resolution guard: see _window.
+MAX_BUCKETS = 100_000
 MAX_GAPS_REPORTED = 20
 
 REASON_NO_DATA = "no_data"
@@ -176,13 +181,43 @@ def node_coverage(
     }
 
 
-def _window(from_utc_ms: int | None, to_utc_ms: int | None) -> tuple[int, int]:
+def _window(
+    from_utc_ms: int | None,
+    to_utc_ms: int | None,
+    interval_ms: int,
+) -> tuple[int, int]:
+    """Validates the requested window against both a span and a resolution cap.
+
+    Two limits, because they guard against different things. The span cap is an
+    absolute sanity bound. The bucket cap is the one that actually protects the
+    derived figure: `expected_samples` divides the window by the caller's
+    interval, so a two-year window at a one-second period asks for 63 million
+    "expected" samples and reports a coverage percentage built on them. The
+    arithmetic is correct and the number is meaningless, which is worse than a
+    refusal because it looks quotable.
+
+    The bucket cap is what lets a genuinely long window through. Two years of
+    hourly data is 17,520 buckets and cheap; two years of per-second data is
+    not, and neither is 400 days of per-minute data. Anyone who needs a long
+    window at a fine period should be reading `agg_hourly` or `agg_daily`, which
+    exist for exactly that, and the error says so.
+    """
     to_ms = to_utc_ms if to_utc_ms is not None else int(time.time() * 1000)
     from_ms = from_utc_ms if from_utc_ms is not None else to_ms - 24 * 3600_000
     if to_ms <= from_ms:
         raise HTTPException(status_code=422, detail="invalid_window")
-    if to_ms - from_ms > 400 * 86400_000:
+    if to_ms - from_ms > MAX_WINDOW_MS:
         raise HTTPException(status_code=422, detail="window_too_wide")
+    buckets = (to_ms - from_ms) // interval_ms + 1
+    if buckets > MAX_BUCKETS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "too_many_buckets: this window at this expected_interval_ms "
+                f"implies {buckets} samples, above the {MAX_BUCKETS} limit; "
+                "widen expected_interval_ms or read agg_hourly / agg_daily"
+            ),
+        )
     return from_ms, to_ms
 
 
@@ -208,10 +243,9 @@ def node_coverage_endpoint(
     require_bearer_token(authorization, settings.api_token)
     if not query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)):
         raise HTTPException(status_code=404, detail="node_not_found")
-    from_ms, to_ms = _window(from_utc_ms, to_utc_ms)
-    result = node_coverage(
-        node_id, variable, from_ms, to_ms, _interval(expected_interval_ms)
-    )
+    interval = _interval(expected_interval_ms)
+    from_ms, to_ms = _window(from_utc_ms, to_utc_ms, interval)
+    result = node_coverage(node_id, variable, from_ms, to_ms, interval)
     return {
         "metric_type": "derived_coverage",
         "note": (
@@ -236,8 +270,8 @@ def site_coverage_endpoint(
     require_bearer_token(authorization, settings.api_token)
     if not query("SELECT 1 FROM sites WHERE site_id=?", (site_id,)):
         raise HTTPException(status_code=404, detail="site_not_found")
-    from_ms, to_ms = _window(from_utc_ms, to_utc_ms)
     interval = _interval(expected_interval_ms)
+    from_ms, to_ms = _window(from_utc_ms, to_utc_ms, interval)
     node_rows = query(
         "SELECT node_id FROM nodes WHERE site_id=? ORDER BY node_id", (site_id,)
     )

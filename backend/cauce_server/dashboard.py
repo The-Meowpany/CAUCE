@@ -1056,9 +1056,9 @@ def export_node_coverage_csv(
 
     if not query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)):
         raise HTTPException(status_code=404, detail="node_not_found")
-    from_ms, to_ms = _window(from_utc_ms, to_utc_ms)
-    cov = node_coverage(node_id, variable, from_ms, to_ms,
-                        _interval(expected_interval_ms))
+    interval = _interval(expected_interval_ms)
+    from_ms, to_ms = _window(from_utc_ms, to_utc_ms, interval)
+    cov = node_coverage(node_id, variable, from_ms, to_ms, interval)
     safe_node_id = "".join(
         c for c in node_id if c.isalnum() or c in ("-", "_")
     ) or "node"

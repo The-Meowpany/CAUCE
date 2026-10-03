@@ -61,9 +61,41 @@ def purge_older_than(days: int, vacuum: bool = True) -> dict:
         gone_buckets = conn.execute(
             "DELETE FROM agg_hourly WHERE hour_ts<?", (cutoff,)
         ).rowcount
+        gone_daily = conn.execute(
+            "DELETE FROM agg_daily WHERE day_ts<?", (cutoff,)
+        ).rowcount
+        gone_log = conn.execute(
+            "DELETE FROM alert_log WHERE fired_utc_ms<?", (cutoff,)
+        ).rowcount
+        gone_diagnostics = conn.execute(
+            "DELETE FROM node_diagnostics WHERE received_at_utc_ms<?", (cutoff,)
+        ).rowcount
+        gone_maintenance = conn.execute(
+            "DELETE FROM maintenance_events WHERE at_utc_ms<?", (cutoff,)
+        ).rowcount
+        # Downlink is deleted only once settled. A pending or delivered command
+        # is the only record that an operator still asked for something, so
+        # expiring it silently would turn "not delivered yet" into "never sent".
+        gone_commands = conn.execute(
+            "DELETE FROM commands WHERE created_at_utc_ms<? AND acked_utc_ms IS NOT NULL",
+            (cutoff,),
+        ).rowcount
+        # Receipts for commands that are gone have no referent left.
+        gone_receipts = conn.execute(
+            """DELETE FROM command_receipts WHERE at_utc_ms<?
+               AND command_id NOT IN (SELECT command_id FROM commands)""",
+            (cutoff,),
+        ).rowcount
+        gone_batches = conn.execute(
+            "DELETE FROM sync_batches WHERE received_at_utc_ms<?", (cutoff,)
+        ).rowcount
+
+    total_gone = (gone_measurements + gone_buckets + gone_daily + gone_log
+                  + gone_diagnostics + gone_maintenance + gone_commands
+                  + gone_receipts + gone_batches)
     state = read_state()
     vacuumed = False
-    if vacuum and (gone_measurements or gone_buckets) and _should_vacuum(
+    if vacuum and total_gone and _should_vacuum(
         state, now_ms, settings.vacuum_interval_h
     ):
         engine().execute("VACUUM")
@@ -73,7 +105,14 @@ def purge_older_than(days: int, vacuum: bool = True) -> dict:
         {
             "older_than_days": days,
             "deleted_measurements": gone_measurements,
-            "deleted_buckets": gone_buckets,
+            "deleted_hourly_buckets": gone_buckets,
+            "deleted_daily_buckets": gone_daily,
+            "deleted_alert_log": gone_log,
+            "deleted_diagnostics": gone_diagnostics,
+            "deleted_maintenance_events": gone_maintenance,
+            "deleted_commands": gone_commands,
+            "deleted_command_receipts": gone_receipts,
+            "deleted_sync_batches": gone_batches,
             "vacuumed": vacuumed,
             "runs": int(state.get("runs", 0)) + 1,
         }

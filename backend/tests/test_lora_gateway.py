@@ -1,17 +1,18 @@
 """The LoRa gateway loop, end to end, without a radio.
 
-Frames produced by the firmware encoder are fed to `LoRaGateway.on_frame`, and
-the gateway forwards them to the real FastAPI app through an injected transport
-that calls `TestClient`. The rows are then read back out of SQLite.
+The node's frames are signed with its device key, relayed verbatim by a gateway
+that never holds a secret, and verified frame by frame by the central. The rows
+are then read back out of SQLite.
 
-That closes the last software gap in M2: before this, the reassembler was
-tested and the sync payload was shaped, but nothing had ever proved the central
-accepts what the gateway builds. Everything here except the radio driver is
-exercised for real.
+That split is the point: the relay is trusted to deliver bytes, not to vouch for
+them, so it cannot forge a measurement even though it sees every one.
 """
 
 from __future__ import annotations
 
+import base64
+import inspect
+import json
 import os
 import struct
 
@@ -25,19 +26,20 @@ from cauce_server.db import query  # noqa: E402
 from cauce_server.lora_frames import (  # noqa: E402
     HEADER_SIZE,
     RECORD_SIZE,
+    crc16,
     decode_ack,
     decode_frame,
+    fragment_batch,
+    make_record,
+    sign_frame,
+    verify_frame,
 )
-from cauce_server.lora_gateway import (  # noqa: E402
-    GatewayError,
-    LoRaGateway,
-    NodeKeys,
-)
+from cauce_server.lora_gateway import GatewayError, LoRaGateway  # noqa: E402
 from cauce_server.main import app  # noqa: E402
 
-VARIABLE_AIR_TEMPERATURE = 0
-QUALITY_VALID = 0
-DAY_MS = 86400000
+RADIO_BUDGET = 115
+DEVICE_KEY = "clave-dispositivo-0123456789"
+OTHER_KEY = "otra-clave-del-atacante-999"
 
 
 @pytest.fixture()
@@ -62,175 +64,206 @@ class LoopbackTransport:
         return response.status_code, response.text
 
 
-def make_record_payload(sequence: int, timestamp: int, value: float,
-                        node_id: str = "CAUCE-001") -> bytes:
-    """One 60-byte record, laid out exactly like RecordCodec::encodePayload."""
-    node = node_id.encode("ascii")[:15].ljust(16, b"\x00")
-    sensor = b"BME280-1".ljust(24, b"\x00")
-    out = struct.pack("<IQf", sequence, timestamp, value)
-    out += struct.pack("<BBBB", VARIABLE_AIR_TEMPERATURE, QUALITY_VALID, 0, 0)
-    out += node + sensor
-    assert len(out) == RECORD_SIZE, len(out)
-    return out
+def records(count, node_id="CAUCE-001", first_seq=1,
+            start_ts=1787356800000):
+    return [
+        make_record(first_seq + i, start_ts + i * 3600000, 20.0 + i, node_id)
+        for i in range(count)
+    ]
 
 
-def real_crc16(data: bytes) -> int:
-    """CRC16-CCITT, the same function the firmware applies to a frame."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 \
-                else (crc << 1) & 0xFFFF
-    return crc
+def signed_frames_for(batch, batch_id=1000, key=DEVICE_KEY,
+                      budget=RADIO_BUDGET):
+    """Frames exactly as a node would transmit them: framed, then signed."""
+    return [sign_frame(f, key)
+            for f in fragment_batch(batch, batch_id=batch_id, budget=budget)]
 
 
-def make_frame(batch_id: int, index: int, count: int,
-               payload: bytes, record_count: int) -> bytes:
-    """One frame with a correct CRC, so `decode_frame` accepts it.
-
-    Header mirrors `firmware/lib/cauce_core/LoRaBatchCodec.h`: magic|version,
-    batch id, fragment index, fragment count, record count for the whole batch,
-    payload length, all little-endian.
-    """
-    body = struct.pack(
-        "<HHBBHH",
-        (0xCA << 8) | 1,
-        batch_id,
-        index,
-        count,
-        record_count,
-        len(payload),
-    ) + payload
-    assert len(body) == HEADER_SIZE + len(payload)
-    return body + struct.pack("<H", real_crc16(body))
+def gateway_for(client):
+    return LoRaGateway("/v1/sync", LoopbackTransport(client))
 
 
-def single_record_frames(node_id="CAUCE-001", first_seq=1, count=3,
-                         start_ts=1787356800000, batch_id=1000):
-    """`count` frames, one record each, exactly as SF9 produces them.
-
-    All frames share one batch id: they are fragments of a single batch, and the
-    gateway keys its reassembly buffer on that id.
-    """
-    frames = []
-    for i in range(count):
-        payload = make_record_payload(first_seq + i, start_ts + i * 3600000,
-                                      20.0 + i, node_id)
-        frames.append(make_frame(batch_id, i, count, payload, count))
-    return frames
+def provision(client, node_id="CAUCE-001", key=DEVICE_KEY):
+    return client.post("/v1/provision", json={"node_id": node_id,
+                                              "device_key": key})
 
 
-def gateway_for(client, keys=None):
-    return LoRaGateway("/v1/sync", LoopbackTransport(client), keys)
+def relay_body(frames, node_id="CAUCE-001", batch_id=1000, record_count=None):
+    """The body a relay would POST, built without going through the gateway."""
+    return {
+        "protocol_version": 1,
+        "node_id": node_id,
+        "transport": "lora",
+        "batch_id": batch_id,
+        "record_count": (len(records(record_count or len(frames)))
+                         if record_count is None else record_count),
+        "frames": [base64.b64encode(f).decode("ascii") for f in frames],
+    }
 
 
-def test_two_fragments_reach_sqlite_and_are_acknowledged(client):
+# --- the happy path -----------------------------------------------------
+
+def test_a_signed_batch_reaches_sqlite_and_is_acknowledged(client):
+    provision(client)
     gateway = gateway_for(client)
-    frames = single_record_frames(count=3)
+    frames = signed_frames_for(records(3))
 
-    acks = [gateway.on_frame(f) for f in frames]
+    acks = [gateway.on_frame(frame) for frame in frames]
     assert acks[:2] == [None, None], "only the last frame closes the batch"
     assert acks[2] is not None
-
-    # The acknowledgement reports what the central stored, which the node then
-    # uses to advance its watermark.
+    # The node learns what the central stored, not what was sent.
     assert decode_ack(acks[2]) == 3
 
     rows = query("SELECT * FROM measurements WHERE node_id='CAUCE-001'"
                  " ORDER BY sequence")
-    assert len(rows) == 3
     assert [r["sequence"] for r in rows] == [1, 2, 3]
     assert rows[0]["value"] == pytest.approx(20.0)
     assert rows[2]["value"] == pytest.approx(22.0)
 
     batches = query("SELECT * FROM sync_batches WHERE node_id='CAUCE-001'")
     assert len(batches) == 1
-    assert batches[0]["transport"] == "lora", "the link type must be recorded"
+    assert batches[0]["transport"] == "lora"
     assert batches[0]["last_sequence"] == 3
 
 
-def test_the_gateway_declares_the_lora_transport(client):
+def test_the_gateway_relays_frames_verbatim(client):
+    provision(client)
     gateway = gateway_for(client)
-    for frame in single_record_frames(count=2):
-        gateway.on_frame(frame)
-    body, headers = gateway.transport.calls[0]
-    assert b'"transport":"lora"' in body
-    assert headers["X-CAUCE-Node"] == "CAUCE-001"
-    assert "X-CAUCE-Signature" not in headers
-
-
-def test_a_provisioned_node_is_forwarded_with_a_valid_signature(client):
-    key = "clave-dispositivo-0123456789"
-    assert client.post("/v1/provision", json={
-        "node_id": "CAUCE-001", "device_key": key}).status_code == 200
-
-    keys = NodeKeys()
-    keys.add("CAUCE-001", key)
-    gateway = gateway_for(client, keys)
-
-    for frame in single_record_frames(count=2):
+    frames = signed_frames_for(records(2))
+    for frame in frames:
         gateway.on_frame(frame)
 
     body, headers = gateway.transport.calls[0]
-    assert headers["X-CAUCE-Signature"] == sign_of(body, key)
-    assert len(query("SELECT 1 FROM measurements")) == 2
+    sent = json.loads(body)
+    # Frames go out exactly as they arrived: nothing rebuilt, re-signed or
+    # reordered on the way through.
+    assert sent["frames"] == [base64.b64encode(f).decode() for f in frames]
+    assert "measurements" not in sent
+    assert sent["transport"] == "lora"
+    assert headers["X-CAUCE-Relay"] == "1"
+    assert "X-CAUCE-Signature" not in headers, (
+        "a relay must never sign on a node's behalf"
+    )
 
 
-def sign_of(body: bytes, key: str) -> str:
-    import hashlib
-    import hmac
+def test_the_gateway_takes_no_device_keys_at_all():
+    """The weak configuration cannot be written by accident.
 
-    return hmac.new(key.encode(), body, hashlib.sha256).hexdigest()
+    Verifying an HMAC needs the secret, and holding the secret means being able
+    to forge one, so a gateway that verifies frames is a gateway that can invent
+    them. There is deliberately no constructor argument for keys.
+    """
+    assert list(inspect.signature(LoRaGateway.__init__).parameters) == [
+        "self", "sync_url", "transport"]
 
 
-def test_a_provisioned_node_rejects_an_unsigned_forwarding(client):
-    # A gateway with no key must not silently downgrade a provisioned node: the
-    # central refuses, which is the intended outcome.
-    assert client.post("/v1/provision", json={
-        "node_id": "CAUCE-001",
-        "device_key": "clave-dispositivo-0123456789"}).status_code == 200
+# --- the central is the only verifier -----------------------------------
 
-    gateway = gateway_for(client)
-    with pytest.raises(GatewayError):
-        for frame in single_record_frames(count=2):
-            gateway.on_frame(frame)
+def test_the_central_rejects_an_unsigned_batch(client):
+    provision(client)
+    unsigned = fragment_batch(records(2), batch_id=1000, budget=RADIO_BUDGET)
+    response = client.post("/v1/sync", json=relay_body(unsigned, record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_frame_signature"
     assert query("SELECT 1 FROM measurements") == []
-    assert gateway.stats.batches_failed == 1
 
 
-def test_a_rejected_forward_does_not_drop_the_node_data(client):
-    assert client.post("/v1/provision", json={
-        "node_id": "CAUCE-001",
-        "device_key": "clave-dispositivo-0123456789"}).status_code == 200
-    gateway = gateway_for(client)
-    with pytest.raises(GatewayError):
-        for frame in single_record_frames(count=2):
-            gateway.on_frame(frame)
-    # The batch is released either way, and the node still holds its rows
-    # because it never saw an acknowledgement.
-    assert gateway.pending_batches() == 0
-    assert gateway.stats.batches_failed == 1
+def test_the_central_rejects_a_frame_signed_with_another_key(client):
+    provision(client)
+    frames = signed_frames_for(records(2), key=OTHER_KEY)
+    response = client.post("/v1/sync", json=relay_body(frames, record_count=2))
+    assert response.status_code == 401
 
+
+def test_tampering_with_a_relayed_frame_is_caught_by_the_central(client):
+    """The gateway is not trusted, so the server has to be the one checking."""
+    provision(client)
+    frames = signed_frames_for(records(2))
+    tampered = bytearray(frames[0])
+    tampered[HEADER_SIZE + 20] ^= 0xFF  # a value byte inside the record
+    tampered = bytes(tampered)
+
+    response = client.post("/v1/sync", json=relay_body(
+        [tampered] + frames[1:], record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid_frame_signature"
+    assert query("SELECT 1 FROM measurements") == []
+
+
+def test_an_unprovisioned_node_cannot_use_the_relay_path(client):
+    frames = signed_frames_for(records(2))
+    response = client.post("/v1/sync", json=relay_body(frames, record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "node_not_provisioned"
+
+
+def test_another_nodes_records_cannot_be_relayed_under_this_name(client):
+    provision(client)
+    frames = signed_frames_for(records(2, node_id="CAUCE-999"))
+    response = client.post("/v1/sync", json=relay_body(frames, record_count=2))
+    assert response.status_code == 401
+    assert response.json()["detail"] == "node_id_mismatch"
+
+
+def test_an_incomplete_relayed_batch_is_refused(client):
+    provision(client)
+    frames = signed_frames_for(records(3))
+    response = client.post("/v1/sync", json=relay_body(frames[:2], record_count=3))
+    assert response.status_code == 422
+    assert query("SELECT 1 FROM measurements") == []
+
+
+def test_a_lying_record_count_is_refused(client):
+    provision(client)
+    frames = signed_frames_for(records(2))
+    response = client.post("/v1/sync", json=relay_body(frames, record_count=99))
+    assert response.status_code == 422
+
+
+def test_a_malformed_relay_request_is_refused(client):
+    provision(client)
+    for body, expected in (
+        ({"node_id": "CAUCE-001", "frames": []}, 422),
+        ({"frames": ["AAAA"]}, 422),
+        ({"node_id": "CAUCE-001", "frames": ["not base64!!"]}, 422),
+        ({"node_id": "CAUCE-001", "frames": [123]}, 422),
+    ):
+        body.setdefault("protocol_version", 1)
+        response = client.post("/v1/sync", json=body)
+        assert response.status_code == expected, body
+
+
+def test_too_many_frames_are_refused(client):
+    # The cap is on frames per request, not on records, so it is driven by the
+    # spreading factor: SF9 puts one record in each frame.
+    provision(client)
+    frames = signed_frames_for(records(40), budget=RADIO_BUDGET,
+                               key=OTHER_KEY)
+    assert len(frames) > 32
+    assert client.post("/v1/sync", json=relay_body(frames)).status_code == 422
+
+
+# --- delivery semantics -------------------------------------------------
 
 def test_repeated_delivery_of_the_same_batch_is_idempotent(client):
+    provision(client)
     gateway = gateway_for(client)
-    frames = single_record_frames(count=2)
+    frames = signed_frames_for(records(2))
     for frame in frames:
         gateway.on_frame(frame)
-    # A gateway that retransmits after a lost acknowledgement replays the same
-    # batch; the central must not double-count it.
+    # A relay that retransmits after a lost acknowledgement replays the batch;
+    # the central must not double-count it.
     for frame in frames:
         gateway.on_frame(frame)
 
-    rows = query("SELECT * FROM measurements WHERE node_id='CAUCE-001'")
-    assert len(rows) == 2
+    assert len(query("SELECT 1 FROM measurements")) == 2
     assert query("SELECT COUNT(*) c FROM sync_batches")[0]["c"] == 2
 
 
 def test_a_lost_fragment_leaves_the_batch_open_and_undelivered(client):
+    provision(client)
     gateway = gateway_for(client)
-    frames = single_record_frames(count=3)
+    frames = signed_frames_for(records(3))
     gateway.on_frame(frames[0])
     gateway.on_frame(frames[2])
 
@@ -238,7 +271,6 @@ def test_a_lost_fragment_leaves_the_batch_open_and_undelivered(client):
     assert query("SELECT 1 FROM measurements") == []
     assert gateway.stats.batches_forwarded == 0
 
-    # The late fragment closes it.
     ack = gateway.on_frame(frames[1])
     assert ack is not None
     assert decode_ack(ack) == 3
@@ -251,20 +283,13 @@ def test_noise_is_counted_not_raised(client):
     assert gateway.on_frame(b"\x00\x01\x02") is None
     assert gateway.on_frame(b"") is None
     assert gateway.stats.frames_rejected == 2
-
-    # A corrupt frame from a real batch id drops that batch rather than being
-    # merged into it.
-    frames = single_record_frames(count=2)
-    bad = bytearray(frames[0])
-    bad[-1] ^= 0xFF
-    assert gateway.on_frame(bytes(bad)) is None
-    assert gateway.stats.frames_rejected == 3
     assert gateway.pending_batches() == 0
 
 
 def test_stats_add_up(client):
+    provision(client)
     gateway = gateway_for(client)
-    for frame in single_record_frames(count=2):
+    for frame in signed_frames_for(records(2)):
         gateway.on_frame(frame)
     gateway.on_frame(b"\xff\xff")
     stats = gateway.stats.as_dict()
@@ -273,25 +298,40 @@ def test_stats_add_up(client):
     assert stats["frames_accepted"] == 2
     assert stats["frames_rejected"] == 1
     assert stats["batches_failed"] == 0
+    assert stats["frames_relayed"] == 2
+
+
+def test_a_rejected_forward_does_not_leak_the_batch(client):
+    provision(client)
+    gateway = gateway_for(client)
+    # The central refuses because the node id in the records is foreign.
+    frames = signed_frames_for(records(2, node_id="CAUCE-999"))
+    with pytest.raises(GatewayError):
+        for frame in frames:
+            gateway.on_frame(frame)
+    assert gateway.pending_batches() == 0, "a failed batch must not leak"
 
 
 def test_frames_from_a_second_node_do_not_mix(client):
+    provision(client, node_id="CAUCE-002")
     gateway = gateway_for(client)
-    for frame in single_record_frames(node_id="CAUCE-002", count=1,
-                                      first_seq=1, start_ts=1787356800000):
+    for frame in signed_frames_for(records(1, node_id="CAUCE-002"),
+                                   batch_id=2000):
         gateway.on_frame(frame)
     rows = query("SELECT node_id FROM measurements")
     assert [r["node_id"] for r in rows] == ["CAUCE-002"]
 
 
-def test_a_frame_that_contradicts_its_own_header_is_refused(client):
-    # payload_bytes in the header does not match the frame length.
-    payload = make_record_payload(1, 1787356800000, 20.0)
-    body = struct.pack("<HHBBHH", (0xCA << 8) | 1, 7, 0, 1, 1, len(payload))
-    body += payload
-    lying = body[:-1] + bytes([body[-1] ^ 0xFF])
-    gateway = gateway_for(client)
-    assert gateway.on_frame(lying) is None
-    assert gateway.stats.frames_rejected == 1
-    assert decode_frame(body + struct.pack("<H", real_crc16(body))
-                        )["batch_id"] == 7
+# --- the frame format the replay harness depends on ---------------------
+
+def test_the_replay_harness_matches_the_firmware_layout(client):
+    frames = signed_frames_for(records(1), batch_id=4242)
+    body = frames[0][:-32]
+    decoded = decode_frame(body)
+    assert decoded["batch_id"] == 4242
+    assert decoded["record_count"] == 1
+    assert decoded["fragment_count"] == 1
+    assert len(body) == HEADER_SIZE + RECORD_SIZE + 2
+    assert struct.unpack("<H", body[-2:])[0] == crc16(body[:-2])
+    assert verify_frame(frames[0], DEVICE_KEY)
+    assert not verify_frame(frames[0], OTHER_KEY)

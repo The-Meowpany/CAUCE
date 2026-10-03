@@ -15,6 +15,7 @@ from .evaluation import router as evaluation_router
 from .fleet import router as fleet_router
 from .legal import router as legal_router
 from .retention import RetentionScheduler
+from .tokens import router as tokens_router
 
 _STARTED_MONO = time.monotonic()
 
@@ -95,3 +96,4 @@ app.include_router(coverage_router)
 app.include_router(fleet_router)
 app.include_router(calibration_router)
 app.include_router(commands_router)
+app.include_router(tokens_router)

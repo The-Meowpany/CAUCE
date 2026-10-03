@@ -1173,6 +1173,61 @@ def test_coverage_unknown_node_404_and_bad_window_422(client):
     assert client.get('/v1/sites/ghost/coverage').status_code == 404
 
 
+def test_coverage_refuses_a_window_whose_expected_count_is_nonsense(client):
+    """A correct number built on a silly assumption is worse than a refusal.
+
+    400 days at a one-second period implies 34.5 million expected samples. The
+    division is right and the coverage percentage built on it is meaningless,
+    so the endpoint refuses and points at the aggregate tables instead.
+    """
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 2)))
+    start, end = BASE_TS, BASE_TS + 400 * 86400_000
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={end}&expected_interval_ms=1000')
+    assert r.status_code == 422
+    assert 'too_many_buckets' in r.json()['detail']
+    assert 'agg_hourly' in r.json()['detail']
+
+
+def test_coverage_allows_a_long_window_at_a_coarse_interval(client):
+    """The resolution cap must not double as a span cap.
+
+    Two years of hourly data is a legitimate archive query; refusing it while
+    permitting 400 days of per-second data would be backwards.
+    """
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 2)))
+    start, end = BASE_TS, BASE_TS + 730 * 86400_000
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={end}&expected_interval_ms=3600000')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['expected_samples'] == 730 * 24 + 1
+    assert body['to_utc_ms'] - body['from_utc_ms'] == 730 * 86400_000
+
+
+def test_coverage_still_refuses_a_window_longer_than_two_years(client):
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 2)))
+    start, end = BASE_TS, BASE_TS + 731 * 86400_000
+    r = client.get(f'/v1/nodes/CAUCE-001/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={end}&expected_interval_ms=86400000')
+    assert r.status_code == 422
+    assert r.json()['detail'] == 'window_too_wide'
+
+
+def test_site_coverage_applies_the_same_resolution_cap(client):
+    client.post('/v1/sites', json={'site_id': 's1'})
+    client.post('/v1/sync', json=sync_payload(
+        _series('CAUCE-001', BASE_TS, 2), node_id='CAUCE-001'))
+    start, end = BASE_TS, BASE_TS + 400 * 86400_000
+    r = client.get(f'/v1/sites/s1/coverage?from_utc_ms={start}'
+                   f'&to_utc_ms={end}&expected_interval_ms=1000')
+    assert r.status_code == 422
+    assert 'too_many_buckets' in r.json()['detail']
+
+
 def test_site_coverage_pools_nodes_and_names_the_worst(client):
     client.post('/v1/sites', json={'site_id': 's1'})
     client.post('/v1/sync', json=sync_payload(

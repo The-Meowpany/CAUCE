@@ -261,3 +261,138 @@ def max_payload_bytes(spreading_factor: int) -> int:
             f"below the {OVERHEAD + RECORD_SIZE} B a record needs"
         )
     return budget
+
+
+def encode_record(record: Record) -> bytes:
+    """One 60-byte record, the mirror of `RecordCodec::encodePayload`.
+
+    A `Record` comes back out of `decode_record`, so this is the exact inverse
+    and the round trip is lossless for every field the frame carries.
+    """
+    variable = next((k for k, v in VARIABLES.items() if v == record.variable), 255)
+    quality = next((k for k, v in QUALITIES.items() if v == record.quality), 4)
+    out = struct.pack("<IQf", record.sequence, record.timestamp_utc_ms,
+                      record.value)
+    out += struct.pack("<BBBB", variable, quality, record.reason_bits,
+                       1 if record.time_uncertain else 0)
+    out += record.node_id.encode("utf-8", "replace")[:15].ljust(16, b"\x00")
+    out += record.sensor_id.encode("utf-8", "replace")[:23].ljust(24, b"\x00")
+    if len(out) != RECORD_SIZE:
+        raise DecodeError(f"encoded record is {len(out)} bytes")
+    return out
+
+
+def make_record(sequence: int, timestamp_utc_ms: int, value: float,
+                node_id: str = "CAUCE-001", sensor_id: str = "BME280-1",
+                variable: str = "air_temperature", quality: str = "VALID",
+                reason_bits: int = 0, time_uncertain: bool = False) -> Record:
+    """Builds a `Record` without going through a decode first."""
+    return Record(
+        sequence=sequence,
+        timestamp_utc_ms=timestamp_utc_ms,
+        value=value,
+        variable=variable,
+        quality=quality,
+        reason_bits=reason_bits,
+        time_uncertain=time_uncertain,
+        node_id=node_id,
+        sensor_id=sensor_id,
+    )
+
+
+def encode_frame(batch_id: int, index: int, fragment_count: int,
+                 records: list[Record], record_count: int | None = None) -> bytes:
+    """One frame carrying `records`, matching the firmware layout exactly.
+
+    Two counts go into the header and they are not the same number:
+    `fragment_count` is how many frames the whole batch spans, and
+    `record_count` is how many records the whole batch holds. Each frame repeats
+    both, so a receiver knows what it is waiting for before it starts waiting.
+    Confusing the two is what made the reassembler reject a correct batch, so
+    `record_count` is a separate parameter rather than a derived one.
+    """
+    if record_count is None:
+        record_count = len(records)
+    payload = b"".join(encode_record(r) for r in records)
+    body = struct.pack("<HHBBHH", (MAGIC << 8) | VERSION, batch_id, index,
+                       fragment_count, record_count, len(payload)) + payload
+    return body + struct.pack("<H", crc16(body))
+
+
+def fragment_batch(records: list[Record], batch_id: int,
+                   budget: int) -> list[bytes]:
+    """Splits a batch into frames that fit `budget` bytes each.
+
+    Mirrors `LoRaBatchEncoder`: records per frame is `floor((budget - 12) / 60)`,
+    and a budget too small for one record is refused rather than truncating a
+    measurement in half.
+    """
+    per_frame = records_per_frame(budget)
+    if per_frame == 0:
+        raise DecodeError(
+            f"budget {budget} cannot hold one {RECORD_SIZE}-byte record"
+        )
+    if not records:
+        raise DecodeError("cannot fragment an empty batch")
+    fragment_count = (len(records) + per_frame - 1) // per_frame
+    frames = []
+    for index in range(fragment_count):
+        slice_ = records[index * per_frame:(index + 1) * per_frame]
+        frames.append(
+            encode_frame(batch_id, index, fragment_count, slice_,
+                        record_count=len(records))
+        )
+    return frames
+
+
+def records_per_frame(budget: int) -> int:
+    """How many records ride one uplink of `budget` bytes."""
+    usable = budget - OVERHEAD
+    if usable < RECORD_SIZE:
+        return 0
+    return usable // RECORD_SIZE
+
+
+# --- node-signed frames ---------------------------------------------------
+#
+# A gateway forwarding on a node's behalf has to hold that node's device key,
+# because /v1/sync authenticates the reconstructed JSON body. That makes the
+# gateway as trusted as every node it serves. Signing the frame instead removes
+# the dependency: the gateway only ever sees bytes it cannot alter without
+# invalidating the signature, so the central can attribute the batch to the node
+# without trusting the relay.
+#
+# The signature is over the whole frame as transmitted, including the header and
+# the CRC, so a fragment index or a record payload cannot be swapped in flight.
+SIGNATURE_BYTES = 32  # HMAC-SHA-256
+
+
+def sign_frame(frame: bytes, device_key: str) -> bytes:
+    """Appends an HMAC over `frame` and returns the signed frame."""
+    import hashlib
+    import hmac
+
+    if not device_key:
+        raise DecodeError("cannot sign a frame without a device key")
+    return frame + hmac.new(device_key.encode("utf-8"), frame,
+                            hashlib.sha256).digest()
+
+
+def verify_frame(frame: bytes, device_key: str) -> bool:
+    """Checks a signed frame's HMAC. Does not validate the payload itself."""
+    import hashlib
+    import hmac
+
+    if not device_key or len(frame) <= SIGNATURE_BYTES:
+        return False
+    body, signature = frame[:-SIGNATURE_BYTES], frame[-SIGNATURE_BYTES:]
+    expected = hmac.new(device_key.encode("utf-8"), body,
+                        hashlib.sha256).digest()
+    return hmac.compare_digest(signature, expected)
+
+
+def split_signed_frame(frame: bytes) -> tuple[bytes, bytes]:
+    """Splits a signed frame into its body and its signature."""
+    if len(frame) <= SIGNATURE_BYTES:
+        raise DecodeError("frame is too short to carry a signature")
+    return frame[:-SIGNATURE_BYTES], frame[-SIGNATURE_BYTES:]

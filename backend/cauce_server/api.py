@@ -146,9 +146,14 @@ async def sync_batch(
         import logging
         logging.info(f"sync: node_id={node_id_claim}, device_key present={bool(device_key)}")
 
-    if device_key:
-        # Provisioned node: HMAC over the raw body is mandatory, and the
-        # identity header must match the payload's node_id.
+    if device_key and not isinstance(payload.get("frames"), list):
+        # Provisioned node, direct Wi-Fi path: HMAC over the raw body is
+        # mandatory, and the identity header must match the payload's node_id.
+        #
+        # A relayed narrowband batch is the exception: it carries no body
+        # signature because the relay does not hold the key. Its frames are
+        # signed by the node and verified one by one in
+        # `_expand_signed_frames`, which is where that authentication happens.
         expected_sig = hmac.new(device_key.encode(), raw_body,
                                 hashlib.sha256).hexdigest()
         provided_sig = x_cauce_signature.strip().lower() if x_cauce_signature else ""
@@ -172,6 +177,15 @@ async def sync_batch(
     transport = payload.get("transport", "wifi")
     if transport not in ("wifi", "lora"):
         raise HTTPException(status_code=422, detail="unsupported_transport")
+
+    # A relayed narrowband batch arrives as the frames the node signed, not as
+    # reconstructed JSON. The relay never holds the node's key, so this is the
+    # only place the signature can be checked.
+    if isinstance(payload.get("frames"), list):
+        from .lora_ingest import expand_signed_frames
+
+        payload = expand_signed_frames(payload)
+
     measurements = payload.get("measurements")
     if not isinstance(measurements, list):
         raise HTTPException(status_code=422, detail="missing_measurements")
@@ -488,12 +502,21 @@ def run_retention(
     if not isinstance(days, int) or not 1 <= days <= 3650:
         raise HTTPException(status_code=422, detail="invalid_retention_days")
     state = purge_older_than(days)
+    # Every purgeable table is reported, not just the two that existed when
+    # this endpoint was written. An operator who runs retention by hand needs to
+    # see what it actually removed, and `deleted_buckets` is kept as an alias
+    # for the original hourly counter so nothing reading it breaks.
+    counters = {
+        key: int(value)
+        for key, value in state.items()
+        if key.startswith("deleted_")
+    }
+    counters["deleted_buckets"] = counters.get("deleted_hourly_buckets", 0)
     return {
         "status": "retained",
         "older_than_days": days,
-        "deleted_measurements": state.get("deleted_measurements", 0),
-        "deleted_buckets": state.get("deleted_buckets", 0),
         "vacuumed": bool(state.get("vacuumed")),
+        **counters,
     }
 
 

@@ -215,6 +215,16 @@ void LoRaSyncTransport::setMaxPayloadBytes(size_t maxBytes) {
   maxPayloadBytes_ = maxBytes;
 }
 
+void LoRaSyncTransport::setDeviceKey(const uint8_t* key, size_t length) {
+  deviceKeyLength_ = 0;
+  if (key && length > 0) {
+    const size_t copy = length > sizeof(deviceKey_) ? sizeof(deviceKey_)
+                                                    : length;
+    std::memcpy(deviceKey_, key, copy);
+    deviceKeyLength_ = copy;
+  }
+}
+
 void LoRaSyncTransport::setMinIntervalMs(uint32_t intervalMs) {
   minIntervalMs_ = intervalMs;
 }
@@ -290,16 +300,44 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
   // delayed from a previous attempt would be read as this one's.
   drainAcks();
 
+  // The signature is part of the air interface, so when signing, the radio
+  // budget has to leave room for it. Spending the whole budget on records
+  // would produce a frame that could not be signed without overflowing.
+  // Unsigned nodes keep the full budget: they are not paying for a signature
+  // they are not sending, and silently re-fragmenting them would change the
+  // air interface for an already-deployed node.
+  const size_t signatureRoom = deviceKeyLength_ > 0 ? kLoRaSignatureSize : 0;
+  const size_t payloadBudget =
+      radioPayloadBytes_ > signatureRoom ? radioPayloadBytes_ - signatureRoom
+                                         : 0;
+  if (payloadBudget < kLoRaOverhead) return Result::NetworkError;
+
   const uint16_t batchId = static_cast<uint16_t>(nextBatchId_++);
   LoRaBatchEncoder encoder(records, count, batchId);
   uint8_t frame[256];
+  uint8_t signedFrame[256];
   LoRaBatchHeader header{};
   bool sentAny = false;
   while (!encoder.done()) {
-    if (!encoder.nextFrame(frame, sizeof(frame), radioPayloadBytes_, header)) {
+    if (!encoder.nextFrame(frame, sizeof(frame), payloadBudget, header)) {
       return Result::NetworkError;
     }
-    if (!radio_.send(frame, frameSizeOf(header))) {
+    const size_t frameLength = frameSizeOf(header);
+
+    // Sign when a key is configured, otherwise transmit the frame as it is.
+    // Either way what goes on the air is what a relay will copy byte for byte.
+    const uint8_t* toSend = frame;
+    size_t toSendLength = frameLength;
+    if (deviceKeyLength_ > 0) {
+      const size_t signedLength =
+          signFrame(frame, frameLength, deviceKey_, deviceKeyLength_,
+                    signedFrame, sizeof(signedFrame));
+      if (signedLength == 0) return Result::NetworkError;
+      toSend = signedFrame;
+      toSendLength = signedLength;
+    }
+
+    if (!radio_.send(toSend, toSendLength)) {
       return Result::NetworkError;
     }
     sentAny = true;

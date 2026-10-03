@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "cauce/core/RecordCodec.h"
+#include "cauce/core/SecurityUtils.h"
 
 namespace cauce {
 
@@ -210,6 +211,20 @@ size_t LoRaBatchReassembler::copyRecords(Measurement* out,
     }
   }
   return written;
+}
+
+size_t signFrame(const uint8_t* frame, size_t frameLength,
+                 const uint8_t* deviceKey, size_t deviceKeyLength,
+                 uint8_t* out, size_t outCapacity) {
+  if (!frame || !out || frameLength == 0) return 0;
+  if (!deviceKey || deviceKeyLength == 0) return 0;
+  const size_t total = signedFrameSize(frameLength);
+  if (outCapacity < total) return 0;
+
+  std::memcpy(out, frame, frameLength);
+  hmacSha256(deviceKey, deviceKeyLength, frame, frameLength,
+            out + frameLength);
+  return total;
 }
 
 }  // namespace cauce

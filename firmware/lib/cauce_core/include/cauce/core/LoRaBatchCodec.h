@@ -31,9 +31,22 @@ struct LoRaBatchHeader {
 static constexpr size_t kLoRaHeaderSize = 10;
 static constexpr size_t kLoRaTrailerSize = 2;  // CRC16 over header + payload
 static constexpr size_t kLoRaOverhead = kLoRaHeaderSize + kLoRaTrailerSize;
+static constexpr size_t kLoRaSignatureSize = 32;  // HMAC-SHA256 over the frame
 static constexpr uint8_t kLoRaMagic = 0xCA;
 static constexpr uint8_t kLoRaVersion = 1;
 static constexpr size_t kLoRaMaxFragments = 255;
+
+// A signed frame is the framed bytes followed by a 32-byte HMAC over exactly
+// those bytes, signature last and outside the CRC.
+//
+// The point of signing per frame rather than per batch is who has to hold the
+// key. A gateway that signs a batch on a node's behalf must be given that
+// node's device_key, and from then on it can forge measurements as that node
+// forever. Signing here means the gateway only ever copies bytes: it needs no
+// secret to relay, and the central verifies against the key it issued.
+//
+// The signature covers the CRC as well as the header and payload, so a frame
+// cannot be altered, re-CRCed and replayed.
 
 // Frames one frame at a time so the caller controls pacing and duty cycle
 // rather than buffering a whole batch on the radio path.
@@ -66,6 +79,21 @@ class LoRaBatchEncoder {
   size_t emitted_{0};
   size_t nextRecord_{0};
 };
+
+// Bytes a signed frame occupies: the frame plus its trailing HMAC.
+inline size_t signedFrameSize(size_t frameLength) {
+  return frameLength + kLoRaSignatureSize;
+}
+
+// Copies `frame` into `out` and appends HMAC-SHA256(deviceKey, frame).
+//
+// Returns the signed length, or 0 when there is no key or no room. A node
+// without a configured key transmits unsigned frames, which is exactly what an
+// unprovisioned deployment looks like; the central decides whether that is
+// acceptable, and it must never be this function's decision to make.
+size_t signFrame(const uint8_t* frame, size_t frameLength,
+                 const uint8_t* deviceKey, size_t deviceKeyLength,
+                 uint8_t* out, size_t outCapacity);
 
 // Reassembles fragments on the receiving side.
 //

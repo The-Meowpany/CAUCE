@@ -198,7 +198,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 192 tests
+pytest tests -q                      # 234 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 

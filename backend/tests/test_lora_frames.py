@@ -25,7 +25,12 @@ from cauce_server.lora_frames import (
     decode_frame,
     decode_record,
     encode_ack,
+    encode_frame,
+    encode_record,
+    fragment_batch,
+    make_record,
     max_payload_bytes,
+    records_per_frame,
 )
 
 FRAME0 = bytes.fromhex(
@@ -134,6 +139,90 @@ def test_a_bad_frame_does_not_poison_the_batch():
     assert reassembler.complete is False
     assert reassembler.add(FRAME0) is True
     assert len(reassembler.records()) == 2
+
+
+def test_python_encoder_reproduces_the_firmware_vectors():
+    """The reverse of the pinned check, now that an encoder exists.
+
+    `FRAME0`/`FRAME1` were produced by the C++ `LoRaBatchEncoder`. If the Python
+    encoder rebuilds them byte for byte, then a gateway written in either
+    language reads the same node, and the replay harness in
+    `test_lora_gateway.py` can stand in for real firmware.
+    """
+    recipe = [
+        make_record(1, 1787356800000, 20.0),
+        make_record(2, 1787356860000, 21.0),
+    ]
+    frames = fragment_batch(recipe, batch_id=4242, budget=115)
+    assert len(frames) == 2
+    assert frames[0] == FRAME0
+    assert frames[1] == FRAME1
+
+
+def test_record_round_trips_through_the_encoder():
+    original = make_record(
+        sequence=99, timestamp_utc_ms=1787356800000, value=-3.25,
+        node_id="CAUCE-009", sensor_id="BME280-2",
+        variable="relative_humidity", quality="SUSPECT",
+        reason_bits=5, time_uncertain=True)
+    restored = decode_record(encode_record(original))
+    assert restored == original
+
+
+def test_identifier_padding_is_bounded_not_overflowing():
+    # A longer id is truncated to the field width rather than shifting the rest
+    # of the record, which would corrupt every later field.
+    long_id = make_record(1, 1, 1.0, node_id="X" * 64, sensor_id="Y" * 64)
+    payload = encode_record(long_id)
+    assert len(payload) == RECORD_SIZE
+    restored = decode_record(payload)
+    assert restored.node_id == "X" * 15
+    assert restored.sensor_id == "Y" * 23
+
+
+def test_an_unrepresentable_variable_is_carried_as_unknown():
+    payload = encode_record(make_record(1, 1, 1.0, variable="photon_flux"))
+    assert decode_record(payload).variable == "unknown"
+
+
+def test_records_per_frame_matches_the_firmware_table():
+    assert records_per_frame(222) == 3
+    assert records_per_frame(115) == 1
+    assert records_per_frame(71) == 0
+    assert records_per_frame(51) == 0
+
+
+def test_fragmentation_refuses_an_impossible_budget():
+    records = [make_record(1, 1, 1.0)]
+    with pytest.raises(DecodeError):
+        fragment_batch(records, batch_id=1, budget=51)
+    with pytest.raises(DecodeError):
+        fragment_batch([], batch_id=1, budget=115)
+
+
+def test_frames_reassemble_to_the_records_that_went_in():
+    records = [make_record(i + 1, 1787356800000 + i * 3600000, 20.0 + i)
+               for i in range(7)]
+    for budget, expected in ((115, 7), (222, 3)):
+        frames = fragment_batch(records, batch_id=7, budget=budget)
+        assert len(frames) == expected
+        reassembler = Reassembler(batch_id=7)
+        for frame in frames:
+            assert reassembler.add(frame) is not None or reassembler.complete
+        assert reassembler.complete
+        # Out-of-order arrival must still produce the original sequence.
+        rebuilt = reassembler.records()
+        assert [r.sequence for r in rebuilt] == [r.sequence for r in records]
+
+
+def test_encode_frame_matches_a_hand_built_frame():
+    record = make_record(1, 1787356800000, 20.0)
+    frame = encode_frame(5, 0, 1, [record])
+    decoded = decode_frame(frame)
+    assert decoded["batch_id"] == 5
+    assert decoded["fragment_count"] == 1
+    assert decoded["records"][0] == record
+    assert struct.unpack("<H", frame[-2:])[0] == crc16(frame[:-2])
 
 
 def test_acknowledgement_round_trips_and_validates():

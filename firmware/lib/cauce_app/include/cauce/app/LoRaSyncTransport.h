@@ -44,6 +44,17 @@ class LoRaSyncTransport final : public hal::ISyncTransport {
   size_t radioPayloadBytes() const { return radioPayloadBytes_; }
   void setFragmentGapMs(uint32_t gapMs) { fragmentGapMs_ = gapMs; }
 
+  // Device key used to sign each transmitted frame. Copied, because the
+  // caller's config buffer outlives this call but the key should not be
+  // reachable from here afterwards.
+  //
+  // Leaving this unset is not a downgrade the transport decides to make: the
+  // frames simply go out unsigned and the central refuses them if the node is
+  // provisioned. Silently falling back to unsigned for a provisioned node would
+  // be the dangerous option, so it is not offered.
+  void setDeviceKey(const uint8_t* key, size_t length);
+  bool hasDeviceKey() const { return deviceKeyLength_ > 0; }
+
   // Parses the JSON batch SyncManager produces into records for the compact
   // encoder. Only the fields the frame format carries are read; anything else
   // in the envelope is dropped because the frame has no room for it.
@@ -80,6 +91,8 @@ class LoRaSyncTransport final : public hal::ISyncTransport {
   hal::IClock& clock_;
   size_t maxPayloadBytes_{200};
   size_t radioPayloadBytes_{kDefaultRadioPayloadBytes};
+  uint8_t deviceKey_[64];
+  size_t deviceKeyLength_{0};
   uint32_t minIntervalMs_{600000};
   uint32_t ackTimeoutMs_{5000};
   uint32_t ackPollIntervalMs_{50};
