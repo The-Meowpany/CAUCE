@@ -179,30 +179,35 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**What remains, and the blind spot that explains it.** `scalarMultBase` is now
-implemented and tested against the reference multiples one scalar at a time:
-**`[1]G` is correct and `[2]G` is not.** That splits the search cleanly, and the
-reason is structural rather than a missing test:
+**`addPoints` is confirmed wrong on projective inputs.** `ed25519AddPointsZ` and
+`ed25519ScalarMultBaseRaw` were added to test this independently of the ladder, and
+the test fails. The ladder's accumulator for `[1]G` is projectively genuine with
+`Z = 4`; the test asserts `Z != 1` so it cannot silently degrade into repeating the
+affine tests, then doubles it by adding it to itself. Result:
 
-- every group-law test in this repository passes operands with `Z = 1`, because
-  `ed25519AddPoints` takes affine coordinates and `affineFromPoint` divides by `Z`
-  on the way out;
-- `[1]G` only ever evaluates `identity + P`, whose operands are also `Z = 1`;
-- reaching `[2]G` requires accumulating, and the accumulator is **projective with
-  `Z != 1`** - the first step gives `Z = F*G = 2*2 = 4`.
+```
+projective P+P does not match 2G
+  got  c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022
+  want 540a13b37f48c89be36de6c2550e684206d732f99e332bf3510f389ec1650503
+```
 
-So `addPoints` has been correct for everything it was asked and has **never been
-exercised on a point whose `Z` is not 1**. The fault is in the addition formula as
-applied to projective coordinates, not in the ladder's loop and not in
-`selectGf` - which is why the earlier diagnosis pointed at `selectGf` and was wrong.
+This is the first and only addition on a non-unit `Z` in the suite. It excludes the
+loop and `selectGf`, and it excludes the final affine division too: `[1]G` reaches
+its correct answer through the same inversion and the same divide by `Z`.
 
-The next test is a single one: add two points given projectively, with `Z`
-deliberately unequal to 1, and compare against the affine sum. Two candidate
-faults, both one line: `affineFromPoint` dividing by the wrong coordinate, or the
-formula's `D = 2*Z1*Z2` term being folded in at the wrong point. The failing case
-is kept in `test_ed25519_group.cpp` as
-`test_the_ladder_against_reference_multiples_one_at_a_time`, **not** registered so
-the suite stays green, with a note to register it when it passes.
+The bisect that remains is about `pointFromProjective`, and it is one test. Add the
+accumulator to the **identity** (`Z = 1`):
+
+- if that returns `G`, then reconstructing `T` and dividing by a non-unit `Z` are
+  both fine and only the pair of non-unit `Z` is broken;
+- if it does not, `pointFromProjective` is wrong, and the suspect is its
+  `T = X*Y/Z` - which nothing has ever checked, because on every affine input `T`
+  is simply `X*Y`.
+
+Both failing tests are kept in `test_ed25519_group.cpp` -
+`test_doubling_a_point_whose_z_is_not_one` and
+`test_the_ladder_against_reference_multiples_one_at_a_time` - **not** registered,
+with the failing coordinates in the repository rather than in a scrollback.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 

@@ -84,6 +84,21 @@ bool ed25519AddPointsTrace(uint8_t outX[32], uint8_t outY[32],
                             uint8_t traceA[32], uint8_t traceB[32],
                             uint8_t traceC[32], uint8_t traceD[32]);
 
+// Adds two points given projectively, with `aZ` and `bZ` free to differ from 1.
+//
+// Exists because `ed25519AddPoints` takes affine coordinates, so every group-law
+// test in this repository has passed operands with Z = 1 - and the scalar ladder
+// does not. Its first accumulating step leaves Z = F*G = 4, and `[2]G` comes out
+// wrong while `[1]G` is right, which is exactly the signature of an addition
+// formula that has only ever been exercised on unit Z.
+//
+// Returns the affine result, so a caller can compare against the same sum taken
+// with affine inputs.
+bool ed25519AddPointsZ(uint8_t outX[32], uint8_t outY[32],
+                       const uint8_t aX[32], const uint8_t aY[32],
+                       const uint8_t aZ[32], const uint8_t bX[32],
+                       const uint8_t bY[32], const uint8_t bZ[32]);
+
 // Encodes an affine point, for comparing an addition against a reference.
 void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
                          const uint8_t y[32]);
@@ -103,5 +118,14 @@ void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
 // neither of which sees anything but the result. Where the device itself must be
 // assumed hostile, use a constant-time library.
 bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]);
+
+// The ladder's accumulator in raw projective coordinates, for a caller that needs
+// to exercise `addPoints` on a point whose Z is genuinely not 1.
+//
+// Feeding these back into `ed25519AddPointsZ` is a real test of projective
+// addition: passing an affine x, y with some other Z would name a different point
+// and prove nothing.
+bool ed25519ScalarMultBaseRaw(uint8_t outX[32], uint8_t outY[32],
+                              uint8_t outZ[32], const uint8_t scalar[32]);
 
 }  // namespace cauce

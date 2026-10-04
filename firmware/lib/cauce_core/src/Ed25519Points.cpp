@@ -437,6 +437,36 @@ bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
                                nullptr, nullptr);
 }
 
+// Builds a projective point from raw projective coordinates. T is not an input
+// because a caller holding (X, Y, Z) almost never holds T, and recomputing it is
+// one inversion: T = X*Y/Z.
+void pointFromProjective(Point& p, const uint8_t x[32], const uint8_t y[32],
+                         const uint8_t z[32]) {
+  Gf inverseZ;
+  loadGf(p.x, x);
+  loadGf(p.y, y);
+  loadGf(p.z, z);
+  normalizeLimbs(p.x);
+  normalizeLimbs(p.y);
+  normalizeLimbs(p.z);
+  invertGf(inverseZ, p.z);
+  mulGf(p.t, p.x, p.y);
+  mulGf(p.t, p.t, inverseZ);
+}
+
+bool ed25519AddPointsZ(uint8_t outX[32], uint8_t outY[32],
+                       const uint8_t aX[32], const uint8_t aY[32],
+                       const uint8_t aZ[32], const uint8_t bX[32],
+                       const uint8_t bY[32], const uint8_t bZ[32]) {
+  if (!outX || !outY || !aX || !aY || !aZ || !bX || !bY || !bZ) return false;
+  Point pa, pb, sum;
+  pointFromProjective(pa, aX, aY, aZ);
+  pointFromProjective(pb, bX, bY, bZ);
+  addPoints(sum, pa, pb);
+  affineFromPoint(outX, outY, sum);
+  return true;
+}
+
 bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]) {
   if (!outX || !outY) return false;
   // y = 4/5, encoded with the sign bit clear, which is a complete encoding of
@@ -517,6 +547,24 @@ void scalarMultBase(Point& out, const uint8_t scalar[32]) {
   Point base;
   pointFromAffine(base, bx, by);
   scalarMult(out, base, scalar);
+}
+
+// The ladder's accumulator in raw projective coordinates, for a caller that needs
+// to exercise `addPoints` on a point whose Z is genuinely not 1.
+//
+// A raw (X, Y, Z) can be fed straight back into `ed25519AddPointsZ` because it is
+// the true projective form of the accumulator, not a rescaled affine point. That
+// distinction matters: passing an affine x, y with some other Z would name a
+// different point entirely, and the test would prove nothing.
+bool ed25519ScalarMultBaseRaw(uint8_t outX[32], uint8_t outY[32],
+                              uint8_t outZ[32], const uint8_t scalar[32]) {
+  if (!outX || !outY || !outZ || !scalar) return false;
+  Point p;
+  scalarMultBase(p, scalar);
+  gfToBytes(outX, p.x);
+  gfToBytes(outY, p.y);
+  gfToBytes(outZ, p.z);
+  return true;
 }
 
 bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]) {

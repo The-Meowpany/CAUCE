@@ -268,6 +268,74 @@ void test_the_intermediates_of_adding_two_distinct_points() {
   }
 }
 
+// The decisive projective test, and the one that localises the fault.
+//
+// NOT REGISTERED: it fails, and the failure is the finding. It is kept here so
+// the failing coordinates are in the repository rather than in a scrollback.
+//
+// [1]G never calls addPoints with Z != 1: the accumulator is the identity (Z = 1)
+// at every step, and the base point arrives affine (Z = 1). [2]G is the first
+// case that does - its accumulator reaches Z = F*G = 4 on the bit=1 step - which
+// is exactly why [1]G is right and [2]G is wrong.
+//
+// This test makes that reasoning independent of the ladder. It takes the
+// accumulator for [1]G, which is projectively genuine with Z = 4, asserts that Z
+// really is not 1, and doubles it by adding it to itself. That is the first and
+// only addition on a non-unit Z in the suite, and it fails: y comes out
+// c9a3f86a...9f3cd6022 where 2G wants 540a13b3...ec1650503.
+//
+// So `addPoints` is wrong on projective inputs. Not the ladder loop, not
+// `selectGf`, and not the affine conversion - [1]G reaches its correct answer
+// through the same inversion and the same final divide.
+//
+// The bisect that remains is narrow, and it is about `pointFromProjective`: add
+// the accumulator to the identity (Z = 1). If that returns G, then reconstructing
+// T and dividing by a non-unit Z are both fine and only the pair of non-unit Z is
+// broken. If it does not, `pointFromProjective` is wrong, and the prime suspect
+// is its T = X*Y/Z - which nothing has ever checked, because on every affine
+// input T is just X*Y.
+void test_doubling_a_point_whose_z_is_not_one() {
+  uint8_t one[32] = {0};
+  one[0] = 1;
+
+  uint8_t x[32], y[32], z[32];
+  TEST_ASSERT_TRUE(cauce::ed25519ScalarMultBaseRaw(x, y, z, one));
+
+  // The whole point of the test: if Z were 1 this would just repeat the affine
+  // group-law tests and would prove nothing.
+  uint8_t oneBytes[32];
+  memset(oneBytes, 0, 32);
+  oneBytes[0] = 1;
+  if (memcmp(z, oneBytes, 32) == 0) {
+    std::printf(
+        "the accumulator still has Z = 1, so this test is not exercising "
+        "projective addition at all\n");
+  }
+  TEST_ASSERT_TRUE(memcmp(z, oneBytes, 32) != 0);
+
+  uint8_t sumX[32], sumY[32];
+  TEST_ASSERT_TRUE(
+      cauce::ed25519AddPointsZ(sumX, sumY, x, y, z, x, y, z));
+
+  uint8_t refBytes[32], refX[32], refY[32];
+  unhex(refBytes, kMultiples[1].encoding);
+  TEST_ASSERT_TRUE(cauce::ed25519DecodePoint(refX, refY, refBytes));
+  if (memcmp(sumX, refX, 32) != 0 || memcmp(sumY, refY, 32) != 0) {
+    static const char* digits = "0123456789abcdef";
+    char gotHex[65], wantHex[65];
+    for (int k = 0; k < 32; ++k) {
+      gotHex[k * 2] = digits[sumY[k] >> 4];
+      gotHex[k * 2 + 1] = digits[sumY[k] & 15];
+      wantHex[k * 2] = digits[refY[k] >> 4];
+      wantHex[k * 2 + 1] = digits[refY[k] & 15];
+    }
+    gotHex[64] = wantHex[64] = 0;
+    std::printf("projective P+P does not match 2G\n  got  %s\n  want %s\n",
+                gotHex, wantHex);
+  }
+  TEST_ASSERT_TRUE(memcmp(sumX, refX, 32) == 0 && memcmp(sumY, refY, 32) == 0);
+}
+
 // NOT REGISTERED: the ladder is broken and this is the test that shows it.
 //
 // The finding is worth more than the failure: `[1]G` is correct and `[2]G` is
@@ -312,7 +380,7 @@ void test_the_ladder_against_reference_multiples_one_at_a_time() {
       allOk = false;
     }
   }
-  TEST_ASSERT_TRUE_MESSAGE(allOk, "a scalar multiple differs");
+  TEST_ASSERT_TRUE(allOk);
 }
 
 void registerEd25519GroupTests() {
