@@ -25,6 +25,7 @@ void registerDiagnosticsTests();
 void registerDeepSleepTests();
 void registerCommandTests();
 void registerNodeActuatorTests();
+void registerSx1276Tests();
 void registerTextBufferTests();
 
 int main() {
@@ -54,6 +55,7 @@ int main() {
   registerDeepSleepTests();
   registerCommandTests();
   registerNodeActuatorTests();
+  registerSx1276Tests();
   registerTextBufferTests();
   return UNITY_END();
 }

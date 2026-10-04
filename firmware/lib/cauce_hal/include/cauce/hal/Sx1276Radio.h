@@ -36,8 +36,25 @@
 
 namespace cauce::hal {
 
+// SPI address form of the FIFO registers.
+//
+// The SX1276 puts the write flag in bit 7 of the SPI address byte, so only seven
+// address bits ever reach the chip. The datasheet's register 0x80 is therefore
+// written as 0x00, 0x81 as 0x01 and 0x82 as 0x02.
+//
+// This is not a stylistic note. Writing the datasheet number directly sends
+// 0x80 | 0x80 == 0x80, which addresses register 0x00 - the transmit FIFO - so the
+// base-address write lands inside the data buffer and the radio transmits whatever
+// follows it. No host test could have caught it, because the register log looked
+// plausible: the value was written, just to the wrong place.
+constexpr uint8_t kSpiFifoTxBaseAddr = 0x00;
+constexpr uint8_t kSpiFifoRxBaseAddr = 0x01;
+constexpr uint8_t kSpiFifoRxCurrentAddr = 0x02;
+
 // Registers. Spelled out rather than generated, because a reader checking this
-// against a datasheet should find the same names in the same order.
+// against a datasheet should find the same names in the same order. The FIFO
+// registers are listed with their datasheet numbers for reference; use the kSpi*
+// constants above to access them.
 enum Sx1276Register : uint8_t {
   kRegFifo = 0x00,
   kRegOpMode = 0x01,
@@ -53,20 +70,33 @@ enum Sx1276Register : uint8_t {
   kRegPayloadLength = 0x22,
   kRegModemConfig3 = 0x26,
   kRegOptRssi = 0x1C,
-  kRegFifoTxBaseAddr = 0x80,
-  kRegFifoRxBaseAddr = 0x81,
-  kRegFifoRxCurrentAddr = 0x82,
-  kRegDioMapping1 = 0x40,
   kRegSyncWord = 0x39,
+  kRegDioMapping1 = 0x40,
+  // Datasheet numbers; NOT SPI addresses. See kSpiFifoTxBaseAddr above.
+  kRegFifoTxBaseAddrDatasheet = 0x80,
+  kRegFifoRxBaseAddrDatasheet = 0x81,
+  kRegFifoRxCurrentAddrDatasheet = 0x82,
 };
 
 // OpMode values.
+// OpMode on the SX1276 has a THREE-bit mode field, not two, and bit 7 is a
+// separate LongRangeMode selector.
+//
+// Two silent bugs lived here. Masking the mode field with 0x03 turned
+// ReceiveContinuous (0x05) into 0x01, which is Standby - so the radio transmitted
+// once and then sat deaf forever, and every functional test still passed. And
+// kModeLoRa was written as 0x03, which is not the LoRa selector at all: that is
+// 0x80. begin() therefore never put the radio in LoRa mode while its own comment
+// said it did.
+constexpr uint8_t kModeFieldMask = 0x07;
+constexpr uint8_t kModeLongRange = 0x80;
+
 enum Sx1276Mode : uint8_t {
   kModeSleep = 0x00,
   kModeStandby = 0x01,
   kModeTransmit = 0x03,
   kModeReceiveContinuous = 0x05,
-  kModeLoRa = 0x03,  // the low two bits, ORed into OpMode
+  kModeReceiveSingle = 0x06,
 };
 
 // Interrupt flags, in the IrqFlags register.

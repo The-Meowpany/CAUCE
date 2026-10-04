@@ -56,13 +56,13 @@ void Sx1276Radio::writeMasked(uint8_t reg, uint8_t mask, uint8_t value) {
 }
 
 void Sx1276Radio::setMode(uint8_t mode) {
-  writeMasked(kRegOpMode, 0x03, mode);
+  writeMasked(kRegOpMode, kModeFieldMask, mode);
   // Poll rather than assume. The datasheet's mode-change latency is in tens of
   // microseconds, but a blocking delay sized for the datasheet is a race on a
   // loaded MCU, and the poll costs nothing.
   const uint32_t deadline = control_.millis() + 100;
   while (control_.millis() < deadline) {
-    if ((readRegister(kRegOpMode) & 0x03) == mode) return;
+    if ((readRegister(kRegOpMode) & kModeFieldMask) == mode) return;
     control_.delay(1);
   }
 }
@@ -102,21 +102,30 @@ bool Sx1276Radio::begin(const Sx1276Config& config) {
   control_.digitalWrite(resetPin_, true);
   control_.delay(kResetSettleMs);
 
-  // LoRa only. The default register set is FSK, and sending an FSK-configured radio
-  // on a LoRa network produces noise that the central will happily reject frame by
-  // frame for hours.
-  writeMasked(kRegOpMode, 0x03, kModeSleep);
+  // LoRa only. The reset default is FSK, and an FSK-configured radio on a LoRa
+  // network emits noise the central rejects frame by frame, for hours.
+  //
+  // The selector is bit 7 and is NOT part of the mode field. It used to be written
+  // through the mode mask as 0x03 - which is Transmit - so the radio never left
+  // FSK and this comment claimed otherwise. The test
+  // test_begin_actually_sets_the_lora_bit is what catches that.
+  writeMasked(kRegOpMode, kModeLongRange, kModeLongRange);
   setMode(kModeSleep);
 
-  const uint32_t frf = (config_.frequencyHz * 64) / 32000000u;
+  // 64-bit arithmetic. frequencyHz * 64 is about 5.5e10, which overflows a uint32_t
+// and silently produced an FRF of 125 instead of 1736 for 868.1 MHz - a radio
+// listening on the wrong frequency, with every functional test still able to pass
+// because nothing checked where it ended up listening.
+const uint32_t frf = static_cast<uint32_t>(
+    (static_cast<uint64_t>(config_.frequencyHz) * 64ULL) / 32000000ULL);
   writeRegister(0x06, static_cast<uint8_t>(frf >> 16));
   writeRegister(0x07, static_cast<uint8_t>(frf >> 8));
   writeRegister(0x08, static_cast<uint8_t>(frf));
 
   // FIFOs at the ends, so a full 255-byte payload fits either way.
-  writeRegister(kRegFifoTxBaseAddr, 0x00);
-  writeRegister(kRegFifoRxBaseAddr, 0x00);
-  writeRegister(kRegFifoRxCurrentAddr, 0x00);
+  writeRegister(kSpiFifoTxBaseAddr, 0x00);
+  writeRegister(kSpiFifoRxBaseAddr, 0x00);
+  writeRegister(kSpiFifoRxCurrentAddr, 0x00);
 
   // Only TxDone on DIO0. Everything else is polled, because a second interrupt
   // source needs a second path and nothing here needs one.
@@ -151,7 +160,7 @@ bool Sx1276Radio::begin(const Sx1276Config& config) {
 
 bool Sx1276Radio::canSendNow() {
   if (!ready_) return false;
-  const uint8_t mode = readRegister(kRegOpMode) & 0x03;
+  const uint8_t mode = readRegister(kRegOpMode) & kModeFieldMask;
   return mode == kModeStandby || mode == kModeReceiveContinuous;
 }
 
@@ -174,8 +183,8 @@ bool Sx1276Radio::send(const uint8_t* data, size_t length) {
   setMode(kModeStandby);
 
   writeRegister(kRegIrqFlags, static_cast<uint8_t>(kIrqTxDone | kIrqPayloadCrcError));
-  writeRegister(kRegFifoTxBaseAddr, 0x00);
-  writeRegister(kRegFifoRxCurrentAddr, 0x00);
+  writeRegister(kSpiFifoTxBaseAddr, 0x00);
+  writeRegister(kSpiFifoRxCurrentAddr, 0x00);
   writeRegister(kRegPayloadLength, static_cast<uint8_t>(length));
 
   spi_.beginTransaction();
@@ -215,7 +224,7 @@ int Sx1276Radio::receive(uint8_t* buffer, size_t capacity) {
     return -1;
   }
 
-  const uint8_t address = readRegister(kRegFifoRxCurrentAddr);
+  const uint8_t address = readRegister(kSpiFifoRxCurrentAddr);
   spi_.beginTransaction();
   spi_.transfer(static_cast<uint8_t>(kRegFifo | 0x80));
   // Burst read with an incrementing address, which needs the address's high bit

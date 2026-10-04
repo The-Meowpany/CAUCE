@@ -11,7 +11,7 @@ $T = @{
         step3 = '== 3/4 BACKEND: pytest =='
         step4 = '== 4/4 INTEGRACION E2E nodo->servidor =='
         fail  = 'RESULTADO: FALLAS DETECTADAS'
-        ok    = 'RESULTADO: TODO OK (firmware 274 tests + ESP32 build + backend 335 tests + E2E)'
+        ok    = 'RESULTADO: TODO OK (firmware 306 tests + ESP32 build + backend 335 tests + E2E)'
     }
     en = @{
         step1 = '== 1/4 FIRMWARE: native tests =='
@@ -19,7 +19,7 @@ $T = @{
         step3 = '== 3/4 BACKEND: pytest =='
         step4 = '== 4/4 E2E INTEGRATION node->server =='
         fail  = 'RESULT: FAILURES DETECTED'
-        ok    = 'RESULT: ALL OK (firmware 274 tests + ESP32 build + backend 335 tests + E2E)'
+        ok    = 'RESULT: ALL OK (firmware 306 tests + ESP32 build + backend 335 tests + E2E)'
     }
 }[$Lang]
 

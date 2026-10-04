@@ -38,10 +38,21 @@
 #include "cauce/hal/Esp32Hal.h"
 #include "cauce/hal/ManualClock.h"
 
+// STDOUT IS UNBUFFERED, EXPLICITLY.
+//
+// printf on ESP32 goes through newlib's stdout, which is FULLY buffered when stdout
+// is not a terminal - and it never is. Serial.flush() does not touch that buffer:
+// it flushes the Serial object. So every line this bench printed sat in stdio and was
+// lost on the watchdog reset, which made a self-test that was hanging look like a
+// self-test that was silent. Flushing stdout is the difference between a diagnostic
+// that works and one that lies.
+static void benchBegin() {
+  setvbuf(stdout, nullptr, _IONBF, 0);
+}
+
 namespace {
 
 cauce::hal::Esp32LittleFs g_fs;
-cauce::hal::ManualClock g_clock{1000};
 int g_failures = 0;
 
 class NullSink final : public cauce::ILogSink {
@@ -77,12 +88,23 @@ constexpr uint32_t kRecords = 2000;
 void setup() {
   Serial.begin(115200);
   delay(400);
+  benchBegin();
 
   NullSink sink;
   cauce::Logger logger(sink);
   char detail[96];
 
   printf("\n=== CAUCE bench self-test ===\n");
+
+  // Markers around the steps that have actually hung on hardware. Without them the
+  // only evidence is which lines were missing, which is slower to read and ambiguous
+  // when a step prints nothing of its own.
+  auto stage = [](const char* name) {
+    printf("[bench] %s\n", name);
+    fflush(stdout);
+  };
+
+  stage("begin");
 
   snprintf(detail, sizeof(detail), "flash=%u MB heap=%u",
            static_cast<unsigned>(ESP.getFlashChipSize() / (1024u * 1024u)),
@@ -91,7 +113,9 @@ void setup() {
   // cannot run this firmware at all and should be rejected on the line.
   say("flash >= 4MB", ESP.getFlashChipSize() >= 4u * 1024u * 1024u, detail);
 
+  stage("mount");
   say("littlefs mount", g_fs.mount(), "");
+  stage("config");
 
   {
     cauce::NodeConfig config;
@@ -106,6 +130,7 @@ void setup() {
   }
 
   {
+  stage("storage-write");
     cauce::LogStorageRepository store(g_fs, "/data", 64u * 1024u);
     bool ok = store.open();
     for (uint32_t i = 1; i <= kRecords && ok; ++i) {
@@ -120,6 +145,7 @@ void setup() {
   // Reopening is what a power cycle does. It exercises the checkpoint and the scan
   // on the way back in, which is where the stack overflow lived.
   {
+  stage("storage-reopen");
     cauce::LogStorageRepository reopened(g_fs, "/data", 64u * 1024u);
     const bool opened = reopened.open();
     snprintf(detail, sizeof(detail), "records=%u bytes=%u",
@@ -142,6 +168,7 @@ void setup() {
   // The regression guard for the two listFiles bugs. Neither was reachable from a
   // host test, and one of them hung the node in a nine-second reboot loop.
   {
+    stage("listFiles");
     char paths[16][64];
     const int found = g_fs.listFiles("/data", paths, 16);
     snprintf(detail, sizeof(detail), "found=%d", found);

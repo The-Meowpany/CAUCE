@@ -20,7 +20,7 @@ The contribution is twofold:
 
 **Technological**: CAUCE executes on a microcontroller with 520 KB SRAM and no operating system a complete pipeline of acquisition, statistical validation, integrity-verifiable persistence, embedded web API, local user interface and idempotent eventual synchronization — functions conventionally delegated to higher layers. Additionally, the system implements per-device HMAC-SHA-256 batch signing, progressive (non-blocking) over-the-air update state machine, materialized hourly analytics aggregates on the central server, and automated temporal reconstruction of records captured without trusted clock source.
 
-**Methodological**: the system is covered by automated tests executable without hardware (274 firmware + 335 backend = 609 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
+**Methodological**: the system is covered by automated tests executable without hardware (306 firmware + 335 backend = 641 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
 
 # 2. Problem Statement
 
@@ -430,7 +430,7 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
 | Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
 | Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
-| Maintainability | 609 automated tests (274 firmware, 335 backend); CI 6 jobs; reproducible docs | repository |
+| Maintainability | 641 automated tests (306 firmware, 335 backend); CI 6 jobs; reproducible docs | repository |
 | Cost | BOM 13–32 USD/node multi-vendor | HARDWARE.md |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
@@ -502,7 +502,7 @@ the protocol can claim and the rest are engineering on a settled foundation.
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
 - **What role ALEXANDRA plays**: formal exchange contract -versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format, opaque cursors for stable iteration, and at-least-once downlink with flash-persisted exactly-once application-; twelve principles are implemented and tested, while peer-to-peer exchange and asymmetric signatures remain specified future evolution. One implementation debt is recorded explicitly: the LoRa gateway must hold each node's device key to forward on its behalf, which weakens the device-authenticity principle until nodes sign frames directly (§19, §25).
-- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —609 verifications (274 firmware, 335 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —641 verifications (306 firmware, 335 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
 - **Limitations**: pending physical validation, absence of asymmetric signing, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
