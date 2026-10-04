@@ -78,18 +78,38 @@ function Test-Docs($dir, $names) {
 }
 
 Step "documentation"
+# Both lists are the full set of docs/ files. RUNBOOK.md and DOCUMENTATION_INDEX.md were
+# missing from one side each, so the check passed while a document existed that no list
+# mentioned - which is the drift this check exists to catch, applied to itself.
 $en = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "OTA.md", "SYNC.md", "API.md", "BACKEND.md", "DATA_MODEL.md",
     "ARCHITECTURE.md", "CALIBRATION.md", "DEPLOYMENT.md", "HARDWARE.md",
     "TESTING.md", "DASHBOARD.md", "LEGAL.md", "PILOT_SPEC.md", "I18N.md",
-    "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md")
+    "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md", "RUNBOOK.md")
 $es = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "API.md", "ARCHITECTURE.md", "BACKEND.md", "DATA_MODEL.md",
     "CALIBRATION.md", "DEPLOYMENT.md", "DASHBOARD.md", "HARDWARE.md",
     "I18N.md", "LEGAL.md", "OTA.md", "PILOT_SPEC.md", "SYNC.md", "TESTING.md",
-    "DOMAIN_GLOSSARY.md")
+    "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md", "RUNBOOK.md")
 Test-Docs "docs/en" $en
 Test-Docs "docs/es" $es
+
+# The lists above are hand-maintained, so they drift. Compare them against the tree, in
+# both languages, so a new document cannot ship without being listed and a renamed one
+# cannot leave a stale entry behind.
+foreach ($dir in @("docs/en", "docs/es")) {
+    $onDisk = @(Get-ChildItem $dir -Filter *.md | Select-Object -ExpandProperty Name |
+        Sort-Object)
+    $listed = @($(if ($dir -eq "docs/en") { $en } else { $es }) | Sort-Object)
+    $unlisted = @($onDisk | Where-Object { $_ -notin $listed })
+    $phantom = @($listed | Where-Object { $_ -notin $onDisk })
+    if ($unlisted.Count -eq 0 -and $phantom.Count -eq 0) {
+        Ok "the $dir list matches the tree"
+    } else {
+        if ($unlisted.Count) { Fail ("not listed in the gate: " + ($unlisted -join ", ")) }
+        if ($phantom.Count) { Fail ("listed but absent: " + ($phantom -join ", ")) }
+    }
+}
 
 Step "the firmware signs with both algorithms"
 # Checked in pieces rather than by grepping for one string, because the natural

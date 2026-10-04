@@ -17,9 +17,9 @@ servidor central). En orden, sin saltear pasos.
 
 ```powershell
 git clone <repo> && cd CAUCE
-pip install platformio
+pip install platformio==6.1.19
 cd firmware
-pio test -e native        # esperado 112 ok
+pio test -e native        # esperado 315 ok
 pio run -e esp32dev       # esperado SUCCESS
 ```
 
@@ -27,8 +27,8 @@ Backend:
 
 ```powershell
 cd backend
-pip install -r requirements.txt
-python -m pytest tests -q # esperado 68 passed
+pip install --require-hashes -r requirements.lock
+python -m pytest tests -q # esperado 384 passed
 ```
 
 Integración nodo↔servidor:

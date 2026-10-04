@@ -23,6 +23,7 @@ import restore as restore_tool  # noqa: E402
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS, NO_AUTH
 
 ADMIN = {"Authorization": "Bearer admin-token"}
 BASE_TS = 1787356800000
@@ -32,7 +33,7 @@ BASE_TS = 1787356800000
 def client(monkeypatch):
     monkeypatch.setattr(settings, "api_token", "admin-token")
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -92,7 +93,7 @@ def test_the_backup_endpoint_verifies(client):
 
 def test_the_backup_needs_admin(client):
     send(client)
-    assert client.get("/v1/maintenance/backup").status_code == 401
+    assert client.get("/v1/maintenance/backup", headers=NO_AUTH).status_code == 401
 
 
 # --- the round trip, for real ----------------------------------------------

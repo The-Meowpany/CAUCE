@@ -19,7 +19,7 @@ from .calibration import (
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_admin_write, require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
@@ -51,7 +51,7 @@ def create_site(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
@@ -88,7 +88,7 @@ def set_site_control(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     flag = _control_flag(payload.get("control"))
     with transaction() as conn:
         cur = conn.execute(
@@ -124,7 +124,7 @@ def set_site_location(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     lat = payload.get("lat")
     lon = payload.get("lon")
     if not isinstance(lat, (int, float)) or not -90.0 <= lat <= 90.0:
@@ -148,7 +148,7 @@ def assign_node_site(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     site_id = payload.get("site_id")
     if not isinstance(site_id, str) or not site_id:
         raise HTTPException(status_code=422, detail="missing_site_id")
@@ -175,7 +175,7 @@ def create_intervention(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     site_id = payload.get("site_id")
     kind = payload.get("kind")
     start_utc_ms = payload.get("start_utc_ms")

@@ -26,11 +26,11 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 202 host tests (Unity)
+pio test -e native          # 315 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 303 tests
+python -m pytest tests -q   # 384 tests
 ..\scripts\run-e2e.ps1      # C++ node → FastAPI → SQLite (3 phases)
 ..\scripts\verify-all.ps1   # everything above in one gate
 ```
@@ -53,6 +53,19 @@ and `CAUCE_SYNC_REQUIRE_AUTH=1`, the server answers 503 instead of
 guessing. Node admin works with `Authorization: Bearer` checked against
 a stored SHA-256 in constant time; with no token configured, admin
 writes are refused outright.
+
+The central behaves the same way, with one deliberate exception.
+`CAUCE_API_TOKEN` unset means every **write** answers `503
+admin_api_not_configured`, because there is no credential to check and
+allowing it would leave the port open to anyone who can reach it. Reads
+stay open so the dashboard works on a trusted LAN; setting the token
+closes them too. Generate one with:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+See `backend/.env.example` for the full environment.
 
 ## Node API (`/api/v1`)
 
@@ -143,7 +156,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-112 firmware + 68 backend tests + ESP32 build + E2E = **180 automated
+315 firmware + 384 backend tests + ESP32 build + E2E = **699 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).

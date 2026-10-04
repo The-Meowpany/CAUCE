@@ -40,7 +40,7 @@ Cuatro reglas sostienen este código:
 
 Las dependencias apuntan solo hacia abajo. Los tests enchufan dobles
 (`ManualClock`, `ScriptedI2cBus`, `MemoryFileSystem`, fakes scripteados
-de red/sync) — así corren 112 tests en menos de un minuto sin placa.
+de red/sync) — así corren 315 tests en menos de un minuto sin placa.
 
 ## Flujo de medición
 

@@ -28,6 +28,7 @@ from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
 from cauce_server.security import create_token, hash_token  # noqa: E402
+from conftest import ADMIN_HEADERS
 from test_api import BASE_TS, _series, sync_payload  # noqa: E402
 
 SCOPES = ("read", "write", "admin")
@@ -37,7 +38,7 @@ SCOPES = ("read", "write", "admin")
 def client(monkeypatch):
     db.reset_for_tests()
     monkeypatch.setattr(settings, "api_token", "shared-admin-token")
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

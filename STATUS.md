@@ -3,8 +3,10 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (306 firmware + 367 backend tests, E2E green)
+## Implemented and verified (315 firmware + 384 backend tests, E2E green)
 | Component | Evidence |
+|---|---|
+| **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
 | **Retention breadth**: `agg_daily`, `alert_log`, `node_diagnostics`, `maintenance_events` and `sync_batches` purged alongside raw measurements; only `acked` commands age out, `pending`/`delivered` survive, orphaned receipts are cleaned; every counter reported | 8 backend tests |
@@ -66,6 +68,12 @@ not. It overrides any aspirational claim elsewhere.
 | **OTA decision layer**: semver compare, manifest validation, streaming SHA-256 verification, heap/battery gates, alternate-partition anti-brick rules | 13 tests (10 FSM + 3 manifest-JSON parser) |
 | Node-to-server **E2E integration**: C++ SyncManager (real sockets) against live FastAPI; initial/incremental/idempotent-replay phases verified directly in SQLite | `scripts/run-e2e.ps1` — caught a real JSON serialization bug |
 | CI workflow: native tests · ESP32 build · backend pytest · E2E job | `.github/workflows/ci.yml` |
+| **SX1276 driver register map corrected** (LoRa map, not the FSK/OAK one): the FIFO base-address writes were using the FSK/OOK register numbers 0x80/0x81/0x82 with the write flag stripped, and in the LoRa map 0x01 is RegOpMode. The line meant to park the RX base at the bottom of the FIFO therefore wrote zero to RegOpMode and cleared LongRangeMode, so the radio never left FSK and could not transmit a LoRa frame. RSSI was read from 0x1C, which is RegHopChannel in this map, so `lastRssiDbm()` reported a plausible number that changed whenever the chip hopped. `test_begin_actually_sets_the_lora_bit` had been failing and unregistered, and two earlier theories about the same failure had been wrong | 35 host tests in `test_sx1276.cpp`, up from 32. The previously failing test is now registered and passes, and two were added: RSSI includes the signed wideband term, and the RSSI read does not touch the hop channel. Mode assertions now compare the mode field rather than the whole byte, because the correct written value carries LongRangeMode. **Still host-only: this driver has not been on hardware** |
+| **Dependency lock with hashes**: `backend/requirements.lock` pins all 30 packages in the central's closure, each with a SHA-256 for CPython 3.12 on win_amd64 and manylinux2014_x86_64. CI installs with `--require-hashes`, so the tree behind a build is nameable and a range bump cannot change it silently. `requirements.txt` stays as the statement of intent | 5 backend tests in `test_requirements_lock.py`: every direct requirement is pinned, every pinned version satisfies its range, every pin carries a hash, the lock covers more than the direct list, and no hash is a placeholder. The drift check was verified to fail when `requirements.txt` is bumped without regenerating |
+| **Stored XSS through the `variable` and `sensor_id` fields** (found while checking CodeQL alert #3, which was itself a false positive): those fields were stored verbatim, and the dashboard pasted `json.dumps(series)` inside a `<script>` element. An HTML parser looks for the literal `</script>` regardless of JSON quoting, so a node could sync a variable called `</script><script>alert(1)</script>` and the central's own node page would render it as markup — stored XSS against whoever opened the dashboard. Only reproduced on a node whose variables were all unrecognised, because a node with a known variable charts the preferred set and the unknown name never reaches the script block. That is why the existing suite missed it: every test of this route used a normally seeded node | Fixed at both ends. **Input**: `NAME_PATTERN` restricts `variable` and `sensor_id` to `[A-Za-z0-9_.-]{1,64}`, the same shape as `site_id`, with 422 `invalid_variable`. A character class and not an allowlist, because the protocol is meant to grow new variables. **Output**: `dashboard._json_for_script` escapes `<`, `>`, `&`, U+2028 and U+2029, and every `json.dumps` result that reaches a page goes through it, so the sink is safe regardless of what any writer does. Both halves were verified to be load-bearing: against pristine HEAD the payload reflects raw into `/nodes/{id}`; with only the input fix it never reaches the database; with only the output fix it is escaped in the charted series | 6 backend tests: ingest refuses markup in `variable` and `sensor_id`, accepts the shapes the firmware sends, a value seeded straight into the database cannot break out of a script block, and two unit tests on the escaper including the invisible JavaScript line terminators |
+| **Central admin API fails closed on writes**: with `CAUCE_API_TOKEN` unset, every mutation answers `503 admin_api_not_configured` instead of being allowed. Reads stay open on purpose, so the dashboard still works on a trusted LAN, and setting the token closes reads too. Previously `require_bearer_token` returned early when no token was configured, which meant anyone who could reach the port could mint an API token or rewrite calibration | 3 backend tests: a write with no token is 503 with the machine code, a read with no token is 200, and an unauthenticated write with a token is 401. The whole suite now authenticates the way a configured deployment does, through `backend/tests/conftest.py` |
+| **SBOM describes the service, not the build machine**: the component list is the transitive closure of what `requirements.txt` actually requests, following only unconditional requirements plus the extras that file asks for. It listed all 229 distributions installed on whichever machine ran it, including unrelated tools | 18 backend tests in `test_sbom.py`, up from 14. New: the SBOM is a strict subset of the interpreter, an unrequested extra is not followed, a requested one is, and a direct dependency that is not installed is reported instead of silently dropped. A test that wrote its output into `sbom/` and left a tracked artefact behind now writes to `tmp_path` |
+| **Cross-suite isolation registry** for the single Unity binary: a suite declares the data directory it uses and the process state it mutates, the run prints everything every suite declared, and two suites claiming one directory fail the run at exit. This is detection, not prevention: it catches a shared directory that someone declares, not one they forget to. The three file-scope mutable statics in the suite declare themselves; the directory half has no callers, because no suite shares a filesystem today and a claim would be a false positive rather than a finding | 6 tests: the clash is recorded with the exact message, distinct directories stay clean, a suite re-claiming its own directory is recorded once rather than twice, a missing directory is reported as `"(null)"` instead of crashing the run, a declared mutation is recorded verbatim, and the report prints a live clash. The end-of-run gate was verified to fail the run when a clash is present |
 
 ## Exists but NOT yet validated on physical hardware
 
@@ -99,8 +107,10 @@ not. It overrides any aspirational claim elsewhere.
 - Deep sleep is wired but **disabled by default**: turning it on requires
   the bench measurement in `docs/en/BENCH_PLAN.md`.
 - The LoRa frame format, fragmentation, acknowledgement and the forwarding
-  loop are written and tested end to end against the central, but there is
-  no radio driver and no link budget: the air interface is still unproven.
+  loop are written and tested end to end against the central, and the SX1276
+  driver now configures the radio correctly, but there is still no measured
+  link budget: the air interface is unproven. The driver has never been on a
+  board, which is stated here rather than implied away.
 - Downlink **actuation of physical actuators** needs hardware that can be
   actuated. The four node-level commands (`set_sampling_interval`,
   `set_sync_interval`, `request_resync`, `set_led_mode`) do now act, persist
@@ -326,10 +336,10 @@ channel is a liability rather than a finished product.
 |---|---|
 | 0 - freeze the specification | Not started. Needs a decision on ESP-NOW and one on LoRa. |
 | 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure, uncertainty budget, coverage completeness, test binary isolation and a public certificate remain. |
-| 2 - air interface | Not started. Needs an SX1276 driver and a measured link budget. |
+| 2 - air interface | Driver written and host-tested after three real register bugs were found and fixed; no board, no measured link budget. See the SX1276 row above. |
 | 3 - bench | Not started. Needs a board and `docs/en/BENCH_PLAN.md`. |
 | 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory test command and an enclosure do not exist. |
-| 5 - release engineering | SBOM tool, release gate (`.sh` and `.ps1`) and runbook **done**. No tag, no lockfile hash, no reproducible backend build. |
+| 5 - release engineering | SBOM tool (scoped to the real dependency closure, no longer a listing of the build machine), release gate (`.sh` and `.ps1`) and runbook **done**. Lockfile with hashes **done** (`backend/requirements.lock`, CI installs with `--require-hashes`). Still open: no release tag, and no reproducible backend image build. |
 | 6 - declare the freeze | Not started, and cannot start before Phase 3. |
 
 The release gate is the one thing here that keeps the remaining phases honest:
@@ -396,7 +406,7 @@ be closed from a desk, and `docs/en/BENCH_PLAN.md` is the procedure.
 | 4 | MED | `LogStorageRepository` open() O(bytes) - **CK01 checkpoint implemented** (fast-path O(segments) + fallback scan; flush every 64 appends) | Storage budget >512 KiB | Done |
 | 5 | MED | Backend `_RATE` in-memory; `sync_batches` unbounded; `/v1/nodes` unpaged | Central growth | Done: SQLite-backed rate limit, retention cap 5000, pagination `limit`/`offset` plus opaque cursors |
 | 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) - **increased to 512 B** | Long messages | Done |
-| 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Open |
+| 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Partially done: the declaration registry and the end-of-run gate are implemented and tested (see the table above), but adoption is zero. No suite declares a directory or a mutation, so the gate has nothing to catch until suites opt in |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
 | 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is already a SQL window function (`LAG`) capped at 20 gaps, so no Python row loop remains |
 
@@ -468,11 +478,11 @@ every 64 appends and after rotation/retention/integrityCheck.
 ## Reproduce from zero
 
 ```powershell
-pip install platformio
+pip install platformio==6.1.19
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 202 succeeded
+cd firmware && pio test -e native      # expect: 315 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
-cd ..\backend && pip install -r requirements.txt
-python -m pytest tests -q              # expect: 192 passed
+cd ..\backend && pip install --require-hashes -r requirements.lock
+python -m pytest tests -q              # expect: 384 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

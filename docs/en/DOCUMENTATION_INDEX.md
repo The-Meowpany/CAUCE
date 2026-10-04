@@ -22,6 +22,7 @@ but paper is patient.
 | [OTA.md](OTA.md) | Decision FSM, anti-brick rules, manifest contract | Decision shipped, flashing pending |
 | [DASHBOARD.md](DASHBOARD.md) | Local SPA + captive portal, and why it's dependency-free | Stable |
 | [BENCH_PLAN.md](BENCH_PLAN.md) | B1–B5 physical validation with exit criteria | Plan, not executed |
+| [RUNBOOK.md](RUNBOOK.md) | What to do when a node stops reporting; refusal codes | Draft |
 | [ROADMAP.md](ROADMAP.md) | Sequencing M0–M5, principles, non-goals | Stable |
 | [RELEASE_READINESS.md](RELEASE_READINESS.md) | Phases 0–6 to a frozen baseline, and the gate checklist | Draft |
 | [PILOT_SPEC.md](PILOT_SPEC.md) | Frozen pilot: nodes, budget, acceptance gate | Frozen |

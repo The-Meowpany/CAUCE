@@ -10,6 +10,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_backend.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS
 
 
 def _json_dumps(obj) -> str:
@@ -40,7 +41,7 @@ def sync_payload(records: list[dict], node_id: str = "CAUCE-001") -> dict:
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

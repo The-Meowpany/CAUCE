@@ -57,7 +57,14 @@ protocolo.
 - Política: 1 uplink cada 10–15 min, SF7–9, solo agregado horario +
   eventos. Nada de firehose crudo de 60 s por LoRa, jamás.
 - Gateway: un ESP32 + SX1276 forwardeando a `POST /v1/sync` con
-  `"transport": "lora"`.
+  `"transport": "lora"`. La lógica de forwarding ya existe y está probada
+  end to end contra el central (`lora_gateway.py`, including el
+  reensamblado, el acknowledgement y la firma), así que lo que falta es el
+  driver de radio y un proceso donde correrlo en hardware. Una
+  consecuencia queda escrita en vez de asumida: como un nodo
+  provisionado se autentica con un HMAC sobre el body del request, el
+  gateway tiene que guardar la device key de ese nodo, lo que lo deja
+  tan confiado como los nodos a los que sirve.
 - OTA por LoRa afuera. Check de manifiesto como mucho.
 
 Hecho significa: RSSI/SNR vs distancia, % entrega, y una decisión
@@ -104,19 +111,97 @@ decide si un despliegue en campo es sobrevivible:
 - Bundles de diagnóstico de campo, ingeridos en el central, más
   `/v1/fleet` respondiendo qué nodo necesita visita.
 - `simulator/load_pilot.py` para ensayar el volumen del piloto.
+- **Terminación TLS** vía `deployment/Caddyfile`: CA interna automática,
+  dominio desde `CAUCE_DOMAIN`, y el central atado a `127.0.0.1` para que
+  solo el proxy lo alcance.
+- **Paginación por cursor** en measurements (`timestamp_utc_ms, sequence`)
+  y en nodes (`node_id`), para que una exportación larga siga consistente
+  mientras la flota sigue escribiendo. `limit`/`offset` siguen funcionando.
+- **Descarga asíncrona de OTA**: el reader del firmware devuelve un
+  tri-estado por chunk en vez de dormir 10 s esperando bytes, y el manager
+  se rinde con `OTA_STALLED` en vez de bloquear el scheduler para siempre.
+  La apertura HTTP inicial sigue siendo bloqueante.
+- **Política de deep sleep**: `DeepSleepController` decide cuándo le está
+  permitido dormir (no con datos pendientes sin sincronizar, no durante una
+  OTA, no por debajo del gate de batería). Va **deshabilitado por
+  defecto** porque nadie midió el consumo todavía.
+- **Analítica de ventanas largas**: `granularity=auto` responde un pedido
+  de 30 días desde los buckets de `agg_hourly` en vez de streamear cada
+  fila cruda, y dice en la respuesta qué granularidad usó.
+- **Downlink, idempotente por construcción.** El central encola un comando
+  por `(node_id, idempotency_key)` y lo entrega en la misma respuesta de
+  `/v1/sync` que acusa un batch, así que no cuesta un despertar de radio
+  extra. El nodo recuerda los ids aplicados en flash y reporta un
+  receipt; el central reofrece el comando hasta que llega. La entrega es
+  honesta: `pending` significa que nadie lo confirmó, `expired` que envejeció,
+  y ninguno se reporta en silencio como hecho. Los kinds que van son
+  solo de validación (`set_sampling_interval`, `set_sync_interval`,
+  `request_resync`, `set_led_mode`): chequean sus argumentos y reportan,
+  pero no reconfiguran el nodo en curso, porque un comando que pueda parar
+  un nodo reportando es uno que nadie debería mandar por accidente. La
+  actuator real espera hardware que se pueda actuar.
+- **Rollback de OTA ya cableado.** `OtaBootConfirm` lleva un contador de
+  intentos de arranque en flash y marca la imagen válida cuando el nodo
+  demuestra que puede guardar una medición, o hace rollback después de
+  tres arranques malos. Sin él, una imagen que crasheó en el primer tick
+  quedaría instalada para siempre.
 
 Sigue abierto acá:
 
-- **Rollback de OTA en hardware.** La FSM de decisión y la política de
-  rollback están testeadas en host y la tabla de particiones de dos slots
-  viene en el repo, pero nadie ha flasheado una placa, marcado una imagen
-  como válida, ni visto cómo una imagen mala hace rollback. Hasta que pase,
-  las actualizaciones necesitan acceso físico.
-- Terminación TLS, paginación por cursor, OTA asíncrona.
+- **Rollback de OTA en hardware.** La política, el contador y las llamadas
+  de partición del ESP32 están cableados y probados en host, pero nadie
+  ha flasheado una placa, marcado una imagen válida, ni visto una imagen
+  mala hacer rollback. Hasta que pase, las actualizaciones necesitan
+  acceso físico.
+- **Incertidumbre de calibración.** El central aplica offsets y escalas
+  correctamente, pero nada lleva una estimación de incertidumbre y no hay
+  procedimiento formal. Hasta entonces una lectura calibrada es una mejor
+  comparación relativa, no una medición trazable.
+- **Medición de consumo en deep sleep.** La política está probada; el
+  ahorro no.
+- Un certificado real si el central alguna vez se expone públicamente — el
+  deployment ya pide ACME por defecto, así que esto es un problema de DNS,
+  no de código.
+- **LoRa en el cable, en el aire todavía no.** El frame compacto de 68
+  bytes, la fragmentación, el reensamblado, el acknowledgement del gateway
+  y un decoder de referencia existen y están contrastados entre el encoder
+  C++ y el de Python. Lo que sigue faltando es un gateway, un driver de
+  radio y cualquier link budget: el formato está probado, la interfaz de
+  aire no.
+- **La incertidumbre de calibración** se registra y se propaga, así que un
+  reporte puede separar medición de método. Sigue sin haber procedimiento
+  de calibración, que es lo que la trazabilidad realmente exigiría.
+- **La autorización es por principal** cuando la querés: tokens nombrados
+  con scopes y un sitio opcional. Un despliegue de un solo operador sigue
+  usando el admin token compartido y no necesita cambiar nada.
 
 ## No-objetivos por ahora
 
-Ruteo mesh completo, OTA de firmware por LoRa, control loops por
-downlink, MQTT/CoAP en nodos constreñidos, roaming LoRaWAN
-multi-región. Cada uno se sugirió al menos una vez; cada uno espera su
-turno.
+Ruteo mesh completo, OTA de firmware por LoRa, MQTT/CoAP en nodos
+constreñidos, roaming LoRaWAN multi-región, firmas asimétricas. Cada uno se
+sugirió al menos una vez; cada uno espera su turno.
+
+La OTA de firmware por LoRa ahora tiene un número adjunto en vez de una
+opinión: un registro de 68 bytes no entra en un presupuesto de airtime de
+222 bytes a ningún spreading factor que todavía llegue a un kilómetro, así
+que el check del manifiesto es hasta donde esa idea puede llegar
+honestamente.
+
+Dos de ellos cambiaron de estado cuando se examinaron las interfaces:
+
+- **Loops de control por downlink** eran un no-objetivo y ya no lo son, a
+  nivel de transporte. `ILoRaRadio` e `ISyncTransport` eran ambos
+  send-only, que es lo que en realidad lo bloqueaba; los dos tienen ahora
+  camino de recepción. Lo que va es entrega e idempotencia, no
+  actuator: ver M5.
+- **El intercambio peer-to-peer** sigue siendo un no-objetivo, y agregar
+  `receive()` no cambió eso. Una radio que escucha a un vecino no es un
+  mesh: es el prerrequisito de un mesh, y la razón por la que es barato
+  postergarlo es que el camino de sync ya es idempotente.
+
+Ed25519 queda afuera por una razón concreta y no por gusto: el firmware
+tiene SHA-256 y HMAC y nada de bignum, así que la aritmética de curvas
+iría escrita de cero en una placa sin margen para revisarla. Keys
+simétricas por dispositivo más TLS cubren el modelo de amenazas del
+piloto; un esquema de firmas vale la pena cuando haya un problema de
+distribución de keys que resolver que la simetría no resuelve.

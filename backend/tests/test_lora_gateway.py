@@ -37,6 +37,7 @@ from cauce_server.lora_frames import (  # noqa: E402
 from cauce_server.lora_gateway import GatewayError, LoRaGateway  # noqa: E402
 from cauce_server.main import app  # noqa: E402
 from cauce_server.signing import ED25519  # noqa: E402
+from conftest import ADMIN_HEADERS
 
 RADIO_BUDGET = 115
 DEVICE_KEY = "clave-dispositivo-0123456789"
@@ -60,7 +61,7 @@ def ed25519_frames_for(batch, batch_id=1000, seed=ED25519_SEED):
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

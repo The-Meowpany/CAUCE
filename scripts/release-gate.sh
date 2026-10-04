@@ -95,14 +95,42 @@ else
 fi
 
 step "documentation"
-check_docs docs/en RELEASE_READINESS.md ROADMAP.md BENCH_PLAN.md SECURITY.md \
-  OTA.md SYNC.md API.md BACKEND.md DATA_MODEL.md ARCHITECTURE.md \
-  CALIBRATION.md DEPLOYMENT.md HARDWARE.md TESTING.md DASHBOARD.md LEGAL.md \
-  PILOT_SPEC.md I18N.md DOMAIN_GLOSSARY.md DOCUMENTATION_INDEX.md
-check_docs docs/es RELEASE_READINESS.md ROADMAP.md BENCH_PLAN.md SECURITY.md \
-  API.md ARCHITECTURE.md BACKEND.md DATA_MODEL.md CALIBRATION.md \
-  DEPLOYMENT.md DASHBOARD.md HARDWARE.md I18N.md LEGAL.md OTA.md \
-  PILOT_SPEC.md SYNC.md TESTING.md DOMAIN_GLOSSARY.md
+# Both lists are the full set of docs/ files. RUNBOOK.md and DOCUMENTATION_INDEX.md were
+# missing from one side each, so the check passed while a document existed that no list
+# mentioned - which is the drift this check exists to catch, applied to itself.
+DOCS_EN="RELEASE_READINESS.md ROADMAP.md BENCH_PLAN.md SECURITY.md OTA.md SYNC.md \
+API.md BACKEND.md DATA_MODEL.md ARCHITECTURE.md CALIBRATION.md DEPLOYMENT.md \
+HARDWARE.md TESTING.md DASHBOARD.md LEGAL.md PILOT_SPEC.md I18N.md \
+DOMAIN_GLOSSARY.md DOCUMENTATION_INDEX.md RUNBOOK.md"
+DOCS_ES="$DOCS_EN"
+# shellcheck disable=SC2086
+check_docs docs/en $DOCS_EN
+# shellcheck disable=SC2086
+check_docs docs/es $DOCS_ES
+
+# The lists above are hand-maintained, so they drift. Compare them against the tree, in
+# both languages, so a new document cannot ship without being listed and a renamed one
+# cannot leave a stale entry behind.
+for dir in docs/en docs/es; do
+  case "$dir" in
+    docs/en) listed="$DOCS_EN" ;;
+    *)       listed="$DOCS_ES" ;;
+  esac
+  on_disk="$(cd "$dir" && ls -1 ./*.md 2>/dev/null | sed 's|^\./||' | sort)"
+  # shellcheck disable=SC2086
+  want="$(printf '%s\n' $listed | sort)"
+  if [ "$on_disk" = "$want" ]; then
+    ok "the $dir list matches the tree"
+  else
+    unlisted="$(comm -23 <(printf '%s\n' "$on_disk") <(printf '%s\n' "$want") | tr '\n' ' ')"
+    phantom="$(comm -13 <(printf '%s\n' "$on_disk") <(printf '%s\n' "$want") | tr '\n' ' ')"
+    # Written as if/then rather than `[ -n "$x" ] && fail ...`: under `set -e` a false
+    # test on the last line of a loop body ends the script, so the clean case would exit
+    # non-zero after passing every check.
+    if [ -n "$unlisted" ]; then fail "not listed in the gate ($dir): $unlisted"; fi
+    if [ -n "$phantom" ]; then fail "listed but absent ($dir): $phantom"; fi
+  fi
+done
 
 step "the firmware signs with both algorithms"
 # Checked in pieces rather than by grepping for one string, because the natural

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_admin_write, require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
@@ -65,7 +65,7 @@ async def ingest_diagnostics(
         ):
             raise HTTPException(status_code=401, detail="invalid_signature")
     else:
-        require_bearer_token(authorization, settings.api_token)
+        require_admin_write(authorization)
 
     health = bundle.get("health")
     if not isinstance(health, dict):

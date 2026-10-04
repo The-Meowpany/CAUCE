@@ -17,6 +17,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_agg15.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.db import query  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS
 
 BASE_TS = 1787356800000  # aligned to a UTC hour
 MIN = 60 * 1000
@@ -27,7 +28,7 @@ HOUR = 60 * MIN
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

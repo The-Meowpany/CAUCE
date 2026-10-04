@@ -19,6 +19,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_scopes.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS
 
 ADMIN = {"Authorization": "Bearer admin-token"}
 
@@ -30,7 +31,7 @@ def client(monkeypatch):
     # anything.
     monkeypatch.setattr(settings, "api_token", "admin-token")
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -60,7 +61,9 @@ def seed(client):
              "quality": "VALID"},
         ],
     }
-    for node_id, site_id in (("CAUCE-001", "s1"), ("CAUCE-002", "s2")):
+    # The site is attached by the SQL below, not by the sync payload, so the loop
+    # only needs the node ids.
+    for node_id in ("CAUCE-001", "CAUCE-002"):
         body = dict(payload, node_id=node_id)
         client.post("/v1/sync", json=body, headers=ADMIN)
     with db.transaction() as conn:

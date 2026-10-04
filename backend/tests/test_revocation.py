@@ -23,6 +23,7 @@ from cauce_server.lora_frames import (  # noqa: E402
     sign_frame,
 )
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS, NO_AUTH
 
 DEVICE_KEY = "clave-dispositivo-0123456789"
 OTHER_KEY = "otra-clave-del-atacante-9999"
@@ -38,7 +39,7 @@ def client(monkeypatch):
     # tests below to mean anything.
     monkeypatch.setattr(settings, "api_token", "admin-token")
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -227,7 +228,7 @@ def test_write_scope_cannot_retire_a_device(client):
 
 def test_anonymous_cannot_retire_a_device(client):
     provision(client, "SCOPE-2")
-    assert client.post("/v1/nodes/SCOPE-2/revoke", json={}).status_code == 401
+    assert client.post("/v1/nodes/SCOPE-2/revoke", json={}, headers=NO_AUTH).status_code == 401
 
 
 # --- the relayed path is closed too ----------------------------------------

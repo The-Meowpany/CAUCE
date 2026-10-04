@@ -40,7 +40,7 @@ Four rules run this codebase:
 
 Dependencies point down only. Tests plug in doubles (`ManualClock`,
 `ScriptedI2cBus`, `MemoryFileSystem`, scripted network/sync fakes) —
-that's how 112 tests run in under a minute with no board attached.
+that's how 315 tests run in under a minute with no board attached.
 
 ## Measurement flow
 

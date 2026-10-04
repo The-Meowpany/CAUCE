@@ -26,6 +26,7 @@ from cauce_server.uncertainty import (  # noqa: E402
     budget_for,
     variables_with_budgets,
 )
+from conftest import ADMIN_HEADERS  # noqa: E402
 
 ADMIN = {"Authorization": "Bearer admin-token"}
 
@@ -33,7 +34,7 @@ ADMIN = {"Authorization": "Bearer admin-token"}
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

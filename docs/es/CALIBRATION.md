@@ -120,9 +120,82 @@ incertidumbre que nadie cuantificó es peor que no decir nada. Una actualizació
 parcial que omita ambos conserva lo anterior, así que re-postear un offset no
 borra en silencio una caracterización que costó una semana de co-localización.
 
-Lo que esto no hace es volver trazable al proyecto. Permite que un informe diga
-cuánto de un número es medición y cuánto es método. Sigue sin haber un
-procedimiento de calibración ni una afirmación metrológica en el sistema.
+## El presupuesto, por magnitud
+
+`backend/cauce_server/uncertainty.py` guarda los componentes; la cifra combinada
+llega a un informe por `calibration_summary`, así que un número nunca llega sin
+lo con qué compararlo.
+
+Un presupuesto y no una sola cifra porque los componentes responden preguntas
+distintas. Alguien que decide si una lectura puede disparar una alerta de calor
+necesita saber si el error está en el sensor (cambiarlo) o en la comparación
+(rehacerla), y un promedio no puede decir eso. Los componentes se combinan por
+suma cuadrática, que asume independencia, y el más grande se reporta como
+`dominant_term`.
+
+| magnitud | componentes | dominante |
+|---|---|---|
+| `air_temperature` | sensor 0.5 °C, co-localización 0.3 °C, cuantización 0.01 °C | sensor, pero la pareja está cerca |
+| `relative_humidity` | **3 % de la lectura**, co-localización 2 %RH, cuantización 0.1 | **depende de la lectura** |
+| `pressure` | sensor 1 hPa, offset de altitud 0, cuantización 0.01 hPa | sensor |
+
+Dos de esas merecen énfasis.
+
+**La humedad no es una constante.** Su término de datasheet es proporcional, así
+que el presupuesto no puede ser un número — `combined_for_reading` existe para
+eso, y el término dominante *cambia* con la humedad: el término proporcional
+gana al 80 %RH, el de co-localización gana al 10 %RH. Una cifra única para
+humedad es una afirmación que nadie puede hacer.
+
+**La presión no se arregla calibrando.** Una estación que reporta presión a nivel
+del mar discrepa alrededor de 1 hPa cada 8.5 m de altitud. Ese término está en el
+presupuesto como `altitude_offset` y puesto a cero a propósito: es cero cuando no
+se está comparando contra el nivel del mar, y el texto de la asunción lo dice.
+Comparar contra una estación a nivel del mar es un error que ningún
+`scale`/`offset` puede corregir.
+
+### Qué son estos números
+
+Asunciones declaradas para un sensor clase BME280, registradas para que una
+calibración trazable posterior reemplace una cifra en vez de reescribir una
+razon. Cada payload lleva `traceable: false` hasta que eso cambie, porque la
+ausencia de trazabilidad tiene que verse en los datos y no en un documento.
+
+Una magnitud sin presupuesto devuelve `None`, nunca un presupuesto cero. "No
+tenemos números para esta magnitud" y "esta magnitud es exacta" son cosas
+distintas, y confundirlas es como un informe termina citando una precisión que
+nadie estableció.
+
+## Procedimiento, por magnitud
+
+Escrito para que dos personas produzcan los mismos números. Completo donde el
+método está decidido y explícitamente vacío donde no lo está, porque una celda
+sin llenar es una decisión que nadie tomó.
+
+| paso | air_temperature | relative_humidity | pressure |
+|---|---|---|---|
+| referencia | nodo de referencia co-localizado, calibrado contra un termómetro de referencia | nodo de referencia co-localizado | nodo de referencia co-localizado |
+| método | `co-location-relative` | `co-location-relative` | `co-location-relative` |
+| duración | 48 h | 48 h | 48 h |
+| puntos | 48 pares horarios | 48 pares horarios | 48 pares horarios |
+| se acepta cuando | spread post-calibración ≤ **0.2 °C** | ≤ **3 %RH** | ≤ **1 hPa** |
+| intervalo | cada 6 meses, y después de una mudanza | cada 6 meses | cada 6 meses |
+| ante un fallo | `status=rejected`, el nodo sigue en la columna cruda | igual | igual |
+
+Dos reglas que no son por magnitud:
+
+- **Retirar, nunca borrar.** Un registro superseded pasa a `status=retired`. El
+  historial es lo que hace auditable una calibración.
+- **Registrar la referencia, no solo el número.** `calibration_reference` nombra
+  el nodo o instrumento de referencia. Una corrección sin referencia es una
+  opinión.
+
+### Lo que esto todavía no es
+
+Acá no hay trazabilidad metrológica. La referencia es otro nodo, y la cadena
+termina en el datasheet de un sensor. Todo lo de arriba sostiene "cuánto de este
+número es medición y cuánto es método", que vale la pena, y no es la misma
+afirmación que un instrumento calibrado.
 
 
 ## Plan mínimo recomendado (una vez que existan ≥2 nodos físicos)

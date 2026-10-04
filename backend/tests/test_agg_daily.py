@@ -18,6 +18,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_daily.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.db import query  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS
 from test_api import BASE_TS, _series, sync_payload  # noqa: E402
 
 DAY_MS = 86400000
@@ -26,7 +27,7 @@ DAY_MS = 86400000
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 

@@ -26,11 +26,11 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 239 tests en host (Unity)
+pio test -e native          # 315 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 303 tests
+python -m pytest tests -q   # 384 tests
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ..\scripts\verify-all.ps1   # todo lo anterior en un gate
 ```
@@ -52,6 +52,19 @@ Sobre el auth de sync: los nodos provisionados firman cada lote con
 El admin del nodo usa `Authorization: Bearer` contra un SHA-256 guardado
 en tiempo constante; sin token configurado, las escrituras admin se
 rechazan de plano.
+
+El central se comporta igual, con una excepción deliberada. Sin
+`CAUCE_API_TOKEN` definido, toda **escritura** responde `503
+admin_api_not_configured`: no hay credencial que verificar, y permitirla
+dejaría el puerto abierto a cualquiera que llegue. Las lecturas siguen
+abiertas para que el dashboard funcione en una LAN de confianza; definir
+el token también las cierra. Generar uno con:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Ver `backend/.env.example` para el entorno completo.
 
 ## API del nodo (`/api/v1`)
 
@@ -145,7 +158,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-112 firmware + 68 backend tests + build ESP32 + E2E = **180 chequeos
+315 firmware + 384 backend tests + build ESP32 + E2E = **699 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 

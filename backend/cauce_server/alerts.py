@@ -9,7 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_admin_write, require_bearer_token
 
 router = APIRouter(prefix="/v1")
 
@@ -164,7 +164,7 @@ def evaluate_stale_rules() -> list[str]:
 def create_rule(payload: dict, request: Request,
                 authorization: str | None = Header(default=None)) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     kind = payload.get("kind")
     channel = payload.get("channel")
     node_id = payload.get("node_id")
@@ -260,7 +260,7 @@ def list_rules(request: Request,
 def delete_rule(rule_id: int, request: Request,
                 authorization: str | None = Header(default=None)) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     with transaction() as conn:
         cur = conn.execute("DELETE FROM alert_rules WHERE rule_id=?",
                            (rule_id,))

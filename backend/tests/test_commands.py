@@ -10,13 +10,14 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_commands.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS, NO_AUTH
 from test_api import BASE_TS, _series, sync_payload  # noqa: E402
 
 
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -145,11 +146,36 @@ def test_commands_require_the_admin_token_when_one_is_configured(
         client, monkeypatch):
     _register(client)
     monkeypatch.setattr(settings, "api_token", "admin-token")
-    assert _queue(client, key="k").status_code == 401
+    # Called directly rather than through _queue, whose **extra goes into the JSON body.
+    anonymous = client.post("/v1/nodes/CAUCE-001/commands", headers=NO_AUTH,
+                            json={"kind": "request_resync",
+                                  "idempotency_key": "k"})
+    assert anonymous.status_code == 401
     ok = client.post("/v1/nodes/CAUCE-001/commands",
                      headers={"Authorization": "Bearer admin-token"},
                      json={"kind": "request_resync", "idempotency_key": "k"})
     assert ok.status_code == 200
+
+
+def test_a_write_is_refused_when_no_token_is_configured(client, monkeypatch):
+    """The fail-closed half. With no token there is no credential to check, so the
+    answer is 503 and not "allowed": anyone who can reach the port could otherwise mint
+    a token or rewrite calibration."""
+    _register(client)
+    monkeypatch.setattr(settings, "api_token", "")
+    unconfigured = client.post("/v1/nodes/CAUCE-001/commands", headers=NO_AUTH,
+                               json={"kind": "request_resync",
+                                     "idempotency_key": "k2"})
+    assert unconfigured.status_code == 503
+    assert unconfigured.json()["detail"] == "admin_api_not_configured"
+
+
+def test_a_read_stays_open_when_no_token_is_configured(client, monkeypatch):
+    """The deliberate asymmetry: the dashboard is meant to be reachable on a trusted
+    LAN, so a read is not what fails closed."""
+    _register(client)
+    monkeypatch.setattr(settings, "api_token", "")
+    assert client.get("/v1/nodes", headers=NO_AUTH).status_code == 200
 
 
 def test_malformed_receipts_are_rejected_not_trusted(client):

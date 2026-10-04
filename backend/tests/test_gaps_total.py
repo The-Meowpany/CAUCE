@@ -18,6 +18,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_gaps_total.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.coverage import MAX_GAPS_REPORTED, node_coverage  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS
 
 BASE_TS = 1787356800000
 HOUR = 3600 * 1000
@@ -26,7 +27,7 @@ HOUR = 3600 * 1000
 @pytest.fixture()
 def client():
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -51,7 +52,6 @@ def send(client, timestamps, node_id="CAUCE-001", variable="air_temperature"):
 def test_no_data_does_not_claim_truncation():
     """The old field said truncated at exactly twenty, having dropped nothing. With
     no data at all there is at most the one synthetic whole-window gap."""
-    client = _client
     report = node_coverage("CAUCE-001", "air_temperature", BASE_TS,
                            BASE_TS + 24 * HOUR, 3600 * 1000)
     assert report["gaps_truncated"] is False
@@ -113,6 +113,6 @@ def _bind_client(request):
     """Hands each test the same TestClient the fixture above builds."""
     global _client
     db.reset_for_tests()
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         _client = c
         yield c

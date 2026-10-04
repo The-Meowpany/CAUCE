@@ -43,10 +43,43 @@ $T = @{
     }
 }[$Lang]
 
-$mingwBin = "C:\Users\filip\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin"
-$env:Path = "$mingwBin;" + $env:Path
-$env:CC = "$mingwBin\gcc.exe"
-$env:CXX = "$mingwBin\g++.exe"
+# The 'native' and 'integration' environments need a MinGW-w64 g++. Resolved rather than
+# hardcoded: an absolute toolchain path in tracked source leaks a username and is wrong on
+# every machine that is not the one that wrote it. Set CAUCE_MINGW_BIN when the compiler
+# lives somewhere this cannot find.
+#
+# The search looks for g++.exe rather than for a package name matching "mingw": the
+# WinLibs package that ships MinGW-w64 is named after WinLibs, so a name filter finds
+# nothing on the machine most likely to need this.
+function Resolve-MingwBin {
+    if ($env:CAUCE_MINGW_BIN) { return $env:CAUCE_MINGW_BIN }
+    if (Get-Command g++ -ErrorAction SilentlyContinue) { return $null }
+    $roots = @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
+        (Join-Path $env:LOCALAPPDATA 'Programs'),
+        (Join-Path $env:ProgramFiles 'mingw64'),
+        (Join-Path $env:ProgramFiles 'Git\mingw64')
+    )
+    foreach ($root in $roots) {
+        if (-not $root -or -not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem $root -Filter 'g++.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($hit) { return $hit.DirectoryName }
+    }
+    return $null
+}
+
+$mingwBin = Resolve-MingwBin
+if ($mingwBin) {
+    if (-not (Test-Path (Join-Path $mingwBin 'g++.exe'))) {
+        throw "CAUCE_MINGW_BIN does not contain g++.exe: $mingwBin"
+    }
+    $env:Path = "$mingwBin;" + $env:Path
+    $env:CC = Join-Path $mingwBin 'gcc.exe'
+    $env:CXX = Join-Path $mingwBin 'g++.exe'
+} elseif (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
+    throw "No MinGW-w64 g++ found. Install one, put it on PATH, or set CAUCE_MINGW_BIN."
+}
 
 Write-Host $T.step1 -ForegroundColor Cyan
 pio run -e integration --project-dir $fw | Out-Null

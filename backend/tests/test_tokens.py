@@ -18,6 +18,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_tokens.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
+from conftest import ADMIN_HEADERS, NO_AUTH
 from test_api import BASE_TS, _series, sync_payload  # noqa: E402
 
 ADMIN = {"Authorization": "Bearer admin-token"}
@@ -27,7 +28,7 @@ ADMIN = {"Authorization": "Bearer admin-token"}
 def client(monkeypatch):
     db.reset_for_tests()
     monkeypatch.setattr(settings, "api_token", "admin-token")
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         yield c
 
 
@@ -187,10 +188,10 @@ def test_only_the_shared_admin_may_mint_credentials(client):
 
 
 def test_token_endpoints_require_authentication(client):
-    assert client.post("/v1/tokens",
+    assert client.post("/v1/tokens", headers=NO_AUTH,
                        json={"name": "x", "scopes": "read"}).status_code == 401
-    assert client.get("/v1/tokens").status_code == 401
-    assert client.delete("/v1/tokens/x").status_code == 401
+    assert client.get("/v1/tokens", headers=NO_AUTH).status_code == 401
+    assert client.delete("/v1/tokens/x", headers=NO_AUTH).status_code == 401
 
 
 def test_healthz_reports_tokens(client):
