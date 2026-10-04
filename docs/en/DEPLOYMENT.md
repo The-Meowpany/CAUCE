@@ -28,7 +28,7 @@ Backend:
 ```powershell
 cd backend
 pip install --require-hashes -r requirements.lock
-python -m pytest tests -q # expect 384 passed
+python -m pytest tests -q # expect 387 passed
 ```
 
 Node↔server integration:

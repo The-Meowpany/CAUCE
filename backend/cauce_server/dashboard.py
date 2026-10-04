@@ -157,6 +157,32 @@ _LABELS = {
 }
 
 
+def _form_value(value) -> str:
+    """A request- or database-derived value interpolated into a page.
+
+    Escaping a number looks redundant, and for `threshold: float` it is: FastAPI validates
+    the parameter before the handler runs, a hostile value gets a JSON 422 that never
+    reaches this module, and the value arriving here can only be a float. CodeQL's
+    reflected-XSS alert on the events page is a false positive for exactly that reason, and
+    that was confirmed by probing the route rather than by reading the annotation.
+
+    It is done anyway. Two reasons, both about the code rather than about the alert:
+
+    - A static analyser cannot see pydantic's validation, so every unescaped interpolation
+      of a request parameter is a finding somebody has to triage by hand. This is the third
+      time that has been true here, and the alert cost more to explain than the escape costs
+      to write.
+    - The safety currently rests entirely on an annotation three files away from the sink.
+      That is a load-bearing assumption with no test that fails when someone widens the
+      annotation, and `{thr}` sits inside an HTML attribute, where a wrong type would be an
+      attribute-breakout rather than a stray tag.
+
+    If you are tempted to remove the call because the type makes it redundant: the type is
+    what makes it redundant, and the type is not enforced here.
+    """
+    return html.escape(str(value))
+
+
 def _json_for_script(value) -> str:
     """JSON that is safe to paste inside a `<script>` element.
 
@@ -882,7 +908,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
             .replace("{site}", html.escape(node["site_id"] or labels["none"]))
             .replace("{first}", _fmt_utc(node["first_seen_utc_ms"]))
             .replace("{last}", _fmt_utc(node["last_seen_utc_ms"]))
-            .replace("{count}", str(count))
+            .replace("{count}", _form_value(count))
             .replace("{h_latest}", labels["latest"])
             .replace("{cards}", "\n".join(cards))
             .replace("{h_chart}", labels["chart"])
@@ -978,9 +1004,9 @@ def node_events_page(node_id: str, request: Request,
             .replace("{h_var}", labels["variable"])
             .replace("{opts_v}", opts_v)
             .replace("{h_thr}", labels["threshold"])
-            .replace("{thr}", str(threshold))
+            .replace("{thr}", _form_value(threshold))
             .replace("{h_dur}", labels["min_dur"])
-            .replace("{dur}", str(min_duration_min))
+            .replace("{dur}", _form_value(min_duration_min))
             .replace("{apply}", labels["apply"])
             .replace("{body}", body)
             .replace("{disclaimer}", labels["disclaimer"]))

@@ -251,8 +251,60 @@ def test_a_stored_variable_cannot_break_out_of_a_script_block(client):
         assert "</script><script>alert(1)" not in response.text, route
 
 
+def test_a_hostile_number_never_reaches_the_events_page(client):
+    """The premise behind CodeQL's reflected-XSS alert on this route, pinned as a test so
+    the next person does not have to re-derive it from a stack trace.
+
+    `threshold: float` means FastAPI rejects a non-numeric value with a JSON 422 before the
+    handler runs. So the handler is never reached with a hostile value, and the number the
+    template receives can only be a float. This is why that alert is a false positive - and
+    the assertion on content-type matters as much as the status code, because a 422 rendered
+    as HTML would be the same vulnerability reached by a different route.
+    """
+    _seed(client)
+    for payload in ('<script>alert(1)</script>', '32.0" onfocus="alert(1)',
+                    "32'><img src=x onerror=alert(1)>"):
+        response = client.get("/nodes/CAUCE-001/events", params={"threshold": payload})
+        assert response.status_code == 422, (payload, response.status_code)
+        assert "application/json" in response.headers.get("content-type", ""), payload
+        assert "text/html" not in response.headers.get("content-type", ""), payload
+
+
+def test_form_values_are_escaped_even_when_the_type_already_guarantees_safety():
+    """The belt to the validation's braces.
+
+    `{thr}` and `{dur}` land inside HTML attributes. Escaping a float is redundant today,
+    and it stays that way only for as long as the annotation holds. If someone widens
+    `threshold` to a string, this test is what notices that the page is no longer escaped -
+    not a browser, and not a reviewer reading the diff.
+    """
+    from cauce_server.dashboard import _form_value
+
+    assert _form_value(32.0) == "32.0"
+    assert _form_value(60) == "60"
+    # What it is actually for: a value that could carry markup does not, even in an attribute.
+    # html.escape escapes the double quote by default, which is the case that matters
+    # here: the value sits inside an attribute.
+    assert _form_value('x" onfocus="alert(1)') == 'x&quot; onfocus=&quot;alert(1)'
+    assert "<" not in _form_value("<b>")
+    assert ">" not in _form_value("<b>")
+
+
+def test_the_events_page_escapes_the_values_it_reflects(client):
+    """End to end, with the legitimate values a browser actually sends."""
+    _seed(client)
+    response = client.get("/nodes/CAUCE-001/events",
+                          params={"threshold": "32.5", "min_duration_min": "90"})
+    assert response.status_code == 200
+    assert 'value="32.5"' in response.text
+    assert 'value="90"' in response.text
+    assert "&quot;" not in response.text.split("<main")[0], "an attribute was broken out of"
+
+
 def test_json_for_script_escapes_what_a_json_string_does_not():
     """Unit level, so the reason the helper exists is stated where it is implemented."""
+    import json
+
     from cauce_server.dashboard import _json_for_script
 
     encoded = _json_for_script({"label": "</script>", "unit": "a & b"})
@@ -260,8 +312,9 @@ def test_json_for_script_escapes_what_a_json_string_does_not():
     assert "<" not in encoded and ">" not in encoded and "&" not in encoded
     assert "\\u003c" in encoded and "\\u0026" in encoded
     # Still valid JSON that decodes back to the original value.
-    import json
     assert json.loads(encoded) == {"label": "</script>", "unit": "a & b"}
+
+
 def test_json_for_script_escapes_the_javascript_line_terminators():
     """U+2028 and U+2029 end a statement in JavaScript but not in JSON, so a raw one is a
     syntax error that silently kills the rest of the block.

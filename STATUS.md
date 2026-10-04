@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (315 firmware + 384 backend tests, E2E green)
+## Implemented and verified (315 firmware + 387 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -483,6 +483,6 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
 cd firmware && pio test -e native      # expect: 315 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
-python -m pytest tests -q              # expect: 384 passed, 1 skipped
+python -m pytest tests -q              # expect: 387 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```
