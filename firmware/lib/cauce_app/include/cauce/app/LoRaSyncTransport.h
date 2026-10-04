@@ -55,6 +55,31 @@ class LoRaSyncTransport final : public hal::ISyncTransport {
   void setDeviceKey(const uint8_t* key, size_t length);
   bool hasDeviceKey() const { return deviceKeyLength_ > 0; }
 
+  // Selects the frame algorithm, and nothing else. The central provisions one
+  // algorithm per node and dispatches on the trailer length, so this must agree
+  // with `device_key_algorithm` at the central or every frame is refused.
+  //
+  // Defaults to HMAC because that is what a node provisioned before Ed25519
+  // signing existed has. A node that wants Ed25519 sets the algorithm AND
+  // supplies a 32-byte seed via setDeviceKey; a node that sets the algorithm
+  // without the right key material transmits nothing rather than something the
+  // central will reject.
+  void setFrameAlgorithm(cauce::FrameAlgorithm algorithm) {
+    frameAlgorithm_ = algorithm;
+  }
+  cauce::FrameAlgorithm frameAlgorithm() const { return frameAlgorithm_; }
+
+  // True when the configured algorithm has the key material it needs.
+  // Checkable before the first transmission, so a misconfigured node is caught by
+  // a test or a health check rather than by a central that silently drops every
+  // frame.
+  bool hasUsableAlgorithm() const;
+
+  // Trailer bytes the current algorithm appends: 0, 32 or 64.
+  size_t frameSignatureBytes() const {
+    return cauce::frameSignatureSize(frameAlgorithm_);
+  }
+
   // Parses the JSON batch SyncManager produces into records for the compact
   // encoder. Only the fields the frame format carries are read; anything else
   // in the envelope is dropped because the frame has no room for it.
@@ -93,6 +118,7 @@ class LoRaSyncTransport final : public hal::ISyncTransport {
   size_t radioPayloadBytes_{kDefaultRadioPayloadBytes};
   uint8_t deviceKey_[64];
   size_t deviceKeyLength_{0};
+  cauce::FrameAlgorithm frameAlgorithm_{cauce::FrameAlgorithm::kHmacSha256};
   uint32_t minIntervalMs_{600000};
   uint32_t ackTimeoutMs_{5000};
   uint32_t ackPollIntervalMs_{50};

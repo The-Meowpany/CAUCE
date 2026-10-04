@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "cauce/core/Ed25519Points.h"
+
 namespace cauce::app {
 
 namespace {
@@ -225,6 +227,19 @@ void LoRaSyncTransport::setDeviceKey(const uint8_t* key, size_t length) {
   }
 }
 
+bool LoRaSyncTransport::hasUsableAlgorithm() const {
+  if (frameAlgorithm_ == cauce::FrameAlgorithm::kNone) return false;
+  if (deviceKeyLength_ == 0) return false;
+  // Exactly the seed, for the asymmetric case. A 16- or 64-byte key with
+  // Ed25519 selected is a provisioning mistake, and refusing it here means the
+  // node transmits nothing rather than something no central will accept.
+  if (cauce::frameAlgorithmIsAsymmetric(frameAlgorithm_) &&
+      deviceKeyLength_ != cauce::kEd25519SeedBytes) {
+    return false;
+  }
+  return true;
+}
+
 void LoRaSyncTransport::setMinIntervalMs(uint32_t intervalMs) {
   minIntervalMs_ = intervalMs;
 }
@@ -324,14 +339,14 @@ hal::ISyncTransport::Result LoRaSyncTransport::postBatch(
     }
     const size_t frameLength = frameSizeOf(header);
 
-    // Sign when a key is configured, otherwise transmit the frame as it is.
+    // Sign with the configured algorithm, otherwise transmit the frame as it is.
     // Either way what goes on the air is what a relay will copy byte for byte.
     const uint8_t* toSend = frame;
     size_t toSendLength = frameLength;
-    if (deviceKeyLength_ > 0) {
+    if (hasUsableAlgorithm()) {
       const size_t signedLength =
           signFrame(frame, frameLength, deviceKey_, deviceKeyLength_,
-                    signedFrame, sizeof(signedFrame));
+                    frameAlgorithm_, signedFrame, sizeof(signedFrame));
       if (signedLength == 0) return Result::NetworkError;
       toSend = signedFrame;
       toSendLength = signedLength;

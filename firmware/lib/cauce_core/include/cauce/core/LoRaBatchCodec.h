@@ -80,19 +80,49 @@ class LoRaBatchEncoder {
   size_t nextRecord_{0};
 };
 
-// Bytes a signed frame occupies: the frame plus its trailing HMAC.
-inline size_t signedFrameSize(size_t frameLength) {
-  return frameLength + kLoRaSignatureSize;
+// How a frame is authenticated. The central provisions one of these per node and
+// dispatches on the trailer length, so the two must not be confused.
+enum class FrameAlgorithm : uint8_t {
+  kNone = 0,
+  kHmacSha256 = 1,
+  kEd25519 = 2,
+};
+
+// Trailer length for an algorithm: 0, 32 or 64.
+constexpr size_t frameSignatureSize(FrameAlgorithm algorithm) {
+  return algorithm == FrameAlgorithm::kEd25519
+             ? 64
+             : (algorithm == FrameAlgorithm::kHmacSha256 ? 32 : 0);
 }
 
-// Copies `frame` into `out` and appends HMAC-SHA256(deviceKey, frame).
+// True when the algorithm needs key material this code cannot hold symmetrically:
+// an Ed25519 *seed*, as opposed to a shared secret. A caller checks this before
+// transmitting so a misconfigured node sends nothing rather than something no
+// central will accept.
+constexpr bool frameAlgorithmIsAsymmetric(FrameAlgorithm algorithm) {
+  return algorithm == FrameAlgorithm::kEd25519;
+}
+
+// Bytes a signed frame occupies: the frame plus its trailer.
+inline size_t signedFrameSize(size_t frameLength,
+                              FrameAlgorithm algorithm = FrameAlgorithm::kHmacSha256) {
+  return frameLength + frameSignatureSize(algorithm);
+}
+
+// Copies `frame` into `out` and appends the trailer for `algorithm`.
 //
-// Returns the signed length, or 0 when there is no key or no room. A node
+// Returns the signed length, or 0 when there is no key, the algorithm needs key
+// material of a size this function cannot accept, or there is no room. A node
 // without a configured key transmits unsigned frames, which is exactly what an
 // unprovisioned deployment looks like; the central decides whether that is
 // acceptable, and it must never be this function's decision to make.
+//
+// `key` is a shared secret for kHmacSha256 and a 32-byte Ed25519 *seed* for
+// kEd25519 - the seed, not the expanded scalar, so a caller cannot accidentally
+// persist or provision the wrong half.
 size_t signFrame(const uint8_t* frame, size_t frameLength,
-                 const uint8_t* deviceKey, size_t deviceKeyLength,
+                 const uint8_t* key, size_t keyLength,
+                 FrameAlgorithm algorithm,
                  uint8_t* out, size_t outCapacity);
 
 // Reassembles fragments on the receiving side.

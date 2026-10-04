@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "cauce/core/Ed25519Points.h"
 #include "cauce/core/RecordCodec.h"
 #include "cauce/core/SecurityUtils.h"
 
@@ -214,16 +215,37 @@ size_t LoRaBatchReassembler::copyRecords(Measurement* out,
 }
 
 size_t signFrame(const uint8_t* frame, size_t frameLength,
-                 const uint8_t* deviceKey, size_t deviceKeyLength,
+                 const uint8_t* key, size_t keyLength,
+                 FrameAlgorithm algorithm,
                  uint8_t* out, size_t outCapacity) {
   if (!frame || !out || frameLength == 0) return 0;
-  if (!deviceKey || deviceKeyLength == 0) return 0;
-  const size_t total = signedFrameSize(frameLength);
+  if (!key || keyLength == 0) return 0;
+
+  // Ed25519 needs exactly a 32-byte seed. Refusing any other length rather than
+  // padding or truncating: a wrong-length "seed" would sign perfectly and
+  // verify nowhere, and the failure would only show up at the central.
+  if (algorithm == FrameAlgorithm::kEd25519 &&
+      keyLength != kEd25519SeedBytes) {
+    return 0;
+  }
+
+  const size_t total = signedFrameSize(frameLength, algorithm);
   if (outCapacity < total) return 0;
 
   std::memcpy(out, frame, frameLength);
-  hmacSha256(deviceKey, deviceKeyLength, frame, frameLength,
-            out + frameLength);
+
+  switch (algorithm) {
+    case FrameAlgorithm::kEd25519:
+      // Deterministic by specification: the nonce comes from the seed and the
+      // message, so there is no RNG whose state could be got wrong.
+      if (!ed25519Sign(out + frameLength, key, frame, frameLength)) return 0;
+      break;
+    case FrameAlgorithm::kHmacSha256:
+      hmacSha256(key, keyLength, frame, frameLength, out + frameLength);
+      break;
+    case FrameAlgorithm::kNone:
+      return 0;
+  }
   return total;
 }
 

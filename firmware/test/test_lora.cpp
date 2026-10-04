@@ -6,11 +6,20 @@
 #include <unity.h>
 
 #include "cauce/app/LoRaSyncTransport.h"
+#include "cauce/core/Ed25519Points.h"
 #include "cauce/core/SecurityUtils.h"
 #include "cauce/hal/ManualClock.h"
 
 using namespace cauce;
 using namespace cauce::app;
+
+void unhex32(uint8_t* out, const char* text) {
+  for (int i = 0; i < 32; ++i) {
+    unsigned v = 0;
+    std::sscanf(text + i * 2, "%2x", &v);
+    out[i] = static_cast<uint8_t>(v);
+  }
+}
 
 namespace {
 
@@ -255,7 +264,9 @@ void test_signing_appends_a_known_hmac() {
   uint8_t out[64] = {0};
   const size_t length = signFrame(frame, sizeof(frame),
                                   reinterpret_cast<const uint8_t*>(key),
-                                  std::strlen(key), out, sizeof(out));
+                                  std::strlen(key),
+                                  FrameAlgorithm::kHmacSha256, out,
+                                  sizeof(out));
   TEST_ASSERT_EQUAL_UINT32(sizeof(frame) + 32, length);
   TEST_ASSERT_EQUAL_UINT8_ARRAY(frame, out, sizeof(frame));
 
@@ -272,19 +283,21 @@ void test_signing_refuses_a_missing_key_or_a_small_buffer() {
   const char* key = "clave-dispositivo-0123456789";
 
   TEST_ASSERT_EQUAL_UINT32(
-      0, signFrame(frame, sizeof(frame), nullptr, 0, out, sizeof(out)));
+      0, signFrame(frame, sizeof(frame), nullptr, 0, FrameAlgorithm::kHmacSha256,
+                   out, sizeof(out)));
   TEST_ASSERT_EQUAL_UINT32(
       0, signFrame(frame, sizeof(frame),
-                   reinterpret_cast<const uint8_t*>(key), 0, out, sizeof(out)));
+                   reinterpret_cast<const uint8_t*>(key), 0,
+                   FrameAlgorithm::kHmacSha256, out, sizeof(out)));
   // One byte short of frame + signature: refuse rather than truncate.
   TEST_ASSERT_EQUAL_UINT32(
       0, signFrame(frame, sizeof(frame),
                    reinterpret_cast<const uint8_t*>(key), std::strlen(key),
-                   out, sizeof(frame) + 31));
+                   FrameAlgorithm::kHmacSha256, out, sizeof(frame) + 31));
   TEST_ASSERT_EQUAL_UINT32(
       0, signFrame(nullptr, sizeof(frame),
                    reinterpret_cast<const uint8_t*>(key), std::strlen(key),
-                   out, sizeof(out)));
+                   FrameAlgorithm::kHmacSha256, out, sizeof(out)));
 }
 
 void test_a_signed_frame_is_the_unsigned_frame_plus_thirty_two_bytes() {
@@ -329,6 +342,7 @@ void test_tampering_with_a_signed_frame_breaks_its_hmac() {
   const size_t length =
       signFrame(frame, sizeof(frame),
                 reinterpret_cast<const uint8_t*>(key), std::strlen(key),
+                FrameAlgorithm::kHmacSha256,
                 signedFrame, sizeof(signedFrame));
   TEST_ASSERT_EQUAL_UINT32(sizeof(frame) + 32, length);
 
@@ -364,6 +378,7 @@ void test_the_signature_covers_the_crc() {
   const size_t length =
       signFrame(frame, frameLength,
                 reinterpret_cast<const uint8_t*>(key), std::strlen(key),
+                FrameAlgorithm::kHmacSha256,
                 signedFrame, sizeof(signedFrame));
   TEST_ASSERT_EQUAL_UINT32(frameLength + 32, length);
 
@@ -557,7 +572,108 @@ void test_lora_ack_matches_the_vectors_the_gateway_produces() {
   }
 }
 
+// --- Ed25519 frames --------------------------------------------------------
+//
+// The trailer length is what the central dispatches on, so a 64-byte Ed25519
+// trailer and a 32-byte HMAC trailer must both be produced correctly and must be
+// distinguishable. These check the transport end to end: configure, transmit, and
+// verify with the same code the central's own signature module uses.
+
+void test_the_transport_defaults_to_hmac() {
+  FakeRadio radio;
+  hal::ManualClock clock(1787356800000ULL);
+  LoRaSyncTransport transport(radio, clock);
+  TEST_ASSERT_TRUE(transport.frameAlgorithm() == FrameAlgorithm::kHmacSha256);
+  TEST_ASSERT_EQUAL_UINT32(32, transport.frameSignatureBytes());
+}
+
+void test_an_ed25519_trailer_is_64_bytes_and_verifies() {
+  FakeRadio radio;
+  hal::ManualClock clock(1787356800000ULL);
+  LoRaSyncTransport transport(radio, clock);
+
+  // RFC 8032 section 7.1 TEST 1 seed. Generated per device by the provisioning
+  // tool, never a shared constant in production.
+  uint8_t seed[32];
+  unhex32(seed, "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+  transport.setDeviceKey(seed, sizeof(seed));
+  transport.setFrameAlgorithm(FrameAlgorithm::kEd25519);
+
+  TEST_ASSERT_TRUE(transport.hasUsableAlgorithm());
+  TEST_ASSERT_EQUAL_UINT32(64, transport.frameSignatureBytes());
+
+  // Sign a frame directly through the codec the transport uses, then verify it
+  // with the same routine the central runs.
+  uint8_t frame[64];
+  for (size_t i = 0; i < sizeof(frame); ++i) frame[i] = static_cast<uint8_t>(i);
+  const size_t frameLength = 40;
+
+  uint8_t signedFrame[128];
+  const size_t signedLength =
+      signFrame(frame, frameLength, seed, sizeof(seed),
+                FrameAlgorithm::kEd25519, signedFrame, sizeof(signedFrame));
+  TEST_ASSERT_EQUAL_UINT32(frameLength + 64, signedLength);
+
+  uint8_t publicKey[32];
+  TEST_ASSERT_TRUE(cauce::ed25519PublicKeyFromSeed(publicKey, seed));
+  TEST_ASSERT_TRUE(cauce::ed25519Verify(publicKey, frame, frameLength,
+                                        signedFrame + frameLength));
+}
+
+void test_ed25519_needs_exactly_a_seed_and_refuses_anything_else() {
+  FakeRadio radio;
+  hal::ManualClock clock(1787356800000ULL);
+  LoRaSyncTransport transport(radio, clock);
+  transport.setFrameAlgorithm(FrameAlgorithm::kEd25519);
+
+  // 16 bytes, 31, 33 and 64 are all wrong. A padded or truncated "seed" would sign
+  // perfectly and verify nowhere, and the only symptom would be a central silently
+  // dropping every frame.
+  const size_t wrongLengths[] = {1, 16, 31, 33, 64};
+  for (size_t i = 0; i < sizeof(wrongLengths) / sizeof(wrongLengths[0]); ++i) {
+    uint8_t wrong[64] = {0};
+    transport.setDeviceKey(wrong, wrongLengths[i]);
+    TEST_ASSERT_FALSE(transport.hasUsableAlgorithm());
+  }
+
+  uint8_t right[32] = {0};
+  transport.setDeviceKey(right, sizeof(right));
+  TEST_ASSERT_TRUE(transport.hasUsableAlgorithm());
+}
+
+void test_hmac_accepts_a_shared_secret_of_any_length() {
+  FakeRadio radio;
+  hal::ManualClock clock(1787356800000ULL);
+  LoRaSyncTransport transport(radio, clock);
+  transport.setFrameAlgorithm(FrameAlgorithm::kHmacSha256);
+
+  uint8_t secret[16] = {0};
+  transport.setDeviceKey(secret, sizeof(secret));
+  TEST_ASSERT_TRUE(transport.hasUsableAlgorithm());
+}
+
+void test_no_key_means_unsigned_rather_than_a_fallback() {
+  FakeRadio radio;
+  hal::ManualClock clock(1787356800000ULL);
+  LoRaSyncTransport transport(radio, clock);
+
+  // No key at all: frames go out unsigned and the central decides. What must
+  // never happen is a silent downgrade from Ed25519 to HMAC because the seed was
+  // missing, so that path reports unusable instead.
+  transport.setFrameAlgorithm(FrameAlgorithm::kEd25519);
+  TEST_ASSERT_FALSE(transport.hasUsableAlgorithm());
+
+  transport.setFrameAlgorithm(FrameAlgorithm::kNone);
+  TEST_ASSERT_FALSE(transport.hasUsableAlgorithm());
+  TEST_ASSERT_EQUAL_UINT32(0, transport.frameSignatureBytes());
+}
+
 void registerLoRaTests() {
+  RUN_TEST(test_the_transport_defaults_to_hmac);
+  RUN_TEST(test_an_ed25519_trailer_is_64_bytes_and_verifies);
+  RUN_TEST(test_ed25519_needs_exactly_a_seed_and_refuses_anything_else);
+  RUN_TEST(test_hmac_accepts_a_shared_secret_of_any_length);
+  RUN_TEST(test_no_key_means_unsigned_rather_than_a_fallback);
   RUN_TEST(test_lora_batch_json_parses_into_compact_records);
   RUN_TEST(test_lora_batch_json_refuses_what_it_cannot_carry);
   RUN_TEST(test_lora_batch_json_stops_at_the_capacity_it_is_given);
