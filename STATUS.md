@@ -101,8 +101,24 @@ not. It overrides any aspirational claim elsewhere.
 - The LoRa frame format, fragmentation, acknowledgement and the forwarding
   loop are written and tested end to end against the central, but there is
   no radio driver and no link budget: the air interface is still unproven.
-- Downlink kinds validate and report but do not reconfigure the node; real
-  actuation needs hardware that can be actuated.
+- Downlink **actuation of physical actuators** needs hardware that can be
+  actuated. The four node-level commands (`set_sampling_interval`,
+  `set_sync_interval`, `request_resync`, `set_led_mode`) do now act, persist
+  across a reboot and report the value applied rather than the value
+  requested.
+- Firmware **image signing**. A node accepts and runs any image that satisfies
+  the manifest. That is the largest remaining gap in the security posture and
+  `docs/en/RUNBOOK.md` says so plainly rather than leaving it implied.
+- ESP-NOW / mDNS peer-to-peer. `Replication` and `IPeerLink` exist and are
+  tested; the radio and discovery do not. This is a Phase 0 decision, not an
+  oversight.
+- A **factory test command**: one invocation that proves a unit works before it
+  ships (sensor read, storage write, join, signed sync, signed downlink).
+- Semantic versioning applied, a release tag, and a reproducible backend build
+  or at least a recorded lockfile hash.
+- Public-key infrastructure beyond Ed25519: there is no Ed25519 **public key to
+  certificate** mapping, so TLS still relies on the shared admin token for API
+  access.
 
 ## Roadmap: what is left, and why
 
@@ -303,6 +319,28 @@ artefact set, **LTS** means features frozen but security still patched, and **EO
 means no patches at all. The target state here is LTS with a stated EOL date, not
 EOL - this code terminates TLS and verifies signatures, and a build with no patch
 channel is a liability rather than a finished product.
+
+**Where each phase actually stands:**
+
+| Phase | State |
+|---|---|
+| 0 - freeze the specification | Not started. Needs a decision on ESP-NOW and one on LoRa. |
+| 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure, uncertainty budget, coverage completeness, test binary isolation and a public certificate remain. |
+| 2 - air interface | Not started. Needs an SX1276 driver and a measured link budget. |
+| 3 - bench | Not started. Needs a board and `docs/en/BENCH_PLAN.md`. |
+| 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory test command and an enclosure do not exist. |
+| 5 - release engineering | SBOM tool, release gate (`.sh` and `.ps1`) and runbook **done**. No tag, no lockfile hash, no reproducible backend build. |
+| 6 - declare the freeze | Not started, and cannot start before Phase 3. |
+
+The release gate is the one thing here that keeps the remaining phases honest:
+`scripts/release-gate.sh` (or `.ps1`) refuses to pass unless the tree is clean, both
+suites and the ESP32 build are green, the SBOM's pins hold, the documentation index
+matches the tree in both languages, Ed25519 is actually wired into the transport and
+codec, `kGroupOrder` still carries its verified hex, and no test is sitting in the
+tree unregistered.
+
+It reports **PASS** at present. That means nothing is obviously broken. It does not
+certify the hardware, and the gate says so on the way out.
 
 ### Hardware-only
 
