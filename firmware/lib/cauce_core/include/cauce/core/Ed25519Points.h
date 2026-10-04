@@ -72,6 +72,18 @@ bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
                       const uint8_t ax[32], const uint8_t ay[32],
                       const uint8_t bx[32], const uint8_t by[32]);
 
+// As above, and also writes the four intermediates A, B, C, D of the formula.
+//
+// Exists because the formula is verified correct for coincident points and
+// wrong for distinct ones, which the eight products alone cannot explain: they
+// are the same products in both cases. Handing out A, B, C and D lets the first
+// one that diverges from the affine derivation name the bug.
+bool ed25519AddPointsTrace(uint8_t outX[32], uint8_t outY[32],
+                            const uint8_t ax[32], const uint8_t ay[32],
+                            const uint8_t bx[32], const uint8_t by[32],
+                            uint8_t traceA[32], uint8_t traceB[32],
+                            uint8_t traceC[32], uint8_t traceD[32]);
+
 // Encodes an affine point, for comparing an addition against a reference.
 void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
                          const uint8_t y[32]);

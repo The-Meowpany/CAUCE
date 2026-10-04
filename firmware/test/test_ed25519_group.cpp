@@ -73,10 +73,11 @@ void test_adding_the_identity_changes_nothing() {
 // --- doubling -----------------------------------------------------------
 
 void test_doubling_matches_the_reference() {
-  for (int i = 0; i + 1 < kCount; ++i) {
+  // Row r holds (r+1)G, so doubling row i needs row 2i+1.
+  for (int i = 0; 2 * i + 1 < kCount; ++i) {
     uint8_t px[32], py[32], ox[32], oy[32], want[32];
     affineOf(kMultiples[i].encoding, px, py);
-    unhex(want, kMultiples[i].doubledEncoding);
+    unhex(want, kMultiples[2 * i + 1].encoding);
 
     // add(P, P) through the general formula, not a dedicated doubling routine:
     // the ladder uses the general formula, so that is what has to be right.
@@ -101,12 +102,14 @@ void test_doubling_matches_the_reference() {
   }
 }
 
-// KNOWN DEFECT, not registered: adding two *distinct* points is wrong.
-// add(G, G) = 2G, add(2G, 2G) = 4G and add(3G, 3G) = 6G all match the
-// reference, as does add(identity, P) = P, so the unified formula handles
-// the coincident case. But 2G + G does not give 3G. Registered as a failing
-// test the moment that is fixed; see STATUS.md.
-void test_adding_two_distinct_points_is_wrong() {
+// Adding two *distinct* points, as opposed to a point to itself.
+//
+// This is the case the doubling test cannot reach, and it is where a
+// reported fault turned out to live - in the reference generator, which built
+// its multiples by doubling while labelling them 1G, 2G, 3G, so "2G + G"
+// was really being compared against 4G. Two implementations agreeing is
+// what makes the disagreement attributable.
+void test_adding_two_distinct_points_matches_the_reference() {
   // (n+1)G reached as nG + G must equal the reference (n+1)G, which exercises
   // a general addition between two different points rather than a doubling.
   for (int i = 1; i < kCount; ++i) {
@@ -217,9 +220,59 @@ void test_decoding_gives_the_reference_affine_coordinates() {
   }
 }
 
+void test_the_intermediates_of_adding_two_distinct_points() {
+  // Which of A, B, C, D first disagrees with the affine derivation. The
+  // reference values below are for 2G + G, computed from the affine inputs:
+  //
+  //   A = (y1 - x1)(y2 - x2)      C = 2 * d * x1*y1 * x2*y2
+  //   B = (y1 + x1)(y2 + x2)      D = 2 * 1 * 1
+  //
+  // Whichever one differs names the bug; if all four agree the fault is in the
+  // final four products instead.
+  uint8_t px[32], py[32], gx[32], gy[32], ox[32], oy[32];
+  uint8_t ta[32], tb[32], tc[32], td[32];
+  affineOf(kMultiples[1].encoding, px, py);  // 2G
+  affineOf(kMultiples[0].encoding, gx, gy);  // G
+
+  TEST_ASSERT_TRUE(cauce::ed25519AddPointsTrace(ox, oy, px, py, gx, gy, ta,
+                                                tb, tc, td));
+
+  static const char* wantA =
+      "7dce1cd36a1871866e21fa55d2f11b6d315ca5599141d9f2b21a37134c81ea70";
+  static const char* wantB =
+      "d0baf0828111dfe2da4a2fe58bb025a91a57dc748a73e0bed6480a4ac0913a4f";
+  static const char* wantC =
+      "6aa3514052e6d875fc7dedc64f3212413b5d6664405961589ceafaaffcdf5439";
+  static const char* wantD =
+      "0200000000000000000000000000000000000000000000000000000000000000";
+
+  struct Case { const char* name; const uint8_t* got; const char* want; };
+  const Case cases[] = {
+      {"A", ta, wantA}, {"B", tb, wantB}, {"C", tc, wantC}, {"D", td, wantD}};
+  for (const Case& c : cases) {
+    uint8_t expected[32];
+    unhex(expected, c.want);
+    if (std::memcmp(c.got, expected, 32) != 0) {
+      char gotHex[65], wantHex[65];
+      static const char* digits = "0123456789abcdef";
+      for (int k = 0; k < 32; ++k) {
+        gotHex[k * 2] = digits[c.got[k] >> 4];
+        gotHex[k * 2 + 1] = digits[c.got[k] & 15];
+        wantHex[k * 2] = digits[expected[k] >> 4];
+        wantHex[k * 2 + 1] = digits[expected[k] & 15];
+      }
+      gotHex[64] = wantHex[64] = 0;
+      std::printf("FAIL intermediate %s of 2G+G\n  got  %s\n  want %s\n",
+                  c.name, gotHex, wantHex);
+    }
+  }
+}
+
 void registerEd25519GroupTests() {
   RUN_TEST(test_adding_the_identity_changes_nothing);
   RUN_TEST(test_decoding_gives_the_reference_affine_coordinates);
+  RUN_TEST(test_adding_two_distinct_points_matches_the_reference);
+  RUN_TEST(test_the_intermediates_of_adding_two_distinct_points);
   RUN_TEST(test_doubling_matches_the_reference);
 
   RUN_TEST(test_the_result_of_every_addition_is_on_the_curve);

@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (245 firmware + 303 backend tests, E2E green)
+## Implemented and verified (247 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -151,35 +151,41 @@ because the 2^256 fold lands back on it, so limb magnitudes compound until
 `int64` overflows; and a shift loop written high-to-low dropped bit 31 of every
 limb, which made scalar reduction return the input's low 32 bits unreduced.
 
-**What remains, and exactly where the fault is.** The group law is now tested on
-its own, against multiples of the base point computed by an implementation written
-from the curve definition. What passes:
+**The group law is now verified, and there was no fault in it.** What passes,
+against multiples of the base point computed by an implementation written from the
+curve definition:
 
 - decoding gives the reference affine `x` and `y`, not merely an encoding that
   round-trips - the blind spot a round-trip test has, since re-encoding a wrong
   `x` reproduces the same bytes;
 - `add(identity, P) == P`;
-- `add(G, G) = 2G`, `add(2G, 2G) = 4G`, `add(3G, 3G) = 6G`, so the unified formula
-  handles the coincident case;
-- every result is on the curve, and `add(P, -P)` is the identity.
+- `add(P, P) == 2P` for every multiple tested;
+- `add(P, Q)` for **distinct** P and Q;
+- every result is on the curve, and `add(P, -P)` is the identity;
+- the four intermediates `A, B, C, D` of the formula, compared against the affine
+  derivation for `2G + G`.
 
-**What fails: adding two *distinct* points.** `2G + G` does not give `3G`. So the
-formula is right for `P == Q` and wrong for `P != Q`, which is not a shape a
-correct unified addition formula can have - the same eight products are evaluated
-in both cases. The suspicion is therefore not the formula but the inputs: the
-result differs from the reference in a way consistent with one operand's
-coordinates being read differently when it is not the same object as the other.
+**What actually went wrong, twice, was the reference generator.** It built the
+multiples by doubling while labelling them `1G, 2G, 3G, ...`, so a test asserting
+`2G + G == 3G` was really comparing against `4G`. Before that it had an
+off-by-one in the doubled encoding. Both faults produced a confident,
+specific-looking "the group law is broken for distinct points" diagnosis, and both
+were in the measurement rather than the code.
 
-The failing case is written up in `test_ed25519_group.cpp` as
-`test_adding_two_distinct_points_is_wrong`, deliberately **not** registered in the
-runner so the suite stays green, with a comment saying it must be registered the
-moment it passes. The next step is to instrument `addPoints` for the `2G + G` case
-and compare each intermediate `a, b, c, d` against the same values computed from
-the affine formula; whichever intermediate diverges names the bug.
+That is the same failure mode as the earlier hand-transcribed `powP58(2)`
+reference and the hand-written `R` value: a wrong expected value is worse than no
+test, because it reports a defect that does not exist. Every reference used by the
+firmware tests is now generated from an independent implementation, and
+`addPointsTrace` exists so the formula's intermediates can be compared directly
+rather than inferred from a final result.
 
-The signing entry points are absent rather than committed returning wrong answers.
-Everything needed to re-add them is in place: the field layer, the scalars mod L,
-the group law, and the RFC 8032 fixtures generated from `cryptography`.
+**What remains is the scalar ladder and the signing entry points**, and every
+prerequisite is now verified: the field layer (14/14), the scalars mod L (6/6), the
+point encoding (round-trip identity), and the group law (the list above). The
+earlier public-key mismatch was very likely this same generator fault, since the
+ladder depends only on the group law and `selectGf`. The next step is to re-add
+`scalarMult`, sign, and test against the RFC 8032 fixtures generated from
+`cryptography`.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 

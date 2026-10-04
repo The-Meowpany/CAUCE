@@ -384,16 +384,57 @@ void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
   ed25519EncodePoint(out, x, y);
 }
 
-bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
-                      const uint8_t ax[32], const uint8_t ay[32],
-                      const uint8_t bx[32], const uint8_t by[32]) {
+bool ed25519AddPointsTrace(uint8_t outX[32], uint8_t outY[32],
+                            const uint8_t ax[32], const uint8_t ay[32],
+                            const uint8_t bx[32], const uint8_t by[32],
+                            uint8_t traceA[32], uint8_t traceB[32],
+                            uint8_t traceC[32], uint8_t traceD[32]) {
   if (!outX || !outY || !ax || !ay || !bx || !by) return false;
   Point pa, pb, sum;
   pointFromAffine(pa, ax, ay);
   pointFromAffine(pb, bx, by);
-  addPoints(sum, pa, pb);
+
+  Gf a, b, c, d, u, v;
+  subGf(u, pa.y, pa.x);
+  subGf(v, pb.y, pb.x);
+  mulGf(a, u, v);
+
+  addGf(u, pa.y, pa.x);
+  addGf(v, pb.y, pb.x);
+  mulGf(b, u, v);
+
+  mulGf(c, pa.t, pb.t);
+  mulGf(c, c, curveD());
+  addGf(c, c, c);
+
+  mulGf(d, pa.z, pb.z);
+  addGf(d, d, d);
+
+  if (traceA) gfToBytes(traceA, a);
+  if (traceB) gfToBytes(traceB, b);
+  if (traceC) gfToBytes(traceC, c);
+  if (traceD) gfToBytes(traceD, d);
+
+  Gf e, f, g, h;
+  subGf(e, b, a);
+  subGf(f, d, c);
+  addGf(g, d, c);
+  addGf(h, b, a);
+
+  mulGf(sum.x, e, f);
+  mulGf(sum.y, g, h);
+  mulGf(sum.t, e, h);
+  mulGf(sum.z, f, g);
+
   affineFromPoint(outX, outY, sum);
   return true;
+}
+
+bool ed25519AddPoints(uint8_t outX[32], uint8_t outY[32],
+                      const uint8_t ax[32], const uint8_t ay[32],
+                      const uint8_t bx[32], const uint8_t by[32]) {
+  return ed25519AddPointsTrace(outX, outY, ax, ay, bx, by, nullptr, nullptr,
+                               nullptr, nullptr);
 }
 
 bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]) {
