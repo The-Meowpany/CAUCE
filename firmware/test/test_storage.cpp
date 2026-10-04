@@ -6,6 +6,8 @@
 #include "cauce/core/RecordCodec.h"
 #include "cauce/hal/MemoryFileSystem.h"
 
+#include "test_suite_isolation.h"
+
 using namespace cauce;
 
 namespace {
@@ -212,6 +214,7 @@ void test_corrupt_checkpoint_falls_back_to_full_scan() {
 }
 
 void registerStorageTests() {
+  TEST_SUITE_MUTATES("storage", "a file-scope cleanup flag the checkpoint tests reset");
 
   RUN_TEST(test_append_and_query_roundtrip);
   RUN_TEST(test_query_pagination_with_skip);

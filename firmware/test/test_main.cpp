@@ -1,5 +1,7 @@
 #include <unity.h>
 
+#include <cstdio>
+
 void registerValidationTests();
 void registerCodecTests();
 void registerStorageTests();
@@ -27,6 +29,9 @@ void registerCommandTests();
 void registerNodeActuatorTests();
 void registerSx1276Tests();
 void registerTextBufferTests();
+void registerSuiteIsolationTests();
+void printIsolationReport();
+unsigned isolationClashCount();
 
 int main() {
   UNITY_BEGIN();
@@ -57,5 +62,14 @@ int main() {
   registerNodeActuatorTests();
   registerSx1276Tests();
   registerTextBufferTests();
+  registerSuiteIsolationTests();
+  printIsolationReport();
+  // A declared directory clash means two suites share a resource and run order
+  // decides which one sees the other's leftovers. Reported above, failed here,
+  // because a report nobody fails on is a convention. See test_suite_isolation.cpp.
+  if (isolationClashCount() != 0) {
+    printf("suite isolation: %u directory clash(es) declared\n", isolationClashCount());
+    return 1;
+  }
   return UNITY_END();
 }

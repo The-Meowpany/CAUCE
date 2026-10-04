@@ -9,7 +9,7 @@
 #include "cauce/core/Types.h"
 #include "cauce/drivers/Bme280Driver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
-#include "cauce/hal/Esp32Sleeper.h"
+#include "cauce/app/Esp32Sleeper.h"
 #include "cauce/hal/MemoryFileSystem.h"
 
 #ifdef ARDUINO

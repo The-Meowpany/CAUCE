@@ -5,6 +5,8 @@
 
 #include "cauce/core/ValidationEngine.h"
 
+#include "test_suite_isolation.h"
+
 using namespace cauce;
 
 namespace {
@@ -153,6 +155,7 @@ void test_time_uncertainty_is_flagged_not_rejected() {
 }
 
 void registerValidationTests() {
+  TEST_SUITE_MUTATES("validation", "one shared ValidationEngine instance across every test");
 
   RUN_TEST(test_valid_temperature_passes);
   RUN_TEST(test_non_finite_value_is_invalid);

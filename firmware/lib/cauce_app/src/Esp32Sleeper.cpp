@@ -1,4 +1,4 @@
-#include "cauce/hal/Esp32Sleeper.h"
+#include "cauce/app/Esp32Sleeper.h"
 
 #ifdef ARDUINO
 #ifdef ARDUINO_ARCH_ESP32

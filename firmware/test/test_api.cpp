@@ -5,6 +5,8 @@
 #include <unity.h>
 
 #include "cauce/app/ApiRouter.h"
+
+#include "test_suite_isolation.h"
 #include "cauce/app/NetworkManager.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
@@ -396,6 +398,7 @@ void test_favicon_returns_204() {
   TEST_ASSERT_EQUAL_UINT(0, r.bytesWritten);
 }
 void registerApiTests() {
+  TEST_SUITE_MUTATES("api", "a shared 3000-byte request body buffer");
   UNITY_BEGIN();
   RUN_TEST(test_unknown_route_returns_404);
   RUN_TEST(test_node_endpoint_reports_identity);
