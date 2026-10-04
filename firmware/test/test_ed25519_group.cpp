@@ -336,6 +336,55 @@ void test_doubling_a_point_whose_z_is_not_one() {
   TEST_ASSERT_TRUE(memcmp(sumX, refX, 32) == 0 && memcmp(sumY, refY, 32) == 0);
 }
 
+// The bisect, and the test that killed the previous conclusion.
+//
+// Add the accumulator to the identity. The identity is (0, 1), Z = 1, so this
+// exercises pointFromProjective and the final divide on a non-unit Z while giving
+// the addition exactly one awkward operand.
+//
+// It returns G. So reconstructing T = X*Y/Z and dividing by a non-unit Z are both
+// correct, which means a correct addition formula would have produced a correct
+// 2G. The "addPoints is wrong on projective inputs" conclusion is therefore
+// withdrawn: the problem is upstream of the code, in group_vectors.inc, whose x
+// and y are the same string in every row.
+//
+// REGISTERED: this one passes, and it is the reason the fixture got caught.
+void test_adding_the_identity_to_a_projective_point() {
+  uint8_t one[32] = {0};
+  one[0] = 1;
+
+  uint8_t x[32], y[32], z[32];
+  TEST_ASSERT_TRUE(cauce::ed25519ScalarMultBaseRaw(x, y, z, one));
+
+  uint8_t identityX[32] = {0}, identityY[32] = {0}, identityZ[32] = {0};
+  identityY[0] = 1;
+  identityZ[0] = 1;
+
+  uint8_t sumX[32], sumY[32];
+  TEST_ASSERT_TRUE(cauce::ed25519AddPointsZ(sumX, sumY, x, y, z, identityX,
+                                            identityY, identityZ));
+
+  uint8_t baseX[32], baseY[32];
+  TEST_ASSERT_TRUE(cauce::ed25519BasePoint(baseX, baseY));
+
+  static const char* digits = "0123456789abcdef";
+  char gotHex[65], wantHex[65];
+  for (int k = 0; k < 32; ++k) {
+    gotHex[k * 2] = digits[sumY[k] >> 4];
+    gotHex[k * 2 + 1] = digits[sumY[k] & 15];
+    wantHex[k * 2] = digits[baseY[k] >> 4];
+    wantHex[k * 2 + 1] = digits[baseY[k] & 15];
+  }
+  gotHex[64] = wantHex[64] = 0;
+
+  if (memcmp(sumX, baseX, 32) == 0 && memcmp(sumY, baseY, 32) == 0) {
+    return;
+  }
+  std::printf("bisect: projective + identity != G, so pointFromProjective is "
+              "wrong\n  got  %s\n  want %s\n", gotHex, wantHex);
+  TEST_ASSERT_TRUE(memcmp(sumX, baseX, 32) == 0 && memcmp(sumY, baseY, 32) == 0);
+}
+
 // NOT REGISTERED: the ladder is broken and this is the test that shows it.
 //
 // The finding is worth more than the failure: `[1]G` is correct and `[2]G` is
@@ -384,6 +433,7 @@ void test_the_ladder_against_reference_multiples_one_at_a_time() {
 }
 
 void registerEd25519GroupTests() {
+  RUN_TEST(test_adding_the_identity_to_a_projective_point);
   RUN_TEST(test_adding_the_identity_changes_nothing);
   RUN_TEST(test_decoding_gives_the_reference_affine_coordinates);
   RUN_TEST(test_adding_two_distinct_points_matches_the_reference);

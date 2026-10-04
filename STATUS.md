@@ -179,35 +179,41 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**`addPoints` is confirmed wrong on projective inputs.** `ed25519AddPointsZ` and
-`ed25519ScalarMultBaseRaw` were added to test this independently of the ladder, and
-the test fails. The ladder's accumulator for `[1]G` is projectively genuine with
-`Z = 4`; the test asserts `Z != 1` so it cannot silently degrade into repeating the
-affine tests, then doubles it by adding it to itself. Result:
+**The fixture is corrupt, which retracts the group-law verification.** Reading
+`firmware/test/group_vectors.inc` directly rather than trusting the tests:
 
 ```
-projective P+P does not match 2G
-  got  c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022
-  want 540a13b37f48c89be36de6c2550e684206d732f99e332bf3510f389ec1650503
+{2, "0ece43284ea1c5835fa4d715458e0d08ace733187d3b043d6c045a9f4c38ab36",
+     "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+     "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
+     "d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"},
 ```
 
-This is the first and only addition on a non-unit `Z` in the suite. It excludes the
-loop and `selectGf`, and it excludes the final affine division too: `[1]G` reaches
-its correct answer through the same inversion and the same divide by `Z`.
+**`x` and `y` are identical in every row.** That is not a point on the curve - it
+would force `x = y`, and the curve equation has no such solution. The same defect
+appears in rows 3, 4 and 5. Row 5's `x` also disagrees with row 4's encoding in
+its trailing digits, which is the signature of the generator that was already
+found to be broken earlier in this work.
 
-The bisect that remains is about `pointFromProjective`, and it is one test. Add the
-accumulator to the **identity** (`Z = 1`):
+So the consequences are larger than the ladder:
 
-- if that returns `G`, then reconstructing `T` and dividing by a non-unit `Z` are
-  both fine and only the pair of non-unit `Z` is broken;
-- if it does not, `pointFromProjective` is wrong, and the suspect is its
-  `T = X*Y/Z` - which nothing has ever checked, because on every affine input `T`
-  is simply `X*Y`.
+- every group-law test in this repository was validated against a fixture whose
+  coordinates are impossible. Those tests passing is not evidence about `addPoints`;
+- the conclusion "`addPoints` is wrong on projective inputs" is **unsafe** and should
+  be treated as withdrawn. `add(P, identity) == G` does hold, which means
+  `pointFromProjective`, its `T = X*Y/Z` and the divide by non-unit `Z` are all
+  correct - so a correct formula would have produced a correct `2G`;
+- the one measurement that is solid: `ed25519ScalarMultBase` for `[2]G` returned
+  `c9a3f86a...9f3cd6022`, and that string appears in the fixture as 2G's `x` *and*
+  its `y`. That is a coincidence worth explaining, not a fault worth fixing.
 
-Both failing tests are kept in `test_ed25519_group.cpp` -
-`test_doubling_a_point_whose_z_is_not_one` and
-`test_the_ladder_against_reference_multiples_one_at_a_time` - **not** registered,
-with the failing coordinates in the repository rather than in a scrollback.
+The work that remains is therefore first and not optional: **regenerate
+`group_vectors.inc` from an independent implementation, with `encoding`, `x` and
+`y` as three genuinely distinct values, and re-run the whole suite.** Until that
+file is trustworthy, nothing above this line should be believed - including this
+paragraph, which is itself only as good as the reading of the file it is based on.
+
+The three failing tests stay in the tree, unregistered, with their outputs.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
