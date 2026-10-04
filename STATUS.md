@@ -342,6 +342,44 @@ tree unregistered.
 It reports **PASS** at present. That means nothing is obviously broken. It does not
 certify the hardware, and the gate says so on the way out.
 
+### Phase 3 - bench: ATTEMPTED, and it found a hard failure
+
+**Result: the firmware does not run on real hardware.** Not "unproven" - broken.
+An ESP32-D0WD-V3 (rev 3.0, WROOM, CH340 USB, **8 MB flash**, so the two-slot OTA
+table fits) was flashed at `COM3` and reboots forever:
+
+```
+rst:0x8 (TG1WDT_SYS_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+[   243][E][vfs_api.cpp:105] open(): /littlefs/config/cauce.conf does not exist
+[   253][E][vfs_api.cpp:105] open(): /littlefs/config/cauce.conf.bak does not exist
+INFO CONFIG_LOADED status=1 node=CAUCE-001
+rst:0x8 (TG1WDT_SYS_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+... repeats every ~9 seconds, forever
+```
+
+The upload succeeded, the hash verified, LittleFS mounted, and the config loaded
+with defaults. Then the task watchdog fires before `loop()` ever logs anything.
+
+**What this is worth.** 274 firmware tests pass, the ESP32 cross-build is clean, and
+the node cannot boot. Every test in this repository runs on the host, and the host
+build defines `CAUCE_HOST_SIMULATION` and links none of the ESP32 code. So "the
+suite is green" said nothing about this, and it never could have. This is the
+single most important finding in the project and it took a bare board and ninety
+seconds to get.
+
+**What is known and what is not.** Known: the fault is after `CONFIG_LOADED` and
+before or inside the first `loop()`, and it is a task watchdog, not a crash - there
+is no panic backtrace, so it is a task starving rather than an assertion. Not yet
+determined: which of the remaining `setup()` steps or the first `loop()` iteration
+blocks. The prime suspect is the first `loop()` statement, `g_networkManager->tick()`,
+attempting a Wi-Fi association with no configured network - but "prime suspect" is a
+guess and the next step is instrumentation, not a fix based on one.
+
+The watchdog registration is itself suspicious and worth checking in the same pass:
+`esp_task_wdt_init(30, true)` followed by `esp_task_wdt_add(NULL)` subscribes the
+**idle** task, not the loop task. An idle-task watchdog trips when the loop task
+never yields, which would produce exactly this signature with no backtrace.
+
 ### Hardware-only
 
 SX1276 driver and link budget, OTA rollback on real flash, BME280/LittleFS/Wi-Fi
