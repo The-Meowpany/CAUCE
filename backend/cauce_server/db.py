@@ -431,6 +431,24 @@ def query(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
     return engine().execute(sql, params).fetchall()
 
 
+def close_engine() -> None:
+    """Closes the shared connection, so the file can be replaced or removed.
+
+    Windows refuses to replace or delete a file any process still holds open, so a
+    restore over the live database needs this first. Harmless anywhere: the next
+    query opens a fresh connection.
+    """
+    global _engine
+    with _engine_lock:
+        if _engine is not None:
+            _engine.close()
+            _engine = None
+
+
+def db_path() -> Path:
+    return Path(settings.db_path)
+
+
 def reset_for_tests() -> None:
     global _engine
     with _engine_lock:
