@@ -94,6 +94,20 @@ class ScriptedBus final : public ISpiBus {
     return false;
   }
 
+  // True if some write to OpMode carried this mode in its mode field. Comparing the
+  // whole byte is the wrong assertion: once LongRangeMode is set the written value is
+  // the mode OR 0x80, so a byte comparison fails on a correct driver - and it passed
+  // for years on one that never left FSK.
+  bool wroteMode(uint8_t mode) const {
+    for (const auto& entry : writes) {
+      if (entry.first == cauce::hal::kRegOpMode &&
+          static_cast<uint8_t>(entry.second & cauce::hal::kModeFieldMask) == mode) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   size_t countWritesTo(uint8_t reg) const {
     size_t n = 0;
     for (const auto& entry : writes) {
@@ -255,22 +269,26 @@ void test_begin_configures_masks_and_the_dio_mapping() {
   TEST_ASSERT_TRUE(rig.spi.wrote(cauce::hal::kRegDioMapping1, 0x40));
 }
 
-// NOT REGISTERED, and it fails. Bit 7 of OpMode is the LongRangeMode selector and
-// without it the radio stays in the FSK reset default, so this driver must NOT
-// be used on hardware until this passes.
+// Registered, and it passes.
 //
-// The mode-mask fix (three bits, not two) is verified and committed: ReceiveContinuous
-// is 0x05 and with a 0x03 mask it was being written as 0x01, which is Standby, so the
-// radio would have transmitted once and then sat deaf. The FRF 64-bit fix is verified
-// and committed: 868.1 MHz * 64 overflows a uint32_t and produced FRF 125 instead of
-// 1736, a radio listening on the wrong frequency.
+// It used to fail, and the two theories about why were both wrong before the real one
+// turned up. The first was that the mode mask was too narrow; widening it to three bits
+// was correct and necessary, and it fixed a different bug - ReceiveContinuous (0x05)
+// written through a two-bit mask became 0x01, Standby, so the radio transmitted once and
+// then sat deaf. The second was that something later in begin() cleared the bit.
 //
-// What is NOT understood: begin() calls writeMasked(OpMode, 0x80, 0x80) and the register
-// ends up 0x01 rather than 0x81. Four writes reach OpMode and the last one clears the
-// bit, and nothing in the driver writes OpMode except the three writeMasked calls.
-// That contradiction is the next thing to resolve, and it is worth resolving before
-// anything else: a driver that never enters LoRa mode is not a slow driver, it is a
-// non-functional one.
+// The actual cause was three registers at the wrong addresses. The FIFO base-address
+// writes used the FSK/OOK map (0x80, 0x81, 0x82) with the SPI write flag stripped, which
+// looked like a flag correction and was not: selecting LoRa switches the register map,
+// and in that map 0x00, 0x01 and 0x02 are RegFifo, RegOpMode and RegFifoAddrPtr-adjacent.
+// So the line intended to park the RX base at the bottom of the FIFO wrote 0x00 to
+// RegOpMode, which cleared LongRangeMode and left the radio in FSK. Every functional test
+// in this file still passed, because a register log full of plausible values at plausible
+// addresses is exactly what a wrong-register bug looks like.
+//
+// What made it findable at last was dumping every write in order and noticing that four
+// writes reached OpMode when only three were supposed to. The two earlier theories were
+// both about code that was behaving correctly.
 void test_begin_actually_sets_the_lora_bit() {
   Rig rig;
   beginSuccessfully(rig);
@@ -374,10 +392,11 @@ void test_send_sets_the_length_stages_the_fifo_and_transmits() {
   const uint8_t payload[6] = {0xCA, 0xCE, 0x01, 0x02, 0x03, 0x04};
   TEST_ASSERT_TRUE(rig.radio.send(payload, sizeof(payload)));
   TEST_ASSERT_TRUE(rig.spi.wrote(cauce::hal::kRegPayloadLength, 6));
-  TEST_ASSERT_TRUE(rig.spi.wrote(cauce::hal::kSpiFifoTxBaseAddr, 0x00));
   TEST_ASSERT_TRUE_MESSAGE(
-      rig.spi.wrote(cauce::hal::kRegOpMode, cauce::hal::kModeTransmit),
-      "the radio was never put into transmit");
+      rig.spi.wrote(cauce::hal::kRegFifoAddrPtr, 0x00),
+      "the FIFO address pointer was not staged at the transmit base");
+  TEST_ASSERT_TRUE_MESSAGE(rig.spi.wroteMode(cauce::hal::kModeTransmit),
+                           "the radio was never put into transmit");
 }
 
 void test_send_returns_to_receive_afterwards() {
@@ -389,8 +408,7 @@ void test_send_returns_to_receive_afterwards() {
   rig.spi.willRaiseIrq(cauce::hal::kIrqTxDone, 1);
   const uint8_t payload[4] = {1, 2, 3, 4};
   TEST_ASSERT_TRUE(rig.radio.send(payload, sizeof(payload)));
-  TEST_ASSERT_TRUE(rig.spi.wrote(cauce::hal::kRegOpMode,
-                                 cauce::hal::kModeReceiveContinuous));
+  TEST_ASSERT_TRUE(rig.spi.wroteMode(cauce::hal::kModeReceiveContinuous));
 }
 
 void test_a_send_that_times_out_parks_in_standby() {
@@ -405,9 +423,8 @@ void test_a_send_that_times_out_parks_in_standby() {
 
   const uint8_t payload[4] = {1, 2, 3, 4};
   TEST_ASSERT_FALSE(rig.radio.send(payload, sizeof(payload)));
-  TEST_ASSERT_TRUE_MESSAGE(
-      rig.spi.wrote(cauce::hal::kRegOpMode, cauce::hal::kModeStandby),
-      "a timed-out send left the radio in transmit");
+  TEST_ASSERT_TRUE_MESSAGE(rig.spi.wroteMode(cauce::hal::kModeStandby),
+                           "a timed-out send left the radio in transmit");
 }
 
 void test_chip_select_is_balanced_after_a_send() {
@@ -464,16 +481,48 @@ void test_receive_rejects_a_zero_length_frame() {
 }
 
 void test_receive_converts_the_optimised_rssi_to_dbm() {
-  // RegOptRssi is RSSI plus 157 on the SX1276. An SX1278 differs, and reading the
-  // wrong register returns a plausible number that is wrong by a constant.
+  // LoRa map: RSSI = RegRssiValue + RegRssiWideband - 164 for the high-frequency band.
+  // Two registers, because the offset lives in one of them and a single-register reading
+  // cannot produce a correct dBm figure at all.
   Rig rig;
   beginSuccessfully(rig);
   rig.spi.registers[kIrqFlagsReg] = cauce::hal::kIrqRxDone;
   rig.spi.registers[cauce::hal::kRegRxNbBytes] = 2;
-  rig.spi.registers[cauce::hal::kRegOptRssi] = 70;  // -87 dBm
+  rig.spi.registers[cauce::hal::kRegRssiValue] = 90;
+  rig.spi.registers[cauce::hal::kRegRssiWideband] = 0;
   uint8_t buffer[64];
   rig.radio.receive(buffer, sizeof(buffer));
-  TEST_ASSERT_EQUAL_INT16(-87, rig.radio.lastRssiDbm());
+  TEST_ASSERT_EQUAL_INT16(-74, rig.radio.lastRssiDbm());
+}
+
+void test_receive_includes_the_wideband_rssi_in_the_conversion() {
+  // The wideband register is signed: it is the offset between the narrowband and the
+  // wideband measurement, and it is negative for a signal below the wideband floor.
+  // Reading it as unsigned would move every reading the wrong way by up to 128 dB.
+  Rig rig;
+  beginSuccessfully(rig);
+  rig.spi.registers[kIrqFlagsReg] = cauce::hal::kIrqRxDone;
+  rig.spi.registers[cauce::hal::kRegRxNbBytes] = 2;
+  rig.spi.registers[cauce::hal::kRegRssiValue] = 90;
+  rig.spi.registers[cauce::hal::kRegRssiWideband] = 0xE2;  // -30
+  uint8_t buffer[64];
+  rig.radio.receive(buffer, sizeof(buffer));
+  TEST_ASSERT_EQUAL_INT16(-104, rig.radio.lastRssiDbm());
+}
+
+void test_the_rssi_read_does_not_touch_the_hop_channel() {
+  // 0x1C is RegHopChannel in the LoRa map. Reading it as RSSI produced a plausible
+  // number that changed whenever the chip hopped.
+  Rig rig;
+  beginSuccessfully(rig);
+  rig.spi.registers[kIrqFlagsReg] = cauce::hal::kIrqRxDone;
+  rig.spi.registers[cauce::hal::kRegRxNbBytes] = 2;
+  rig.spi.registers[cauce::hal::kRegRssiValue] = 90;
+  rig.spi.registers[cauce::hal::kRegRssiWideband] = 0;
+  rig.spi.registers[0x1C] = 200;
+  uint8_t buffer[64];
+  rig.radio.receive(buffer, sizeof(buffer));
+  TEST_ASSERT_EQUAL_INT16(-74, rig.radio.lastRssiDbm());
 }
 
 void test_rssi_is_zero_before_any_frame() {
@@ -563,10 +612,13 @@ void registerSx1276Tests() {
   RUN_TEST(test_receive_rejects_a_frame_larger_than_the_callers_buffer);
   RUN_TEST(test_receive_rejects_a_zero_length_frame);
   RUN_TEST(test_receive_converts_the_optimised_rssi_to_dbm);
+  RUN_TEST(test_receive_includes_the_wideband_rssi_in_the_conversion);
+  RUN_TEST(test_the_rssi_read_does_not_touch_the_hop_channel);
   RUN_TEST(test_rssi_is_zero_before_any_frame);
   RUN_TEST(test_a_good_frame_clears_a_previous_crc_failure);
   RUN_TEST(test_receive_refuses_a_null_buffer);
   RUN_TEST(test_can_send_now_is_false_before_begin);
   RUN_TEST(test_can_send_now_reflects_the_mode);
   RUN_TEST(test_chip_select_stays_balanced_across_a_full_cycle);
+  RUN_TEST(test_begin_actually_sets_the_lora_bit);
 }

@@ -25,8 +25,11 @@
 // monotonicity against the spreading factor by a test, so a correction from the
 // bench is one edit in one table.
 //
-// The RSSI read uses RegOptRssi. That register is the SX1276's; the SX1278 differs,
-// and reading the wrong one returns a plausible number that is off by a constant.
+// The RSSI read uses the LoRa map's RegRssiValue and RegRssiWideband. Neither exists
+// in the FSK/OOK map under those names, and the address this driver used to read,
+// 0x1C, is RegHopChannel in the LoRa map - a register that changes whenever the chip
+// hops, so lastRssiDbm() reported a plausible number that meant nothing. See
+// kRssiOffsetDbmHf in the driver for the conversion.
 
 #include <cstddef>
 #include <cstdint>
@@ -36,46 +39,54 @@
 
 namespace cauce::hal {
 
-// SPI address form of the FIFO registers.
+// THE FIFO REGISTERS, AND WHY THE DATASHEET NUMBERS ARE NOT USED HERE
 //
-// The SX1276 puts the write flag in bit 7 of the SPI address byte, so only seven
-// address bits ever reach the chip. The datasheet's register 0x80 is therefore
-// written as 0x00, 0x81 as 0x01 and 0x82 as 0x02.
+// The SX1276 has two register maps. In FSK/OOK the FIFO pointers are RegFifoTxBaseAddr
+// at 0x80, RegFifoRxBaseAddr at 0x81 and RegFifoRxCurrentAddr at 0x82. Selecting LoRa
+// mode SWITCHES THE MAP, and in that map those same three registers are 0x0E, 0x0F and
+// 0x10, with RegFifoAddrPtr at 0x0D. The datasheet says so in the one sentence that
+// matters: "Upon selection of LoRa mode, the configuration register mapping of the
+// SX1276/77/78/79 changes."
 //
-// This is not a stylistic note. Writing the datasheet number directly sends
-// 0x80 | 0x80 == 0x80, which addresses register 0x00 - the transmit FIFO - so the
-// base-address write lands inside the data buffer and the radio transmits whatever
-// follows it. No host test could have caught it, because the register log looked
-// plausible: the value was written, just to the wrong place.
-constexpr uint8_t kSpiFifoTxBaseAddr = 0x00;
-constexpr uint8_t kSpiFifoRxBaseAddr = 0x01;
-constexpr uint8_t kSpiFifoRxCurrentAddr = 0x02;
+// This driver used to use the FSK/OAK numbers with the write flag stripped - 0x80
+// becomes 0x00, 0x81 becomes 0x01 - and believed that was a write-flag correction. It
+// was not: 0x01 is RegOpMode in the LoRa map. So the line intended to park the RX base
+// address at the bottom of the FIFO wrote zero to RegOpMode instead, which cleared
+// LongRangeMode and left the radio in FSK. That is what test_begin_actually_sets_the_lora_bit
+// caught, after two earlier theories about the same failure had been wrong.
+//
+// The consequence was not subtle. A register log full of plausible values at plausible
+// addresses is exactly what a wrong-register bug looks like, so every functional test in
+// this file passed while the radio could not transmit a single LoRa frame.
+//
+// The values written are memory offsets inside the 256-byte FIFO, not register numbers.
+// Parking both bases at 0x00 is what lets a full 255-byte payload fit in either mode.
+constexpr uint8_t kFifoLowestAddress = 0x00;
 
-// Registers. Spelled out rather than generated, because a reader checking this
-// against a datasheet should find the same names in the same order. The FIFO
-// registers are listed with their datasheet numbers for reference; use the kSpi*
-// constants above to access them.
+// Registers, in the LoRa map. Spelled out rather than generated, because a reader
+// checking this against a datasheet should find the same names in the same order.
 enum Sx1276Register : uint8_t {
   kRegFifo = 0x00,
   kRegOpMode = 0x01,
   kRegLna = 0x0C,
-  kRegDetectOptimize = 0x31,
+  kRegFifoAddrPtr = 0x0D,
+  kRegFifoTxBaseAddr = 0x0E,
+  kRegFifoRxBaseAddr = 0x0F,
+  kRegFifoRxCurrentAddr = 0x10,
   kRegIrqFlagsMask = 0x11,
   kRegIrqFlags = 0x12,
   kRegRxNbBytes = 0x13,
+  kRegRssiValue = 0x1B,
   kRegModemConfig1 = 0x1D,
   kRegModemConfig2 = 0x1E,
   kRegPreambleMsb = 0x20,
   kRegPreambleLsb = 0x21,
   kRegPayloadLength = 0x22,
   kRegModemConfig3 = 0x26,
-  kRegOptRssi = 0x1C,
+  kRegRssiWideband = 0x2C,
+  kRegDetectOptimize = 0x31,
   kRegSyncWord = 0x39,
   kRegDioMapping1 = 0x40,
-  // Datasheet numbers; NOT SPI addresses. See kSpiFifoTxBaseAddr above.
-  kRegFifoTxBaseAddrDatasheet = 0x80,
-  kRegFifoRxBaseAddrDatasheet = 0x81,
-  kRegFifoRxCurrentAddrDatasheet = 0x82,
 };
 
 // OpMode values.

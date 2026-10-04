@@ -10,8 +10,14 @@ namespace {
 constexpr uint32_t kResetSettleMs = 5;
 constexpr uint32_t kModeSettleMs = 1;
 
-// Datasheet: RegOptRssi is RSSI in dBm plus 157.
-constexpr int16_t kOptRssiOffsetDbm = -157;
+// Datasheet, LoRa mode: RSSI = RegRssiValue + RegRssiWideband - Offset, where Offset
+// is 164 for the high-frequency band (137-1020 MHz). This project is 868 MHz only, so
+// that is the offset that applies; a low-frequency part would need 138 or 146 and the
+// constant would have to move with it.
+//
+// The previous single-register conversion with a fixed -157 was the FSK/OOK rule applied
+// to a LoRa reading, and it read RegHopChannel (0x1C) rather than either RSSI register.
+constexpr int16_t kRssiOffsetDbmHf = -164;
 
 // The FIFO size is deliberately not a constant here. It was a uint8_t 256 once,
 // which is 0, and it was compared against the received length - so the guard
@@ -122,10 +128,12 @@ const uint32_t frf = static_cast<uint32_t>(
   writeRegister(0x07, static_cast<uint8_t>(frf >> 8));
   writeRegister(0x08, static_cast<uint8_t>(frf));
 
-  // FIFOs at the ends, so a full 255-byte payload fits either way.
-  writeRegister(kSpiFifoTxBaseAddr, 0x00);
-  writeRegister(kSpiFifoRxBaseAddr, 0x00);
-  writeRegister(kSpiFifoRxCurrentAddr, 0x00);
+  // FIFOs at the bottom of the buffer, so a full 255-byte payload fits either way. The
+  // addresses are LoRa-map registers: 0x0E, 0x0F and 0x0D. Writing the FSK/OOK numbers
+  // 0x80, 0x81 and 0x82 here is what used to clear LongRangeMode - see the header.
+  writeRegister(kRegFifoTxBaseAddr, kFifoLowestAddress);
+  writeRegister(kRegFifoRxBaseAddr, kFifoLowestAddress);
+  writeRegister(kRegFifoAddrPtr, kFifoLowestAddress);
 
   // Only TxDone on DIO0. Everything else is polled, because a second interrupt
   // source needs a second path and nothing here needs one.
@@ -183,8 +191,10 @@ bool Sx1276Radio::send(const uint8_t* data, size_t length) {
   setMode(kModeStandby);
 
   writeRegister(kRegIrqFlags, static_cast<uint8_t>(kIrqTxDone | kIrqPayloadCrcError));
-  writeRegister(kSpiFifoTxBaseAddr, 0x00);
-  writeRegister(kSpiFifoRxCurrentAddr, 0x00);
+  // Point the FIFO address pointer at the transmit base before the burst write. The
+  // old line wrote 0x00 to RegFifo, which is the FIFO data port: a zero byte pushed
+  // into the transmit buffer ahead of the payload.
+  writeRegister(kRegFifoAddrPtr, kFifoLowestAddress);
   writeRegister(kRegPayloadLength, static_cast<uint8_t>(length));
 
   spi_.beginTransaction();
@@ -224,7 +234,12 @@ int Sx1276Radio::receive(uint8_t* buffer, size_t capacity) {
     return -1;
   }
 
-  const uint8_t address = readRegister(kSpiFifoRxCurrentAddr);
+  // RegFifoRxCurrentAddr is 0x10 in the LoRa map. It was read from 0x02, which is
+  // RegFifoAddrPtr in neither map and holds whatever the last burst left behind.
+  const uint8_t address = readRegister(kRegFifoRxCurrentAddr);
+  // The datasheet is explicit that the pointer must be initialised to the value being
+  // read before touching RegFifo, so this write is not redundant with the read above.
+  writeRegister(kRegFifoAddrPtr, address);
   spi_.beginTransaction();
   spi_.transfer(static_cast<uint8_t>(kRegFifo | 0x80));
   // Burst read with an incrementing address, which needs the address's high bit
@@ -246,8 +261,12 @@ int Sx1276Radio::receive(uint8_t* buffer, size_t capacity) {
 
   writeRegister(kRegIrqFlags, static_cast<uint8_t>(kIrqRxDone | kIrqPayloadCrcError));
 
-  const uint8_t optRssi = readRegister(kRegOptRssi);
-  lastRssiDbm_ = static_cast<int16_t>(optRssi) + kOptRssiOffsetDbm;
+  // RegRssiWideband is two's complement, so it is read as a signed byte. Read as
+  // unsigned it turns every reading above the wideband floor into a positive offset.
+  const int8_t wideband = static_cast<int8_t>(readRegister(kRegRssiWideband));
+  lastRssiDbm_ = static_cast<int16_t>(static_cast<int16_t>(readRegister(kRegRssiValue)) +
+                                      static_cast<int16_t>(wideband) +
+                                      kRssiOffsetDbmHf);
 
   setMode(kModeReceiveContinuous);
   return length;
