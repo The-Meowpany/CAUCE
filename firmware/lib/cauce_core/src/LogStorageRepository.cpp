@@ -8,6 +8,8 @@
 
 #include "cauce/core/RecordCodec.h"
 
+constexpr uint16_t kMaxCheckpointSegments = 64;
+
 namespace cauce {
 namespace {
 
@@ -310,16 +312,47 @@ bool LogStorageRepository::tryLoadCheckpoint(CheckpointData& out) {
   const char* ckPath = checkpointPath();
   if (!fs_.exists(ckPath)) return false;
 
-  constexpr int kMaxSegs = 256;
-  char segPaths[kMaxSegs][64];
-  const int found = fs_.listFiles(directory_, segPaths, kMaxSegs);
+  // The segment path table is HEAP allocated, and its size is derived from the
+  // checkpoint file rather than fixed.
+  //
+  // It used to be `char segPaths[256][64]` - 16 KiB on the stack - in a function
+  // called from setup(). The Arduino loop task has an 8 KiB stack, so this overflowed
+  // before it read a single byte. On hardware that surfaced as the node resetting
+  // every nine seconds with a task-watchdog reset and no backtrace, while all 274
+  // host tests stayed green: the host fake filesystem never takes this path and a
+  // stack overflow is invisible until it happens.
+  //
+  // Bounding the emitted count does not bound the table either, so the bound comes
+  // from the checkpoint's own segment count plus one.
+  uint16_t declaredSegs = 0;
+  {
+    const size_t checkpointSize = fs_.fileSize(ckPath);
+    const size_t fixed = sizeof(kCkMagic) + 12 + 2 + 4 + kMeasurementPayloadSize;
+    if (checkpointSize > fixed) {
+      declaredSegs = static_cast<uint16_t>((checkpointSize - fixed) / 9);
+      if (declaredSegs > kMaxCheckpointSegments) {
+        declaredSegs = kMaxCheckpointSegments;
+      }
+    }
+  }
+
+  const int capacity = static_cast<int>(declaredSegs) + 1;
+  std::vector<char> segPaths(static_cast<size_t>(capacity) * 64, '\0');
+  auto pathAt = [&segPaths](int i) {
+    return segPaths.data() + static_cast<size_t>(i) * 64;
+  };
+  const int found = fs_.listFiles(directory_,
+                                  reinterpret_cast<char (*)[64]>(segPaths.data()),
+                                  capacity);
+  if (found <= 0) return false;
 
   std::vector<std::pair<uint32_t, uint32_t>> actual;
   for (int i = 0; i < found; ++i) {
     uint32_t idx = 0;
-    if (!parseSegmentName(segPaths[i], idx)) continue;
+    const char* segPath = pathAt(i);
+    if (!parseSegmentName(segPath, idx)) continue;
     actual.emplace_back(idx,
-                        static_cast<uint32_t>(fs_.fileSize(segPaths[i])));
+                        static_cast<uint32_t>(fs_.fileSize(segPath)));
   }
   std::sort(actual.begin(), actual.end());
   if (actual.empty()) return false;

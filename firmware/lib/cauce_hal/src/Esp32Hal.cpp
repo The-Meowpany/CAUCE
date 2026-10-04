@@ -117,8 +117,29 @@ int Esp32LittleFs::listFiles(const char* directory, char (*outPaths)[64],
   int count = 0;
   File dir = LittleFS.open(directory, FILE_READ);
   if (!dir || !dir.isDirectory()) return 0;
+
+  // ITERATIONS ARE BOUNDED SEPARATELY FROM EMITTED FILES.
+  //
+  // Two ways this loop used to hang forever on real hardware, both invisible to the
+  // host suite because this file is behind an #ifdef and every host test uses a
+  // fake filesystem:
+  //
+  // 1. `count` only advances for a real file, so a directory containing only
+  //    subdirectories or dot entries never reached maxItems and iterated forever.
+  //    Bounding the emitted count does not bound the iterations.
+  // 2. Calling entry.close() before dir.openNextFile() makes arduino-esp32 return
+  //    the SAME entry again, which turns any non-empty directory into an infinite
+  //    loop. The symptom on hardware was a task-watchdog reset with no panic
+  //    backtrace, every nine seconds, with 274 host tests green - because the loop
+  //    never yielded and the idle task is what the watchdog was watching.
+  //
+  // entry is reassigned, not closed: the File destructor and the assignment handle
+  // cleanup, and calling close() here is what broke the iterator.
+  const int kMaxIterations = 512;
+  int iterations = 0;
   File entry = dir.openNextFile();
-  while (entry && count < maxItems) {
+  while (entry && count < maxItems && iterations < kMaxIterations) {
+    ++iterations;
     // File::name() returns const char* on arduino-esp32 2.x and String on 3.x.
     // Wrapping in String compiles against both without a version check.
     const String name = String(entry.name());
@@ -127,9 +148,8 @@ int Esp32LittleFs::listFiles(const char* directory, char (*outPaths)[64],
                        (raw[1] == '\0' || (raw[1] == '.' && raw[2] == '\0'));
     if (!isDot && !entry.isDirectory() && raw[0] != '\0') {
       snprintf(outPaths[count], 64, "%s/%s", directory, raw);
-      count++;
+      ++count;
     }
-    entry.close();
     entry = dir.openNextFile();
   }
   dir.close();

@@ -140,6 +140,7 @@ bool cmdSetLedMode(const char* payload, char* detail, size_t cap) {
 
 }  // namespace
 
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -196,8 +197,20 @@ void setup() {
   g_scheduler->addSensor(g_bme);
   g_scheduler->beginAllSensors();
 
-  g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
+g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
                                           *g_logger, g_health);
+  // WiFi mode is set here, before anything opens a socket, and not left to
+  // NetworkManager later.
+  //
+  // WebServer::begin() on arduino-esp32 2.0.17 restarts the chip on hardware if the
+  // radio has no mode yet: NetworkServer::begin() reaches for the default netif and
+  // aborts rather than failing. It showed up as rst:0xc immediately after the route
+  // registrations with 263 KB of free heap, so it was not memory, and with no
+  // backtrace, so it was abort() and not a crash in our code.
+  //
+  // NetworkManager still sets up station and softAP; this only establishes the mode
+  // early enough that opening a socket is legal.
+  WiFi.mode(WIFI_STA);
   g_webServer = new WebServer(80);
   g_apiServer = new cauce::app::Esp32ApiServer(*g_webServer, *g_apiRouter);
   g_apiServer->begin();
