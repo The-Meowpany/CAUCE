@@ -1,4 +1,5 @@
 #include "cauce/core/Ed25519Points.h"
+#include "cauce/core/Sha512.h"
 
 #include <cstring>
 
@@ -578,6 +579,238 @@ bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]) {
   Point p;
   scalarMultBase(p, scalar);
   encodeProjective(out, p);
+  return true;
+}
+
+// --- scalars mod the group order -------------------------------------------
+
+// L = 2^252 + 27742317777372353535851937790883648493, little-endian.
+//
+// Checked against Python before being written down: `L.to_bytes(32, 'little')`
+// gives edd3f55c 1a631258 d69cf7a2 def9de14, then fifteen zero bytes and 0x10.
+// The first version of this constant dropped the 0x58 in the middle, which shifted
+// every byte after it and still declared 32 of them, so it compiled and reduced to a
+// plausible-looking wrong scalar every time.
+const uint8_t kGroupOrder[32] = {
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+    0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10};
+
+// a >= L, little-endian.
+bool atLeastGroupOrder(const uint8_t a[32]) {
+  for (int i = 31; i >= 0; --i) {
+    if (a[i] != kGroupOrder[i]) return a[i] > kGroupOrder[i];
+  }
+  return true;
+}
+
+void subtractGroupOrder(uint8_t a[32]) {
+  int borrow = 0;
+  for (int i = 0; i < 32; ++i) {
+    int d = static_cast<int>(a[i]) - kGroupOrder[i] - borrow;
+    borrow = 0;
+    if (d < 0) {
+      d += 256;
+      borrow = 1;
+    }
+    a[i] = static_cast<uint8_t>(d);
+  }
+}
+
+// out = in mod L, over a 64-byte little-endian input.
+//
+// One bit at a time, and that is a deliberate choice: a wide reduction needs the
+// 64x64->128 multiply this file exists to avoid, and this runs twice per
+// signature on a message of a few dozen bytes. The accumulator stays below L after
+// every step, so doubling it cannot reach 2^256.
+void reduceModGroupOrder(uint8_t out[32], const uint8_t in[64]) {
+  uint8_t acc[32] = {0};
+  for (int bit = 511; bit >= 0; --bit) {
+    uint8_t carry = static_cast<uint8_t>((in[bit >> 3] >> (bit & 7)) & 1);
+    for (int i = 0; i < 32; ++i) {
+      const uint8_t next = static_cast<uint8_t>(acc[i] >> 7);
+      acc[i] = static_cast<uint8_t>((acc[i] << 1) | carry);
+      carry = next;
+    }
+    if (carry || atLeastGroupOrder(acc)) subtractGroupOrder(acc);
+  }
+  std::memcpy(out, acc, 32);
+}
+
+// RFC 8032: clear the low three bits, clear the top bit, set bit 254.
+void clampScalar(uint8_t a[32]) {
+  a[0] = static_cast<uint8_t>(a[0] & 248);
+  a[31] = static_cast<uint8_t>(a[31] & 127);
+  a[31] = static_cast<uint8_t>(a[31] | 64);
+}
+
+// Plain 256x256 -> 512 schoolbook multiply. Deliberately NOT the field multiply:
+// this one must not fold 2^256 down by 38, because the result is reduced mod L
+// afterwards, not mod p.
+void mulBytes256(uint8_t out[64], const uint8_t a[32], const uint8_t b[32]) {
+  uint8_t t[64] = {0};
+  for (int i = 0; i < 32; ++i) {
+    unsigned carry = 0;
+    for (int j = 0; j < 32; ++j) {
+      const unsigned cur = t[i + j] + static_cast<unsigned>(a[i]) * b[j] + carry;
+      t[i + j] = static_cast<uint8_t>(cur);
+      carry = cur >> 8;
+    }
+    int k = i + 32;
+    while (carry != 0 && k < 64) {
+      const unsigned cur = t[k] + carry;
+      t[k] = static_cast<uint8_t>(cur);
+      carry = cur >> 8;
+      ++k;
+    }
+  }
+  std::memcpy(out, t, 64);
+}
+
+// out = a + b, where b is a full 64-byte product. The result is 65 bits when it
+// overflows 2^256, and reduceModGroupOrder accepts 64 bytes, so a carry out of the
+// top would be lost. It cannot happen here: b = k*a with a < 2^256 and k < L <
+// 2^253, and the caller adds r < L, which does reach 2^256 - hence bit 256 is
+// written to out[32] rather than dropped.
+void addBytesWithCarry(uint8_t out[65], const uint8_t a[32], const uint8_t b[64]) {
+  unsigned carry = 0;
+  for (int i = 0; i < 32; ++i) {
+    const unsigned cur = static_cast<unsigned>(a[i]) + b[i] + carry;
+    out[i] = static_cast<uint8_t>(cur);
+    carry = cur >> 8;
+  }
+  for (int i = 32; i < 64; ++i) {
+    const unsigned cur = static_cast<unsigned>(b[i]) + carry;
+    out[i] = static_cast<uint8_t>(cur);
+    carry = cur >> 8;
+  }
+  out[64] = static_cast<uint8_t>(carry);
+}
+
+bool scalarMultAffine(uint8_t outX[32], uint8_t outY[32],
+                      const uint8_t scalar[32], const uint8_t px[32],
+                      const uint8_t py[32]) {
+  if (!outX || !outY || !scalar || !px || !py) return false;
+  Gf gx, gy;
+  loadGf(gx, px);
+  loadGf(gy, py);
+  normalizeLimbs(gx);
+  normalizeLimbs(gy);
+  if (!onCurve(gx, gy)) return false;
+  Point p, q;
+  pointFromAffine(p, px, py);
+  scalarMult(q, p, scalar);
+  affineFromPoint(outX, outY, q);
+  return true;
+}
+
+// --- signing ---------------------------------------------------------------
+
+bool ed25519PublicKeyFromSeed(uint8_t out[32], const uint8_t seed[32]) {
+  if (!out || !seed) return false;
+  uint8_t h[64];
+  sha512(seed, 32, h);
+  clampScalar(h);
+  return ed25519ScalarMultBase(out, h);
+}
+
+bool ed25519Sign(uint8_t out[64], const uint8_t seed[32],
+                 const uint8_t* message, size_t messageLength) {
+  if (!out || !seed || (!message && messageLength != 0)) return false;
+
+  uint8_t h[64];
+  sha512(seed, 32, h);
+  uint8_t a[32];
+  std::memcpy(a, h, 32);
+  clampScalar(a);
+  const uint8_t* prefix = h + 32;
+
+  uint8_t publicKey[32];
+  if (!ed25519ScalarMultBase(publicKey, a)) return false;
+
+  Sha512Ctx ctx;
+  uint8_t digest[64];
+
+  // r = SHA-512(prefix || M) mod L, so a repeated message does not repeat R.
+  sha512Begin(&ctx);
+  sha512Append(&ctx, prefix, 32);
+  if (messageLength != 0) sha512Append(&ctx, message, messageLength);
+  sha512Finish(&ctx, digest);
+  uint8_t r[32];
+  reduceModGroupOrder(r, digest);
+
+  uint8_t rEncoded[32];
+  if (!ed25519ScalarMultBase(rEncoded, r)) return false;
+
+  // k = SHA-512(R || A || M) mod L, which binds the signature to this key and
+  // this message and makes it non-interactive.
+  sha512Begin(&ctx);
+  sha512Append(&ctx, rEncoded, 32);
+  sha512Append(&ctx, publicKey, 32);
+  if (messageLength != 0) sha512Append(&ctx, message, messageLength);
+  sha512Finish(&ctx, digest);
+  uint8_t k[32];
+  reduceModGroupOrder(k, digest);
+
+  // S = (r + k*a) mod L
+  uint8_t product[64];
+  mulBytes256(product, k, a);
+  uint8_t sum[65];
+  addBytesWithCarry(sum, r, product);
+  uint8_t s[32];
+  reduceModGroupOrder(s, sum);
+
+  std::memcpy(out, rEncoded, 32);
+  std::memcpy(out + 32, s, 32);
+  return true;
+}
+
+bool ed25519Verify(const uint8_t publicKey[32], const uint8_t* message,
+                   size_t messageLength, const uint8_t signature[64]) {
+  if (!publicKey || !signature || (!message && messageLength != 0)) return false;
+
+  // A non-canonical S makes the signature malleable: S and S + L both verify, so
+  // an attacker could mint a second valid signature for the same frame.
+  if (atLeastGroupOrder(signature + 32)) return false;
+
+  uint8_t rx[32], ry[32];
+  if (!ed25519DecodePoint(signature, rx, ry)) return false;
+  uint8_t ax[32], ay[32];
+  if (!ed25519DecodePoint(publicKey, ax, ay)) return false;
+
+  Sha512Ctx ctx;
+  uint8_t digest[64];
+  sha512Begin(&ctx);
+  sha512Append(&ctx, signature, 32);
+  sha512Append(&ctx, publicKey, 32);
+  if (messageLength != 0) sha512Append(&ctx, message, messageLength);
+  sha512Finish(&ctx, digest);
+  uint8_t k[32];
+  reduceModGroupOrder(k, digest);
+
+  // [S]B == R + [k]A
+  uint8_t kax[32], kay[32];
+  if (!scalarMultAffine(kax, kay, k, ax, ay)) return false;
+  uint8_t sumX[32], sumY[32];
+  if (!ed25519AddPoints(sumX, sumY, kax, kay, rx, ry)) return false;
+  uint8_t rhs[32];
+  ed25519EncodeAffine(rhs, sumX, sumY);
+
+  uint8_t lhs[32];
+  if (!ed25519ScalarMultBase(lhs, signature + 32)) return false;
+
+  uint8_t diff = 0;
+  for (int i = 0; i < 32; ++i) diff = static_cast<uint8_t>(diff | (lhs[i] ^ rhs[i]));
+  return diff == 0;
+}
+
+bool ed25519ScalarMultPoint(uint8_t out[32], const uint8_t scalar[32],
+                            const uint8_t px[32], const uint8_t py[32]) {
+  if (!out || !scalar || !px || !py) return false;
+  uint8_t qx[32], qy[32];
+  if (!scalarMultAffine(qx, qy, scalar, px, py)) return false;
+  ed25519EncodeAffine(out, qx, qy);
   return true;
 }
 

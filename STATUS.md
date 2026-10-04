@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (251 firmware + 303 backend tests, E2E green)
+## Implemented and verified (259 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -246,9 +246,36 @@ decoder was never the thing under test.
   is wrong but self-consistent cannot pass.
 - `test_the_core_decoder_matches_the_fixture` - decode against `affineX`/`affineY`.
 
-Still open in C2: key derivation from a seed, signing and verification, and wiring
-the algorithm choice into `LoRaSyncTransport`. `point_vectors.inc` carries RFC 8032
-vectors for exactly that step.
+**Still open in C2: wiring the algorithm choice into `LoRaSyncTransport`.**
+
+### C2b - signing (DONE)
+
+`ed25519PublicKeyFromSeed`, `ed25519Sign` and `ed25519Verify` are implemented and
+tested against RFC 8032 section 7.1, cross-checked against `cryptography` rather
+than against themselves. `firmware/test/tools/gen_ed25519_vectors.py` is committed
+so the fixture can be regenerated and argued with.
+
+Two things that were wrong and are worth not repeating:
+
+- **`kGroupOrder` was written by hand with a byte missing.** The array dropped the
+  `0x58` in the middle, which shifted every later byte left and still declared 32
+  elements, so it compiled. It produced a plausible-looking wrong scalar on every
+  reduction. `L` is now `L.to_bytes(32, 'little')` copied from Python, with the hex
+  written out in the comment so a future reader can check it without running
+  anything.
+- **The generator had `b"72"` where it meant the byte `0x72`.** Python reads that as
+  the two ASCII characters, so the public keys came out right and the signatures
+  wrong - which is exactly the shape of a broken implementation and would have been
+  very hard to see. Messages are now given as hex strings and converted with
+  `bytes.fromhex`, and `unhexHex` exists in the test for the same reason.
+
+Signing rejects nothing on the way in beyond null arguments. Verification rejects a
+non-canonical `S`, without which `S` and `S + L` would both validate and a signed
+frame could be rewritten into a second, differently signed, equally valid frame.
+
+Neither signing nor verification is constant-time, and that is a real limitation of
+this implementation rather than an oversight. The comment on each entry point says
+so, and says under what threat model it is acceptable.
 
 `test_adding_the_identity_to_a_projective_point` stays registered and passing. The
 ladder test and the projective doubling test stay in the tree, unregistered, with

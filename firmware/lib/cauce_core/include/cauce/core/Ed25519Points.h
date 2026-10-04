@@ -128,4 +128,43 @@ bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]);
 bool ed25519ScalarMultBaseRaw(uint8_t outX[32], uint8_t outY[32],
                               uint8_t outZ[32], const uint8_t scalar[32]);
 
+// --- signing ---------------------------------------------------------------
+
+constexpr size_t kEd25519SeedBytes = 32;
+constexpr size_t kEd25519SignatureBytes = 64;
+
+// Encodes [scalar] * (px, py) for an arbitrary point, used by verification.
+bool ed25519ScalarMultPoint(uint8_t out[32], const uint8_t scalar[32],
+                            const uint8_t px[32], const uint8_t py[32]);
+
+// The public key for a 32-byte seed: SHA-512, clamp, multiply the base point.
+//
+// Takes the seed, not the 64-byte hash, so a caller cannot accidentally pass
+// already-hashed material. Returns false on a null argument.
+bool ed25519PublicKeyFromSeed(uint8_t out[kEd25519PublicKeyBytes],
+                              const uint8_t seed[kEd25519SeedBytes]);
+
+// A 64-byte signature over `message`, as R || S.
+//
+// Deterministic, which is what Ed25519 specifies: the nonce comes from the seed
+// and the message, so no RNG is involved and no RNG state can be got wrong.
+//
+// Not constant-time. The scalar ladder and the carries act on values derived from
+// the key, so an attacker able to measure signing time locally at high resolution
+// may recover the private key. The threat model here is a hostile relay or central,
+// neither of which sees anything but the signature. Where the device itself must be
+// assumed hostile, use a constant-time library.
+bool ed25519Sign(uint8_t out[kEd25519SignatureBytes],
+                 const uint8_t seed[kEd25519SeedBytes], const uint8_t* message,
+                 size_t messageLength);
+
+// True when `signature` is a valid signature by `publicKey` over `message`.
+//
+// Rejects an S that is not canonically reduced. Without that check S and S + L both
+// verify, and a valid frame's signature could be rewritten into a second valid one
+// with no change to what it means - which would defeat the reason for signing.
+bool ed25519Verify(const uint8_t publicKey[kEd25519PublicKeyBytes],
+                   const uint8_t* message, size_t messageLength,
+                   const uint8_t signature[kEd25519SignatureBytes]);
+
 }  // namespace cauce
