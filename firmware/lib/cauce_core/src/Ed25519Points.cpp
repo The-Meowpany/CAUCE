@@ -497,15 +497,23 @@ bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]) {
 // curveD - live in the unnamed namespace above. Unnamed-namespace members are
 // visible in the enclosing scope, which is why no extra namespace is opened here.
 
-// p = swap ? q : p, with no branch on `swap`. Selecting rather than branching is
-// what keeps a secret bit out of the branch predictor.
-void selectGf(Gf p, const Gf q, int swap) {
-  const int64_t mask = swap ? ~static_cast<int64_t>(0) : 0;
-  for (int i = 0; i < 16; ++i) p[i] = (p[i] & ~mask) | (q[i] & mask);
+// out = takeIt ? take : keep, with no branch on `takeIt`. Selecting rather than
+// branching is what keeps a secret bit out of the branch predictor.
+void selectGf(Gf out, const Gf keep, const Gf take, int takeIt) {
+  const int64_t mask = takeIt ? ~static_cast<int64_t>(0) : 0;
+  for (int i = 0; i < 16; ++i) out[i] = (keep[i] & ~mask) | (take[i] & mask);
 }
 
 // out = scalar * p: double-and-add where the addition always runs and the result
 // is chosen afterwards, so the same work happens whatever the bit is.
+//
+// The recurrence is acc = bit ? 2*acc + p : 2*acc, so the two candidates are
+// `doubled` and `sum` and the old acc is never a candidate. Selecting between acc
+// and sum instead - the obvious transcription - silently drops the doubling on
+// every clear bit and yields (2^popcount(scalar) - 1) * p, which is 1, 1, 3, 1, 3,
+// 3, 7 for the scalars 1 to 7. Every odd scalar comes out right and every even one
+// collapses onto the odd one below it, which is a very easy pattern to mistake for
+// a reference bug.
 void scalarMult(Point& out, const Point& p, const uint8_t scalar[32]) {
   Point acc;
   identityPoint(acc);
@@ -514,13 +522,11 @@ void scalarMult(Point& out, const Point& p, const uint8_t scalar[32]) {
     addPoints(doubled, acc, acc);
     addPoints(sum, doubled, p);
     const int swap = (scalar[bit >> 3] >> (bit & 7)) & 1;
-    // The four pairs below are the whole of the secret-dependent control flow.
-    // Transposing z with t here is invisible to any test that only ever reaches
-    // the identity, because doubling the identity is free.
-    selectGf(acc.x, sum.x, swap);
-    selectGf(acc.y, sum.y, swap);
-    selectGf(acc.z, sum.z, swap);
-    selectGf(acc.t, sum.t, swap);
+    // The four calls below are the whole of the secret-dependent control flow.
+    selectGf(acc.x, doubled.x, sum.x, swap);
+    selectGf(acc.y, doubled.y, sum.y, swap);
+    selectGf(acc.z, doubled.z, sum.z, swap);
+    selectGf(acc.t, doubled.t, sum.t, swap);
   }
   out = acc;
 }

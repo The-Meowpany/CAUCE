@@ -24,7 +24,6 @@ struct Multiple {
   const char* affineX;
   const char* affineY;
   const char* encoding;
-  const char* doubledEncoding;
 };
 
 const Multiple kMultiples[] = {
@@ -319,7 +318,7 @@ void test_doubling_a_point_whose_z_is_not_one() {
 
   uint8_t refBytes[32], refX[32], refY[32];
   unhex(refBytes, kMultiples[1].encoding);
-  TEST_ASSERT_TRUE(cauce::ed25519DecodePoint(refX, refY, refBytes));
+  TEST_ASSERT_TRUE(cauce::ed25519DecodePoint(refBytes, refX, refY));
   if (memcmp(sumX, refX, 32) != 0 || memcmp(sumY, refY, 32) != 0) {
     static const char* digits = "0123456789abcdef";
     char gotHex[65], wantHex[65];
@@ -432,7 +431,143 @@ void test_the_ladder_against_reference_multiples_one_at_a_time() {
   TEST_ASSERT_TRUE(allOk);
 }
 
+void test_probe() {
+  static const char* d = "0123456789abcdef";
+  for (int n = 1; n <= kCount; ++n) {
+    uint8_t buffer[32] = {0};
+    buffer[0] = static_cast<uint8_t>(n);
+    uint8_t got[32];
+    cauce::ed25519ScalarMultBase(got, buffer);
+    uint8_t want[32];
+    unhex(want, kMultiples[n - 1].encoding);
+    char gh[65];
+    for (int k = 0; k < 32; ++k) {
+      gh[k * 2] = d[got[k] >> 4];
+      gh[k * 2 + 1] = d[got[k] & 15];
+    }
+    gh[64] = 0;
+    bool ok = memcmp(got, want, 32) == 0;
+    uint8_t dy[32], dx[32];
+    cauce::ed25519DecodePoint(dx, dy, want);
+    uint8_t ey[32];
+    unhex(ey, kMultiples[n - 1].affineY);
+    std::printf("PROBE n=%d in=%d %s got=%s selfconsistent=%d\n", n, buffer[0],
+                ok ? "OK  " : "FAIL", gh,
+                memcmp(dy, ey, 32) == 0 ? 1 : 0);
+  }
+}
+
+// The scalar ladder against every reference multiple in the fixture.
+//
+// This is the test that was missing while the ladder was wrong. Its shape matters:
+// it must include an even scalar. The broken ladder produced
+// (2^popcount(scalar) - 1) * p, so 1, 3, 5 and 7 came out right and 2, 4 and 6
+// collapsed onto the odd multiple below them. A test with only odd scalars, or with
+// scalar 1, would have passed throughout.
+void test_every_reference_multiple_is_reproduced() {
+  for (int n = 1; n <= kCount; ++n) {
+    uint8_t buffer[32] = {0};
+    buffer[0] = static_cast<uint8_t>(n);
+    uint8_t got[32], want[32];
+    TEST_ASSERT_TRUE(cauce::ed25519ScalarMultBase(got, buffer));
+    unhex(want, kMultiples[n - 1].encoding);
+    if (memcmp(got, want, 32) != 0) {
+      static const char* d = "0123456789abcdef";
+      char gotHex[65], wantHex[65];
+      for (int k = 0; k < 32; ++k) {
+        gotHex[k * 2] = d[got[k] >> 4];
+        gotHex[k * 2 + 1] = d[got[k] & 15];
+        wantHex[k * 2] = d[want[k] >> 4];
+        wantHex[k * 2 + 1] = d[want[k] & 15];
+      }
+      gotHex[64] = wantHex[64] = 0;
+      std::printf("ladder [%d]G MISMATCH\n  got  %s\n  want %s\n", n, gotHex,
+                  wantHex);
+    }
+    TEST_ASSERT_TRUE(memcmp(got, want, 32) == 0);
+  }
+}
+
+// Doubling must double, checked against the group law rather than against the
+// fixture. The group law is verified independently of the ladder, so this ties the
+// two together instead of letting a ladder that is wrong but self-consistent pass.
+//
+// This is also the check that was missing while the ladder dropped its doublings.
+// Ladder(2n) against a fixture column would have been the natural test, but that
+// column held the next multiple rather than the double, so it agreed with the
+// broken ladder for some inputs and hid the fault.
+void test_doubling_agrees_with_the_group_law() {
+  for (int n = 1; n <= kCount; ++n) {
+    uint8_t encoded[32], x[32], y[32];
+    unhex(encoded, kMultiples[n - 1].encoding);
+    TEST_ASSERT_TRUE(cauce::ed25519DecodePoint(encoded, x, y));
+
+    uint8_t sumX[32], sumY[32];
+    TEST_ASSERT_TRUE(cauce::ed25519AddPoints(sumX, sumY, x, y, x, y));
+    uint8_t viaGroupLaw[32];
+    cauce::ed25519EncodeAffine(viaGroupLaw, sumX, sumY);
+
+    uint8_t doubledScalar[32] = {0};
+    doubledScalar[0] = static_cast<uint8_t>(2 * n);
+    uint8_t viaLadder[32];
+    TEST_ASSERT_TRUE(cauce::ed25519ScalarMultBase(viaLadder, doubledScalar));
+
+    if (memcmp(viaLadder, viaGroupLaw, 32) != 0) {
+      static const char* d = "0123456789abcdef";
+      char l[65], g[65];
+      for (int k = 0; k < 32; ++k) {
+        l[k * 2] = d[viaLadder[k] >> 4];
+        l[k * 2 + 1] = d[viaLadder[k] & 15];
+        g[k * 2] = d[viaGroupLaw[k] >> 4];
+        g[k * 2 + 1] = d[viaGroupLaw[k] & 15];
+      }
+      l[64] = g[64] = 0;
+      std::printf("ladder [%d]G disagrees with nG + nG\n  ladder %s\n  group  %s\n",
+                  2 * n, l, g);
+    }
+    TEST_ASSERT_TRUE(memcmp(viaLadder, viaGroupLaw, 32) == 0);
+  }
+}
+
+// The core decoder, against the fixture's own affine coordinates.
+//
+// This test did not exist, and that is why a fault in ed25519DecodePoint survived:
+// test_decoding_gives_the_reference_affine_coordinates decodes with `affineOf`, a
+// helper local to the test file, so the production decoder was never the thing under
+// test. Every group-law test inherited that blindness, because they take their
+// operands from a local decode.
+void test_the_core_decoder_matches_the_fixture() {
+  static const char* d = "0123456789abcdef";
+  for (int n = 1; n <= kCount; ++n) {
+    uint8_t encoded[32], x[32], y[32], wantX[32], wantY[32];
+    unhex(encoded, kMultiples[n - 1].encoding);
+    unhex(wantX, kMultiples[n - 1].affineX);
+    unhex(wantY, kMultiples[n - 1].affineY);
+    if (!cauce::ed25519DecodePoint(encoded, x, y)) {
+      std::printf("core decoder rejected row %d\n", n);
+      TEST_ASSERT_TRUE(false);
+    }
+    if (memcmp(x, wantX, 32) != 0 || memcmp(y, wantY, 32) != 0) {
+      char gx[65], wx[65], gy[65], wy[65];
+      for (int k = 0; k < 32; ++k) {
+        gx[k * 2] = d[x[k] >> 4]; gx[k * 2 + 1] = d[x[k] & 15];
+        wx[k * 2] = d[wantX[k] >> 4]; wx[k * 2 + 1] = d[wantX[k] & 15];
+        gy[k * 2] = d[y[k] >> 4]; gy[k * 2 + 1] = d[y[k] & 15];
+        wy[k * 2] = d[wantY[k] >> 4]; wy[k * 2 + 1] = d[wantY[k] & 15];
+      }
+      gx[64] = wx[64] = gy[64] = wy[64] = 0;
+      std::printf("row %d x got %s want %s\nrow %d y got %s want %s\n", n, gx, wx,
+                  n, gy, wy);
+    }
+    TEST_ASSERT_TRUE(memcmp(x, wantX, 32) == 0);
+    TEST_ASSERT_TRUE(memcmp(y, wantY, 32) == 0);
+  }
+}
+
 void registerEd25519GroupTests() {
+  RUN_TEST(test_the_core_decoder_matches_the_fixture);
+  RUN_TEST(test_every_reference_multiple_is_reproduced);
+  RUN_TEST(test_doubling_agrees_with_the_group_law);
   RUN_TEST(test_adding_the_identity_to_a_projective_point);
   RUN_TEST(test_adding_the_identity_changes_nothing);
   RUN_TEST(test_decoding_gives_the_reference_affine_coordinates);
@@ -444,3 +579,4 @@ void registerEd25519GroupTests() {
   RUN_TEST(test_adding_opposite_points_gives_the_identity);
   RUN_TEST(test_null_arguments_are_refused);
 }
+

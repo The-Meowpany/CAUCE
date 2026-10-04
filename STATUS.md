@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (247 firmware + 303 backend tests, E2E green)
+## Implemented and verified (251 firmware + 303 backend tests, E2E green)
 | Component | Evidence |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -202,41 +202,53 @@ It is *not* invisible to a comparison against an encoder, because an encoder mus
 set that bit. `ed25519ScalarMultBase` sets it, so its output and this fixture's
 `encoding` differ in the top bit whenever `x` is odd.
 
-**The measurement that matters: for `[2]G` the ladder returns G itself.**
+**The scalar ladder is fixed. Two defects, both in `selectGf`, and the second was
+hiding the first.**
 
-**Correction to the previous entry: only `[2]G` fails, and the ladder does advance.**
+1. `selectGf` selected between `acc` and `sum` instead of between `doubled` and
+   `sum`. The recurrence is `acc = bit ? 2*acc + p : 2*acc`, so the old accumulator
+   is never a candidate. Selecting it anyway silently drops the doubling on every
+   clear bit, giving `(2^popcount(scalar) - 1) * p`.
+2. `selectGf` cast each limb to `int16_t` while `Gf` is `int64_t[16]`, truncating
+   every coordinate to 16 bits.
 
-`[1]G` and `[3]G` both match. So this is not "the accumulator never gets past the
-base point" - that claim was wrong, and it came from reading a single MISMATCH line
-as if it were the only one that had been produced. `[3]G` passing is the fact that
-matters: it means the loop, `selectGf`, the bit extraction and the state carried
-between iterations all work, because `[3]G` needs two accumulating steps and one
-doubling of a projective accumulator.
+The signature was the diagnostic. `(2^popcount - 1)` yields 1, 1, 3, 1, 3, 3, 7 for
+the scalars 1 to 7, which is exactly what the ladder returned - every odd scalar
+correct, every even scalar collapsed onto the odd one below it. That is why `[1]G`
+and `[3]G` passed while `[2]G` did not, and it resembles a broken reference far more
+than a broken ladder. Running all seven scalars instead of one at a time is what
+exposed it.
 
-`[2]G` is the case where every set bit is followed only by zeros: the accumulator
-takes `I + p` and is then **only ever doubled**, never added to again. `[3]G` takes
-`I + p`, then `2p + p`. So the failing shape is a projective accumulator that is
-immediately doubled, with nothing else.
+Two things in my own diagnostics were wrong and are corrected here:
 
-Two hypotheses were tested and eliminated this round:
+- **`ed25519DecodePoint` was never broken.** Several rounds concluded it was,
+  including one that blamed it for a projective addition failing. The signature is
+  `(encoded, outX, outY)` and the arguments had been reversed, so it was handed
+  uninitialised buffers as its input.
+- **The fixture's `doubledEncoding` column was wrong.** It held the encoding of the
+  *next* row rather than of the double, so only row 1 was right and row 7 was empty.
+  The column is removed. Doubling is now checked against the group law rather than
+  against a fixture column that happened to agree with the broken ladder.
 
-- *the accumulator's limbs are never canonicalised.* Adding `normalizeLimbs` on all
-  four coordinates after each addition changes nothing - `[2]G` still returns G. The
-  accumulator is not failing for want of canonicalisation.
-- *`addPoints` emits a `T` inconsistent with its own `X`, `Y`, `Z`.* Instrumenting
-  the ladder to print `acc.t * acc.z` and `acc.x * acc.y` at the end shows them
-  **equal**. The invariant holds, so the extended-coordinate form is self-consistent.
+A third gap is closed by `test_the_core_decoder_matches_the_fixture`, which pins the
+production decoder against the fixture's own affine coordinates for all seven rows.
+Its absence is what allowed a real decoder fault to survive unnoticed: the existing
+decode test uses `affineOf`, a helper local to the test file, so the production
+decoder was never the thing under test.
 
-The instrumentation itself printed swap bits that contradict both `[1]G` and
-`[3]G` passing, so it is not trustworthy and was reverted rather than reasoned
-about. Re-derive it with hex output instead of `%s` on a byte array before trusting
-anything it says.
+**What the ladder is now tested against**, all registered:
 
-What is left is narrow: `addPoints` on a projective accumulator, doubled, with no
-intervening addition. `ed25519AddPointsZ` already covers the y coordinate of that
-case correctly, since it recomputes `T = X*Y/Z`; the difference between it and the
-ladder is that the ladder carries `T` forward from the previous step. That
-difference is now the only thing not yet accounted for.
+- `test_every_reference_multiple_is_reproduced` - scalars 1 to 7 against the
+  reference encodings. It includes even scalars deliberately; an odd-only test, or
+  scalar 1 alone, would have passed throughout the entire breakage.
+- `test_doubling_agrees_with_the_group_law` - `ladder(2n)` against `nG + nG` for all
+  seven, tying the ladder to the independently verified group law so a ladder that
+  is wrong but self-consistent cannot pass.
+- `test_the_core_decoder_matches_the_fixture` - decode against `affineX`/`affineY`.
+
+Still open in C2: key derivation from a seed, signing and verification, and wiring
+the algorithm choice into `LoRaSyncTransport`. `point_vectors.inc` carries RFC 8032
+vectors for exactly that step.
 
 `test_adding_the_identity_to_a_projective_point` stays registered and passing. The
 ladder test and the projective doubling test stay in the tree, unregistered, with
