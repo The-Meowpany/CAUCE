@@ -23,6 +23,7 @@ but paper is patient.
 | [DASHBOARD.md](DASHBOARD.md) | Local SPA + captive portal, and why it's dependency-free | Stable |
 | [BENCH_PLAN.md](BENCH_PLAN.md) | B1–B5 physical validation with exit criteria | Plan, not executed |
 | [ROADMAP.md](ROADMAP.md) | Sequencing M0–M5, principles, non-goals | Stable |
+| [RELEASE_READINESS.md](RELEASE_READINESS.md) | Phases 0–6 to a frozen baseline, and the gate checklist | Draft |
 | [PILOT_SPEC.md](PILOT_SPEC.md) | Frozen pilot: nodes, budget, acceptance gate | Frozen |
 | [I18N.md](I18N.md) | English-only code; localized surfaces and docs | Stable |
 

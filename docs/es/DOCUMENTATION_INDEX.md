@@ -23,6 +23,7 @@ pasar, pero el papel aguanta todo.
 | [DASHBOARD.md](DASHBOARD.md) | SPA local + captive portal, y por qué sin dependencias | Estable |
 | [BENCH_PLAN.md](BENCH_PLAN.md) | Validación física B1–B5 con criterios de salida | Plan, no ejecutado |
 | [ROADMAP.md](ROADMAP.md) | Secuenciación M0–M5, principios, no-objetivos | Estable |
+| [RELEASE_READINESS.md](RELEASE_READINESS.md) | Fases 0-6 hasta una baseline congelada, y la lista de la puerta | Borrador |
 | [PILOT_SPEC.md](PILOT_SPEC.md) | Piloto congelado: nodos, presupuesto, gate de aceptación | Congelado |
 | [I18N.md](I18N.md) | Código en inglés; superficies y docs localizados | Estable |
 

@@ -287,6 +287,23 @@ their outputs above.
 do not exist. This is greenfield rather than a fix, and the thesis treats it as
 proposed evolution. It has no dependency on C2.
 
+### Phases 0-6 to a frozen release
+
+`docs/en/RELEASE_READINESS.md` (and the `docs/es/` mirror) holds the sequenced
+plan for taking this from "a very good prototype" to a **frozen baseline under
+maintenance-only**: Phase 0 freeze the specification, Phase 1 close the software
+gaps, Phase 2 decide and close the air interface, Phase 3 record the bench
+results, Phase 4 manufacturing and per-device seed provisioning, Phase 5 release
+engineering and the release gate, Phase 6 declare the freeze.
+
+It also fixes the vocabulary, because "finished, never updated again" has no
+single name and the difference matters: a **feature freeze** ends capability,
+**RC** cuts the tree, **GA** is the release as sold, a **baseline** is the frozen
+artefact set, **LTS** means features frozen but security still patched, and **EOL**
+means no patches at all. The target state here is LTS with a stated EOL date, not
+EOL - this code terminates TLS and verifies signatures, and a build with no patch
+channel is a liability rather than a finished product.
+
 ### Hardware-only
 
 SX1276 driver and link budget, OTA rollback on real flash, BME280/LittleFS/Wi-Fi
