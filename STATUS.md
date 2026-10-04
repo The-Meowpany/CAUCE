@@ -179,41 +179,40 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**The fixture is corrupt, which retracts the group-law verification.** Reading
-`firmware/test/group_vectors.inc` directly rather than trusting the tests:
+**Correction: the fixture is not corrupt. The previous note here was wrong.**
+
+`Multiple` has five fields - `{scalar, affineX, affineY, encoding,
+doubledEncoding}` - and reading them in that order, row 1 is:
 
 ```
-{2, "0ece43284ea1c5835fa4d715458e0d08ace733187d3b043d6c045a9f4c38ab36",
-     "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
-     "c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022",
-     "d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"},
+{1,
+ "1ad5258f602d56c9...",   // affineX  - G's x, correct
+ "5866666666666666...",   // affineY  - G's y, correct
+ "5866666666666666...",   // encoding - y, with the parity bit never set
+ "c9a3f86aae465f0e..."},  // doubledEncoding - 2G's y
 ```
 
-**`x` and `y` are identical in every row.** That is not a point on the curve - it
-would force `x = y`, and the curve equation has no such solution. The same defect
-appears in rows 3, 4 and 5. Row 5's `x` also disagrees with row 4's encoding in
-its trailing digits, which is the signature of the generator that was already
-found to be broken earlier in this work.
+`affineX` and `affineY` are distinct and correct. The only real defect is that
+`encoding` is written as plain `y` with bit 255 left clear instead of set from
+`x & 1`. That is invisible to the group-law tests, because Ed25519 decoding
+ignores bit 255 and returns the same affine coordinates either way - which is why
+they passed legitimately, not by accident.
 
-So the consequences are larger than the ladder:
+It is *not* invisible to a comparison against an encoder, because an encoder must
+set that bit. `ed25519ScalarMultBase` sets it, so its output and this fixture's
+`encoding` differ in the top bit whenever `x` is odd.
 
-- every group-law test in this repository was validated against a fixture whose
-  coordinates are impossible. Those tests passing is not evidence about `addPoints`;
-- the conclusion "`addPoints` is wrong on projective inputs" is **unsafe** and should
-  be treated as withdrawn. `add(P, identity) == G` does hold, which means
-  `pointFromProjective`, its `T = X*Y/Z` and the divide by non-unit `Z` are all
-  correct - so a correct formula would have produced a correct `2G`;
-- the one measurement that is solid: `ed25519ScalarMultBase` for `[2]G` returned
-  `c9a3f86a...9f3cd6022`, and that string appears in the fixture as 2G's `x` *and*
-  its `y`. That is a coincidence worth explaining, not a fault worth fixing.
+So `a733205` is a false retraction and should be disregarded: the group-law
+verification stands, and nothing here licenses regenerating the fixture. What is
+still unexplained is the one hard fact from the previous round -
+`ed25519ScalarMultBase` for `[2]G` printed as `MISMATCH` while producing
+`c9a3f86a...9f3cd6022`, which is exactly row 2's `affineY` and `encoding`. A test
+that mismatches a value it prints as the reference is a test bug: the parity bit
+is the first thing to check, not the last.
 
-The work that remains is therefore first and not optional: **regenerate
-`group_vectors.inc` from an independent implementation, with `encoding`, `x` and
-`y` as three genuinely distinct values, and re-run the whole suite.** Until that
-file is trustworthy, nothing above this line should be believed - including this
-paragraph, which is itself only as good as the reading of the file it is based on.
-
-The three failing tests stay in the tree, unregistered, with their outputs.
+The three tests stay in the tree. `test_adding_the_identity_to_a_projective_point`
+is registered and passing, and it remains solid evidence that `pointFromProjective`,
+its `T = X*Y/Z` and the divide by non-unit `Z` are all correct.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
