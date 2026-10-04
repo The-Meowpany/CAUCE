@@ -179,13 +179,32 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**What remains is the scalar ladder and the signing entry points**, and every
-prerequisite is now verified: the field layer (14/14), the scalars mod L (6/6), the
-point encoding (round-trip identity), and the group law (the list above). The
-earlier public-key mismatch was very likely this same generator fault, since the
-ladder depends only on the group law and `selectGf`. The next step is to re-add
-`scalarMult`, sign, and test against the RFC 8032 fixtures generated from
-`cryptography`.
+**What remains is the scalar ladder, and it is now the only unknown.** The
+ladder was implemented on top of the verified layers and **still fails**: with
+`scalar = 1` it returns the base point correctly, but the public key derived from
+a real seed does not match, first differing at byte 0 of `y`.
+
+Everything the ladder depends on is now proven:
+
+- the field layer (14/14 against Python),
+- the scalars mod L (6/6, including all-ones and a random 511-bit input),
+- point encode/decode (round-trip identity, and reference affine coordinates),
+- the group law (identity, doubling, distinct points, on-curve, `P + (-P)`,
+  and the four intermediates against the affine derivation).
+
+So the fault is inside `scalarMult` itself - either the loop or `selectGf` - and
+not in anything it calls. The ladder is also the only stage never tested against
+a point that is not the identity: `scalar = 1` doubles the identity 255 times,
+which is free, and then adds once. A wrong branch or a swapped pair of
+coordinates in the select would survive exactly that case.
+
+The next step is therefore to test the ladder without seeds: `scalarMultBase` with
+scalars of 1, 2 and 3, compared against the reference multiples already
+generated. If `[2]G` comes out as something other than 2G, the bug is in the loop;
+if `[1]G` and `[2]G` are right but a large scalar is wrong, it is in `selectGf`.
+
+The signing entry points were removed again rather than committed returning wrong
+answers.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
