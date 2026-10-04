@@ -132,7 +132,27 @@ def calibration_summary(calibration: dict | None) -> dict:
         # same as zero, and the docs depend on the difference staying visible.
         "uncertainty": uncertainty,
         "uncertainty_kind": calibration.get("uncertainty_kind"),
+        # The budget the figure above should be compared against, with its
+        # components and its dominant term. Attached rather than returned by a
+        # separate endpoint because a summary that quotes a number without saying
+        # what it should be compared to is how an operator ends up treating a
+        # co-location spread as a sensor tolerance.
+        "budget": _budget_for_variable(calibration.get("variable")),
     }
+
+
+def budget_summary(variable: str, reading: float | None = None) -> dict | None:
+    """The stated uncertainty budget for a variable, or None when there is none."""
+    from .uncertainty import budget_for
+
+    budget = budget_for(variable)
+    return budget.as_dict(reading) if budget else None
+
+
+def _budget_for_variable(variable: str | None) -> dict | None:
+    if not variable:
+        return None
+    return budget_summary(variable)
 
 
 def _number(payload: dict, key: str, default: float | None,

@@ -116,9 +116,77 @@ uncertainty nobody quantified is worse than saying nothing. A partial update
 that omits both keeps whatever was recorded before, so re-posting an offset does
 not silently drop a characterisation that took a co-location week to produce.
 
-What this does not do is make the project traceable. It lets a report say how
-much of a number is measurement and how much is method. There is still no
-calibration procedure and no metrological claim anywhere in this system.
+## The budget, per quantity
+
+`backend/cauce_server/uncertainty.py` holds the components; the combined figure
+reaches a report through `calibration_summary`, so a number never arrives without
+what to compare it to.
+
+A budget rather than a single figure because the components answer different
+questions. Someone deciding whether a reading can drive a heat alert needs to know
+whether the error is in the sensor (replace it) or in the comparison (redo it), and
+one averaged number cannot say. Components are combined by root-sum-of-squares,
+which assumes independence, and the largest is reported as `dominant_term`.
+
+| quantity | components | dominant |
+|---|---|---|
+| `air_temperature` | sensor 0.5 °C, co-location 0.3 °C, quantisation 0.01 °C | sensor, but the pair is close |
+| `relative_humidity` | **3 % of reading**, co-location 2 %RH, quantisation 0.1 | **depends on the reading** |
+| `pressure` | sensor 1 hPa, altitude offset 0, quantisation 0.01 hPa | sensor |
+
+Two of those deserve emphasis.
+
+**Humidity is not a constant.** Its datasheet term is proportional, so the budget
+cannot be one number — `combined_for_reading` exists for that, and the dominant term
+*changes* with humidity: the proportional term wins at 80 %RH, the co-location term
+wins at 10 %RH. A single figure for humidity is a claim nobody can make.
+
+**Pressure cannot be fixed by calibration.** A station reporting sea-level pressure
+disagrees by roughly 1 hPa per 8.5 m of altitude. That term is in the budget as
+`altitude_offset` and set to zero on purpose: it is zero when nothing is being
+compared to sea level, and the assumption text says so. Comparing against a
+sea-level station is an error no `scale`/`offset` can correct.
+
+### What these numbers are
+
+Stated assumptions for a BME280-class sensor, recorded so a later traceable
+calibration replaces a figure rather than rewriting a rationale. Every payload
+carries `traceable: false` until that changes, because the absence of traceability
+must be visible in the data rather than in a document.
+
+A variable with no budget returns `None`, never a zero budget. "We have no numbers
+for this quantity" and "this quantity is exact" are different, and conflating them
+is how a report ends up quoting a precision nobody established.
+
+## Procedure, per quantity
+
+Written so two people produce the same numbers. Filled in where the method is
+decided and left explicit where it is not, because an unfilled cell is a decision
+nobody has made yet.
+
+| step | air_temperature | relative_humidity | pressure |
+|---|---|---|---|
+| reference | co-located reference node, calibrated against a reference thermometer | co-located reference node | co-located reference node |
+| method | `co-location-relative` | `co-location-relative` | `co-location-relative` |
+| duration | 48 h | 48 h | 48 h |
+| points | 48 hourly pairs | 48 hourly pairs | 48 hourly pairs |
+| accept when | post-calibration spread ≤ **0.2 °C** | ≤ **3 %RH** | ≤ **1 hPa** |
+| interval | every 6 months, and after relocation | every 6 months | every 6 months |
+| on failure | `status=rejected`, node stays on the raw column | same | same |
+
+Two rules that are not per-quantity:
+
+- **Retire, never delete.** A superseded record becomes `status=retired`. The
+  history is what makes a calibration auditable.
+- **Record the reference, not just the number.** `calibration_reference` names the
+  reference node or instrument. A correction with no reference is an opinion.
+
+### What this still is not
+
+There is no metrological traceability here. The reference is another node, and the
+chain ends at a sensor datasheet. Everything above supports "how much of this number
+is measurement and how much is method", which is worth having, and it is not the
+same claim as a calibrated instrument.
 
 
 ## Minimal recommended plan (once ≥2 physical nodes exist)

@@ -93,6 +93,10 @@ def node_coverage(
 
     gap_threshold = max(interval_ms * 2, interval_ms + MIN_INTERVAL_MS)
     gaps: list[dict] = []
+    # Declared here, not inside the branch below: with no data at all the branch that
+    # counts the SQL-side gaps never runs, and the synthetic gap it appends is the
+    # only one there is.
+    gaps_total = 0
     first_ts = total["first_ts"]
     last_ts = total["last_ts"]
     if first_ts is None or last_ts is None:
@@ -127,11 +131,18 @@ def node_coverage(
                    FROM measurements
                    WHERE node_id=? AND variable=?
                      AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?)
-               SELECT ts, delta FROM ordered
+               SELECT ts, delta, COUNT(*) OVER () AS total_gaps
+               FROM ordered
                WHERE delta IS NOT NULL AND delta>?
                ORDER BY delta DESC LIMIT ?""",
             (node_id, variable, from_ms, to_ms, gap_threshold, MAX_GAPS_REPORTED),
         )
+        # How many gaps exist, not just how many are returned.
+        #
+        # `gaps_truncated` alone says "there were more" without saying how much
+        # more, so a caller cannot tell a site with 21 gaps from one with 21,000.
+        # The window function is free here because LIMIT is applied after it.
+        gaps_total = rows[0]["total_gaps"] if rows else 0
         for row in rows:
             gap_start = row["ts"] - row["delta"]
             gap_end = row["ts"]
@@ -154,8 +165,13 @@ def node_coverage(
                     "reason": classify_gap(node_id, last_ts, to_ms),
                 }
             )
-        gaps.sort(key=lambda g: g["duration_ms"], reverse=True)
-        gaps = gaps[:MAX_GAPS_REPORTED]
+        # Outside the branch above on purpose: with no data the only gap is the
+    # synthetic whole-window one, and it still has to be counted and still has to be
+    # subject to the cap.
+    gaps.sort(key=lambda g: g["duration_ms"], reverse=True)
+    # Erring toward reporting more gaps than were returned rather than fewer.
+    gaps_total = max(gaps_total, len(gaps))
+    gaps = gaps[:MAX_GAPS_REPORTED]
 
     longest_gap_ms = gaps[0]["duration_ms"] if gaps else 0
     return {
@@ -174,9 +190,10 @@ def node_coverage(
         "last_utc_ms": last_ts,
         "uncertain_samples": total["uncertain"] or 0,
         "reconstructed_samples": total["reconstructed"] or 0,
+        "gap_count_total": gaps_total,
         "gap_count_reported": len(gaps),
         "longest_gap_ms": longest_gap_ms,
-        "gaps_truncated": len(gaps) >= MAX_GAPS_REPORTED,
+        "gaps_truncated": gaps_total > len(gaps),
         "gaps": gaps,
     }
 
