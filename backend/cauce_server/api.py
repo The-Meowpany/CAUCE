@@ -3,10 +3,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import time
+from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from . import revocation
 from .alerts import evaluate_heat_rules
 from .analytics import summary_stats
 from .calibration import (
@@ -19,7 +22,6 @@ from .calibration import (
 from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
-from . import revocation
 from .retention import purge_older_than, read_state
 from .security import require_bearer_token, require_scope, require_site_access
 from .signing import (
@@ -32,6 +34,15 @@ from .signing import (
 )
 
 router = APIRouter(prefix="/v1")
+
+# Identifiers that arrive from a node and are stored verbatim. Letters, digits, underscore,
+# dot and dash, bounded length: enough for every variable and sensor name the protocol has,
+# and incapable of carrying markup, a quote, a backslash or a `</script>`.
+#
+# The dashboard renders these, so this is the input half of an XSS fix whose output half is
+# dashboard._json_for_script. Both halves exist because either alone is a condition on
+# everything else staying correct.
+NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 def _check_rate(request: Request) -> None:
     check_rate(request)
@@ -310,6 +321,23 @@ async def sync_batch(
         v = rec.get("value")
         if v is not None and isinstance(v, float) and (v != v or v in (float("inf"), float("-inf"))):
             raise HTTPException(status_code=422, detail="invalid_value_non_finite")
+        # `variable` and `sensor_id` are stored verbatim and rendered by the dashboard, so
+        # their shape is part of the trust boundary, not cosmetic tidiness. Before this, a
+        # node could sync a variable called `</script><script>alert(1)</script>` and it came
+        # back out of the central's own page as markup.
+        #
+        # A character class rather than an allowlist of known variables, because the set of
+        # variables is meant to grow: the protocol version, not this regex, decides what is
+        # understood. Mirrors SITE_ID_PATTERN in evaluation.py.
+        for field, pattern in (("variable", NAME_PATTERN), ("sensor_id", NAME_PATTERN)):
+            value = rec.get(field)
+            if value is None and field == "sensor_id":
+                continue
+            if not isinstance(value, str) or not pattern.fullmatch(value):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"invalid_{field}",
+                )
 
     now_ms = int(time.time() * 1000)
     with transaction() as conn:
@@ -971,8 +999,13 @@ def analytics_heat_events(
     min_duration_min: int = 60,
     from_utc_ms: int | None = None,
     to_utc_ms: int | None = None,
-    authorization: str | None = Header(default=None),
+    authorization: Annotated[str | None, Header()] = None,
 ) -> dict:
+    # Annotated rather than `= Header(default=None)`: the dashboard calls this function
+    # directly instead of going through FastAPI, and with the plain Header default the
+    # callee received a Header object where a string was expected. The default of an
+    # Annotated parameter is a real None, so a direct call is simply unauthenticated and
+    # the read stays open when no token is configured.
     _check_rate(request)
     require_scope(authorization, "read")
     sql = """SELECT timestamp_utc_ms, value FROM measurements

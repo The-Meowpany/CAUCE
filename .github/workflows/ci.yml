@@ -29,7 +29,7 @@ jobs:
           path: ~/.platformio
           key: ${{ runner.os }}-pio-${{ hashFiles('firmware/platformio.ini') }}
       - name: Install PlatformIO
-        run: pip install platformio
+        run: pip install platformio==6.1.19
       - name: Unit tests (host) with coverage
         run: |
           pio test -e native --verbose
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install platformio
+      - run: pip install platformio==6.1.19
       - name: Build ESP32
         run: pio run -e esp32dev
         working-directory: firmware
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install ruff==0.16.7
       - run: ruff check backend simulator
 
   backend:
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
+      - run: pip install --require-hashes -r requirements.lock
       - name: Pytest
         run: python -m pytest tests -q
 
@@ -88,10 +88,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install platformio
-      # From requirements.txt rather than a hand-written list, so a dependency
-      # added for the server cannot be missing here and only fail in CI.
-      - run: pip install -r requirements.txt
+      - run: pip install platformio==6.1.19
+      # The lock rather than requirements.txt, so CI installs the exact tree the
+      # SBOM describes and a range bump cannot change a build without a diff. See
+      # backend/requirements.lock for how to regenerate it.
+      - run: pip install --require-hashes -r requirements.lock
         working-directory: backend
       - name: Build integration binary
         run: pio run -e integration

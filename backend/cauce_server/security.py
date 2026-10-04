@@ -18,12 +18,38 @@ def require_bearer_token(authorization: str | None, expected: str,
     this function cannot enforce it: one token means every holder gets
     everything. Multi-operator deployments need `api_tokens`, which does
     separate principals and their scopes.
+
+    With no token configured this ALLOWS the request. That is only acceptable
+    on a read, and every mutation goes through `require_admin_write` instead.
     """
     if not expected:
         return
-    provided = authorization or ""
+    # Same reason as in resolve_principal: a non-string here is a FastAPI parameter
+    # default that leaked in through a direct route-to-route call, and compare_digest
+    # raises TypeError on one. Refusing is the correct outcome either way.
+    provided = authorization if isinstance(authorization, str) else ""
     if not hmac.compare_digest(provided, f"Bearer {expected}"):
         raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def require_admin_write(authorization: str | None, scope: str = "write") -> None:
+    """Fails closed. Every mutation goes through here.
+
+    With CAUCE_API_TOKEN unset there is no credential to check, and returning
+    "allowed" would mean anyone who can reach the port can rewrite calibration,
+    mint an API token or push interventions. The answer is 503 rather than 401:
+    401 would tell the caller to retry with a credential, and there is none to
+    send until an operator configures one.
+
+    Reads deliberately stay open when no token is set. The dashboard is meant to
+    be reachable on a trusted LAN, and a deployment that wants closed reads sets
+    the token, at which point `require_bearer_token` starts enforcing.
+    """
+    from .config import settings
+
+    if not settings.api_token:
+        raise HTTPException(status_code=503, detail="admin_api_not_configured")
+    require_bearer_token(authorization, settings.api_token, scope)
 
 
 def _timing_safe_equal_hex(a: str, b: str) -> bool:
@@ -43,7 +69,15 @@ def resolve_principal(authorization: str | None) -> dict | None:
 
     if not settings.api_token:
         return None
-    provided = (authorization or "").strip()
+    # Some dashboard routes call an API route function directly instead of going
+    # through FastAPI, so the callee's `Header(default=None)` parameters arrive here as
+    # Header objects rather than None. That was invisible while auth was disabled,
+    # because the early return above came first; with a token configured it turned every
+    # affected read into a 500. An auth path must not raise on a malformed argument, so
+    # anything that is not a string is treated as no credential at all.
+    if not isinstance(authorization, str):
+        authorization = ""
+    provided = authorization.strip()
     if not provided.lower().startswith("bearer "):
         return None
     token = provided[7:].strip()
@@ -70,11 +104,18 @@ def require_scope(authorization: str | None, scope: str) -> dict | None:
     Falls back to the shared admin token, which by definition has every scope.
     That fallback is what keeps a single-operator deployment working with no
     change at all.
+
+    A `read` with no token configured is allowed, because the dashboard is meant
+    to be reachable on a trusted LAN. Any other scope fails closed: see
+    `require_admin_write` for why a write cannot be allowed unconfigured.
     """
     from .config import settings
 
     principal = resolve_principal(authorization)
     if principal is None:
+        if scope != "read":
+            require_admin_write(authorization, scope)
+            return None
         require_bearer_token(authorization, settings.api_token, scope)
         return None
     if scope in principal["scopes"] or "admin" in principal["scopes"]:

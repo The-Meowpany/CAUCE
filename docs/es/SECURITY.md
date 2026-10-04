@@ -31,6 +31,23 @@ Lo que realmente hacemos hoy, y lo que abiertamente no.
   cualquier descarga — sin MITM de sustitución de manifiesto.
 - **Split lectura/escritura.** Lecturas públicas, escrituras
   autenticadas, en la API del nodo y en el servidor central por igual.
+- **El central falla cerrado en las escrituras.** Con `CAUCE_API_TOKEN`
+  sin definir, toda mutación responde `503 admin_api_not_configured` en
+  vez de ser permitida: no hay credencial que verificar, así que
+  permitirla dejaría el puerto abierto a cualquiera que llegue. Las
+  lecturas siguen abiertas, porque el dashboard tiene que ser alcanzable
+  en una LAN de confianza. Definir el token cierra también las
+  lecturas. Esta es la única asimetría, y es deliberada — ver
+  `backend/cauce_server/security.py`.
+- **Los nombres que manda un nodo están restringidos, y los bloques de
+  script del dashboard van escapados para su contexto.** `variable` y
+  `sensor_id` se guardan tal cual, así que se limitan a
+  `[A-Za-z0-9_.-]`, y todo valor JSON embebido en un elemento
+  `<script>` va escapado: `json.dumps` por sí solo no es seguro ahí,
+  porque un parser HTML busca un `</script>` literal sin importar cómo
+  estén comillas las comillas del JSON. Las dos mitades existen porque
+  cualquiera de las dos por separado deja la página segura solo
+  mientras todo lo demás siga correcto.
 
 ## Retirar un dispositivo
 

@@ -11,8 +11,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import sbom as sbom_tool  # noqa: E402
@@ -116,6 +114,59 @@ def test_version_tuples_handle_two_and_four_part_versions():
     assert sbom_tool._version_tuple("45.0.1") >= sbom_tool._version_tuple("42.0.0")
 
 
+def test_the_sbom_does_not_describe_the_whole_machine():
+    """The defect this scope fix exists for.
+
+    The tool used to walk every distribution in the interpreter, so the committed SBOM
+    listed whatever else the generating machine had installed - unrelated tools included.
+    That made the artefact a fingerprint of a developer laptop instead of evidence about
+    the service, and two people regenerating it got two different files.
+    """
+    from importlib import metadata
+
+    def norm(value: str) -> str:
+        return value.lower().replace("_", "-")
+
+    described = {norm(c["name"]) for c in sbom_tool.build()["components"]}
+    installed = {norm(d.metadata["Name"]) for d in metadata.distributions()
+                 if d.metadata["Name"]}
+    unrelated = installed - described
+    assert len(described) < len(installed), (
+        "the SBOM lists every installed distribution, so it is describing the machine")
+    # Anything left out has to be genuinely unrelated, not a dependency that vanished.
+    assert described <= installed
+    assert unrelated, "expected the environment to contain packages this project does not use"
+
+
+def test_an_unrequested_extra_is_not_followed():
+    """pytest, fastapi and cryptography all publish extras. Following every extra in the
+    metadata pulled a development toolchain into the SBOM; only the extras
+    requirements.txt asks for may be followed."""
+    closure = sbom_tool._installed_closure({"pytest"}, {})
+    assert "black" not in closure
+    assert "mypy" not in closure
+
+
+def test_a_requested_extra_is_followed():
+    """uvicorn[standard] is requested on purpose, so its extra dependencies belong in the
+    SBOM. Dropping them would under-report what is installed."""
+    roots, extras = sbom_tool._requested()
+    assert "uvicorn" in roots
+    assert "standard" in extras.get("uvicorn", set())
+    closure = sbom_tool._installed_closure(roots, extras)
+    assert "websockets" in closure
+
+
+def test_a_direct_dependency_that_is_not_installed_is_reported(monkeypatch):
+    """Silently dropping a missing direct dependency would produce an SBOM that looks
+    complete and is not."""
+    monkeypatch.setattr(sbom_tool, "_requested",
+                        lambda: ({"fastapi", "not-a-real-package"}, {}))
+    doc = sbom_tool._build_uncached("cauce-central", "0.0.0")
+    properties = {p["name"]: p["value"] for p in doc["metadata"]["properties"]}
+    assert "not-a-real-package" in properties["cauce:missing-direct-dependencies"]
+
+
 def test_it_writes_a_file(tmp_path, capsys):
     out = tmp_path / "nested" / "central.cdx.json"
     assert sbom_tool.main(["--out", str(out), "--strict"]) == 0
@@ -124,8 +175,12 @@ def test_it_writes_a_file(tmp_path, capsys):
     assert "wrote" in capsys.readouterr().out
 
 
-def test_strict_mode_fails_on_a_bad_pin(monkeypatch):
+def test_strict_mode_fails_on_a_bad_pin(monkeypatch, tmp_path):
+    # Writes to tmp_path, not to sbom/. A test that writes into the source tree leaves a
+    # tracked artefact behind that looks like a deliverable and ships whatever environment
+    # happened to be installed when it ran.
+    out = tmp_path / "central.cdx.json"
     monkeypatch.setattr(sbom_tool, "check_pins",
                         lambda doc: ["cryptography is too old"])
-    assert sbom_tool.main(["--out", str(Path("sbom/x.json"))]) == 0
-    assert sbom_tool.main(["--out", str(Path("sbom/x.json")), "--strict"]) == 1
+    assert sbom_tool.main(["--out", str(out)]) == 0
+    assert sbom_tool.main(["--out", str(out), "--strict"]) == 1

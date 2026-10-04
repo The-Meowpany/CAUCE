@@ -4,6 +4,7 @@ import html
 import json
 import time
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -154,6 +155,34 @@ _LABELS = {
             "yes": "sim", "no": "não",},
 
 }
+
+
+def _json_for_script(value) -> str:
+    """JSON that is safe to paste inside a `<script>` element.
+
+    `json.dumps` alone is not safe there, and the reason is specific: an HTML parser
+    looks for the literal `</script>` and does not care that it is inside a JSON string.
+    So a stored value containing that sequence closes the script block early, and
+    everything after it is parsed as markup. That is a stored XSS reachable from any
+    value the database holds, and it does not need a quote or an angle bracket in the
+    usual sense.
+
+    `<`, `>` and `&` are escaped as their JSON unicode forms, which is invisible to
+    JavaScript and invisible to the HTML tokenizer. U+2028 and U+2029 are escaped because
+    they are line terminators in JavaScript but not in JSON, so a raw one is a syntax error
+    that silently kills the rest of the block.
+
+    Every `json.dumps` result that lands in a page goes through here. Validating the
+    input is the other half of the fix and is not a substitute: this function is the sink,
+    and the sink should be safe regardless of what reaches it.
+    """
+    encoded = json.dumps(value)
+    return (encoded
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029"))
 
 
 def _pick(request) -> tuple:
@@ -700,7 +729,7 @@ def dashboard(request: Request):
             " WHERE node_id=? AND variable='air_temperature'"
             " AND value IS NOT NULL ORDER BY sequence DESC LIMIT 120",
             (nid,))
-        spark = json.dumps([[p["timestamp_utc_ms"], p["value"]]
+        spark = _json_for_script([[p["timestamp_utc_ms"], p["value"]]
                             for p in reversed(pts)])
         hot = query(
             "SELECT MAX(value) AS m FROM measurements WHERE node_id=?"
@@ -844,7 +873,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
         f"{' checked' if v in selected else ''}> {html.escape(_human_var(v))}</label>"
         for v in all_vars)
     page = _NODE_PAGE
-    page = (page.replace("{series_json}", json.dumps(series))
+    page = (page.replace("{series_json}", _json_for_script(series))
             .replace("{nid}", safe_id)
             .replace("{lang}", code).replace("{title}", labels["title"])
             .replace("{back}", labels["back"]).replace("{h_info}", labels["info"])
@@ -895,7 +924,11 @@ def node_page(node_id: str, request: Request, days: int = 1,
 def node_events_page(node_id: str, request: Request,
                      variable: str = "air_temperature",
                      threshold: float = 32.0,
-                     min_duration_min: int = 60):
+                     min_duration_min: int = 60,
+                     authorization: Annotated[str | None, Header()] = None):
+    # Annotated so the default is a real None: this route calls an api.py route function
+    # directly and has to hand it the caller's credential explicitly. With a plain
+    # `Header(default=None)` the forwarded value was a Header object.
     check_rate(request)
     code, labels = _pick(request)
     nodes = query("SELECT node_id FROM nodes WHERE node_id=?", (node_id,))
@@ -909,7 +942,8 @@ def node_events_page(node_id: str, request: Request,
             variables[0] if variables else "air_temperature")
     data = analytics_heat_events(
         node_id=node_id, request=request, variable=variable,
-        threshold=threshold, min_duration_min=min_duration_min)
+        threshold=threshold, min_duration_min=min_duration_min,
+        authorization=authorization)
     peak_seen = query(
         "SELECT MAX(value) AS m FROM measurements WHERE node_id=?"
         " AND variable=? AND value IS NOT NULL", (node_id, variable))[0]["m"]
@@ -1225,7 +1259,7 @@ def colocation_page(request: Request, variable: str = "air_temperature",
             .replace("{sel7}", " selected" if days == 7 else "")
             .replace("{sel30}", " selected" if days == 30 else "")
             .replace("{apply}", labels["apply"])
-            .replace("{series_json}", json.dumps(series))
+            .replace("{series_json}", _json_for_script(series))
             .replace("{h_div}", labels["coloc"])
             .replace("{h_node}", labels["node"])
             .replace("{h_n}", labels["stat_n"])
@@ -1369,7 +1403,8 @@ def map_page(request: Request):
 
 
 @router.get("/nodes/{node_id}/report", response_class=HTMLResponse)
-def node_report(node_id: str, request: Request):
+def node_report(node_id: str, request: Request,
+                authorization: Annotated[str | None, Header()] = None):
     check_rate(request)
     code, labels = _pick(request)
     nodes = query("SELECT node_id, site_id FROM nodes WHERE node_id=?",
@@ -1412,7 +1447,8 @@ def node_report(node_id: str, request: Request):
         f"<tr><td class=\"q-{r['quality']}\">{r['quality']}</td>"
         f"<td>{r['c']}</td></tr>" for r in qbreak)
     try:
-        heat = analytics_heat_events(node_id=node_id, request=request)
+        heat = analytics_heat_events(node_id=node_id, request=request,
+                                     authorization=authorization)
         evs = heat["events"]
     except Exception:
         evs = []
@@ -1538,7 +1574,7 @@ def compare_page(request: Request, a: str | None = None,
                 f"<th>{html.escape(nid)}</th>" for nid in sel) + "</tr>"
             + "\n".join(stat_rows) + "</table></div>"
             "<canvas id=\"chart\" width=\"860\" height=\"220\"></canvas>"
-            "<script>var series = " + json.dumps(series) + """;
+            "<script>var series = " + _json_for_script(series) + """;
 (function(){
   var cv = document.getElementById("chart"), ctx = cv.getContext("2d");
   var W = cv.width, H = cv.height, pad = 36;

@@ -30,6 +30,21 @@ What we actually do today, and what we openly don't.
   download — no manifest-substitution MITM.
 - **Read/write split.** Public reads, authenticated writes, on the
   node API and the central server alike.
+- **The central fails closed on writes.** With `CAUCE_API_TOKEN` unset,
+  every mutation answers `503 admin_api_not_configured` rather than
+  being allowed: there is no credential to check, so allowing it would
+  leave the port open to anyone who can reach it. Reads stay open,
+  because the dashboard is meant to be reachable on a trusted LAN.
+  Setting the token closes reads as well. This is the one asymmetry,
+  and it is deliberate — see `backend/cauce_server/security.py`.
+- **Node-supplied names are constrained, and the dashboard's script
+  blocks are escaped for their context.** `variable` and `sensor_id`
+  are stored verbatim, so they are restricted to `[A-Za-z0-9_.-]`, and
+  every JSON value embedded in a `<script>` element is escaped:
+  `json.dumps` alone is not safe there, because an HTML parser looks
+  for a literal `</script>` regardless of the JSON quoting. Both halves
+  exist because either one alone leaves the page safe only while
+  everything else stays correct.
 
 ## Retiring a device
 

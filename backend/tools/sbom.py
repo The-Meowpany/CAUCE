@@ -17,6 +17,11 @@ Producing a format nobody reads is the same as producing none.
 It reads the INSTALLED distribution, not requirements.txt. The difference is the
 whole point: requirements.txt says what was asked for, the environment says what is
 there, and those differ routinely.
+
+What it does NOT do is describe the whole environment. The component list is the
+transitive closure of the direct dependencies above, so regenerating it on another
+machine produces a diff of what actually changed rather than a list of whatever else
+that machine had installed.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -93,18 +99,105 @@ def build(project_name: str = "cauce-central", project_version: str = "0.0.0") -
     return doc
 
 
+def _requested() -> tuple[set[str], dict[str, set[str]]]:
+    """The direct dependencies and their extras, as requirements.txt asks for them.
+
+    requirements.txt is the only place that knows an extra was wanted: `uvicorn[standard]`
+    is a deliberate request, and dropping it from the SBOM would under-report what is
+    installed. Nothing else in the tree is asked for with extras.
+    """
+    roots: set[str] = set()
+    extras: dict[str, set[str]] = {}
+    try:
+        text = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(
+            encoding="utf-8")
+    except OSError:
+        return set(DIRECT), {}
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        head = re.split(r"[<>=!;\[ ]", line, maxsplit=1)[0].strip()
+        if not head:
+            continue
+        roots.add(head.lower().replace("_", "-"))
+        found = re.search(r"\[([^\]]+)\]", line)
+        if found:
+            extras[head.lower().replace("_", "-")] = {
+                e.strip().lower() for e in found.group(1).split(",") if e.strip()}
+    return roots, extras
+
+
+def _installed_closure(roots: set[str], extras: dict[str, set[str]]) -> set[str]:
+    """The transitive closure of `roots` over the INSTALLED distributions.
+
+    Walking `metadata.distributions()` wholesale was wrong, and wrong in a way that
+    shipped: the SBOM listed all 229 distributions installed on the machine that ran it,
+    including unrelated tools, so it described the developer rather than the service. An
+    SBOM whose contents depend on whose laptop generated it is not evidence of anything.
+
+    Requirements are resolved from the installed metadata, so a dependency that is
+    declared but not installed shows up as missing instead of being silently absent.
+    """
+    seen: set[str] = set()
+    queue = [n.lower().replace("_", "-") for n in roots]
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            dist = metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue
+        wanted_extras = extras.get(name, set())
+        for requirement in dist.requires or []:
+            normalised = requirement.replace('"', "'")
+            marker = re.search(r"extra\s*==\s*'([^']+)'", normalised)
+            if marker:
+                # Only follow an extra this project actually asked for. Following every
+                # extra listed in the metadata pulls a dev toolchain (black, mypy,
+                # pandas) into the SBOM of a service that never imports it.
+                if marker.group(1).strip().lower() not in wanted_extras:
+                    continue
+            elif ";" in normalised:
+                # A marker that is not an extra is an environment condition this
+                # generator does not evaluate; following it would be a guess.
+                continue
+            head = re.split(r"[\s\[<>=!;(]", requirement, maxsplit=1)[0]
+            head = head.strip().lower().replace("_", "-")
+            if head and head not in seen:
+                queue.append(head)
+    return seen
+
+
 def _build_uncached(project_name: str, project_version: str) -> dict:
-    installed = sorted(
-        {dist.metadata["Name"] for dist in metadata.distributions()
-         if dist.metadata["Name"]},
-        key=str.lower,
+    roots, extras = _requested()
+    wanted = _installed_closure(roots or DIRECT, extras)
+    components = [c for c in (_component(n) for n in sorted(wanted)) if c]
+
+    missing = sorted(
+        n for n in (roots or DIRECT)
+        if not any(c["name"].lower().replace("_", "-") == n.lower().replace("_", "-")
+                   for c in components)
     )
-    components = [c for c in (_component(n) for n in installed) if c]
 
     direct, transitive = [], []
     for component in components:
         (direct if component["name"].lower() in DIRECT else transitive).append(
             f"{component['name']}@{component['version']}")
+
+    properties = [
+        {"name": "cauce:direct-dependencies",
+         "value": ", ".join(direct)},
+        {"name": "cauce:transitive-dependency-count",
+         "value": str(len(transitive))},
+    ]
+    if missing:
+        properties.append({
+            "name": "cauce:missing-direct-dependencies",
+            "value": ", ".join(missing),
+        })
 
     return {
         "bomFormat": "CycloneDX",
@@ -117,12 +210,7 @@ def _build_uncached(project_name: str, project_version: str) -> dict:
                 "name": project_name,
                 "version": project_version,
             },
-            "properties": [
-                {"name": "cauce:direct-dependencies",
-                 "value": ", ".join(direct)},
-                {"name": "cauce:transitive-dependency-count",
-                 "value": str(len(transitive))},
-            ],
+            "properties": properties,
         },
         "components": components,
     }

@@ -8,6 +8,11 @@ services:
     environment:
       CAUCE_DB_PATH: /data/cauce.sqlite
       CAUCE_SYNC_TOKEN: ${CAUCE_SYNC_TOKEN:-}
+      # Leave this empty and every write answers 503 admin_api_not_configured. That is
+      # deliberate: with no token there is no credential to check, so allowing writes
+      # would leave the port open to anyone who can reach it. Reads stay open so the
+      # dashboard works on a trusted LAN. Generate one with:
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
       CAUCE_API_TOKEN: ${CAUCE_API_TOKEN:-}
       CAUCE_RATE_LIMIT: ${CAUCE_RATE_LIMIT:-120}
       CAUCE_RETENTION_ENABLED: ${CAUCE_RETENTION_ENABLED:-1}
