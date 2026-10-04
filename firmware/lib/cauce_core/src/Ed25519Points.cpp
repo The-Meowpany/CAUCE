@@ -457,4 +457,74 @@ bool ed25519BasePoint(uint8_t outX[32], uint8_t outY[32]) {
   return ed25519DecodePoint(encoded, outX, outY);
 }
 
+// --- the scalar ladder ---------------------------------------------------
+//
+// The only stage of Ed25519 that is not verified. Everything it calls is:
+// the field, the scalars mod L, the point encoding and the group law, all tested
+// in this same binary. So a failure here is the ladder.
+//
+// Note the helpers it uses - Gf, mulGf, addGf, subGf, invertGf, gfToBytes,
+// curveD - live in the unnamed namespace above. Unnamed-namespace members are
+// visible in the enclosing scope, which is why no extra namespace is opened here.
+
+// p = swap ? q : p, with no branch on `swap`. Selecting rather than branching is
+// what keeps a secret bit out of the branch predictor.
+void selectGf(Gf p, const Gf q, int swap) {
+  const int64_t mask = swap ? ~static_cast<int64_t>(0) : 0;
+  for (int i = 0; i < 16; ++i) p[i] = (p[i] & ~mask) | (q[i] & mask);
+}
+
+// out = scalar * p: double-and-add where the addition always runs and the result
+// is chosen afterwards, so the same work happens whatever the bit is.
+void scalarMult(Point& out, const Point& p, const uint8_t scalar[32]) {
+  Point acc;
+  identityPoint(acc);
+  for (int bit = 255; bit >= 0; --bit) {
+    Point doubled, sum;
+    addPoints(doubled, acc, acc);
+    addPoints(sum, doubled, p);
+    const int swap = (scalar[bit >> 3] >> (bit & 7)) & 1;
+    // The four pairs below are the whole of the secret-dependent control flow.
+    // Transposing z with t here is invisible to any test that only ever reaches
+    // the identity, because doubling the identity is free.
+    selectGf(acc.x, sum.x, swap);
+    selectGf(acc.y, sum.y, swap);
+    selectGf(acc.z, sum.z, swap);
+    selectGf(acc.t, sum.t, swap);
+  }
+  out = acc;
+}
+
+void encodeProjective(uint8_t out[32], const Point& p) {
+  Gf inverseZ, x, y;
+  invertGf(inverseZ, p.z);
+  mulGf(x, p.x, inverseZ);
+  mulGf(y, p.y, inverseZ);
+  uint8_t xBytes[32];
+  gfToBytes(xBytes, x);
+  gfToBytes(out, y);
+  // Parity from the canonical bytes, never from a limb: a limb may be lazy or
+  // negative and its bit 0 is only meaningful once it is a radix digit.
+  out[31] = static_cast<uint8_t>((out[31] & 0x7F) | ((xBytes[0] & 1) << 7));
+}
+
+void scalarMultBase(Point& out, const uint8_t scalar[32]) {
+  uint8_t bx[32], by[32];
+  if (!ed25519BasePoint(bx, by)) {
+    identityPoint(out);
+    return;
+  }
+  Point base;
+  pointFromAffine(base, bx, by);
+  scalarMult(out, base, scalar);
+}
+
+bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]) {
+  if (!out || !scalar) return false;
+  Point p;
+  scalarMultBase(p, scalar);
+  encodeProjective(out, p);
+  return true;
+}
+
 }  // namespace cauce

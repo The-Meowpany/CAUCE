@@ -179,33 +179,30 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**What remains is the scalar ladder, and it is now confirmed broken.** The ladder
-was implemented on the verified layers and tested against the reference multiples
-directly - `scalarMultBase` with scalars 1, 2 and 3 - and it fails. Everything the
-ladder calls is proven:
+**What remains, and the blind spot that explains it.** `scalarMultBase` is now
+implemented and tested against the reference multiples one scalar at a time:
+**`[1]G` is correct and `[2]G` is not.** That splits the search cleanly, and the
+reason is structural rather than a missing test:
 
-- the field layer (14/14 against Python),
-- the scalars mod L (6/6, including all-ones and a random 511-bit input),
-- point encode/decode (round-trip identity, and reference affine coordinates),
-- the group law (identity, doubling, distinct points, on-curve, `P + (-P)`, and
-  the four intermediates against the affine derivation).
+- every group-law test in this repository passes operands with `Z = 1`, because
+  `ed25519AddPoints` takes affine coordinates and `affineFromPoint` divides by `Z`
+  on the way out;
+- `[1]G` only ever evaluates `identity + P`, whose operands are also `Z = 1`;
+- reaching `[2]G` requires accumulating, and the accumulator is **projective with
+  `Z != 1`** - the first step gives `Z = F*G = 2*2 = 4`.
 
-So the fault is inside `scalarMult` itself - the loop or `selectGf` - and not in
-anything it calls. The group-law tests all pass in the same binary and the same
-run, which rules out the environment.
+So `addPoints` has been correct for everything it was asked and has **never been
+exercised on a point whose `Z` is not 1**. The fault is in the addition formula as
+applied to projective coordinates, not in the ladder's loop and not in
+`selectGf` - which is why the earlier diagnosis pointed at `selectGf` and was wrong.
 
-The next step is narrow. Compare `[1]G`, `[2]G` and `[3]G` one at a time against
-the reference multiples, printing each, rather than looping and failing on the
-first mismatch. `[1]G` is known to be right, and it is the weakest possible test:
-doubling the identity 255 times is free, so it never accumulates anything. If
-`[2]G` is wrong the loop's first real doubling is at fault; if `[2]G` and `[3]G`
-are right and only large scalars fail, it is `selectGf`. The most likely specific
-cause is that the four `selectGf` calls pair a coordinate with the wrong one -
-`acc.z` and `acc.t` are easy to transpose, and a transposition is invisible in
-every test that only reaches the identity.
-
-The signing entry points were removed again rather than committed returning wrong
-answers.
+The next test is a single one: add two points given projectively, with `Z`
+deliberately unequal to 1, and compare against the affine sum. Two candidate
+faults, both one line: `affineFromPoint` dividing by the wrong coordinate, or the
+formula's `D = 2*Z1*Z2` term being folded in at the wrong point. The failing case
+is kept in `test_ed25519_group.cpp` as
+`test_the_ladder_against_reference_multiples_one_at_a_time`, **not** registered so
+the suite stays green, with a note to register it when it passes.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 

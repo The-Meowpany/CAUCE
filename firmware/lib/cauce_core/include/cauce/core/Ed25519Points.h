@@ -88,4 +88,20 @@ bool ed25519AddPointsTrace(uint8_t outX[32], uint8_t outY[32],
 void ed25519EncodeAffine(uint8_t out[32], const uint8_t x[32],
                          const uint8_t y[32]);
 
+// Encodes [scalar] times the base point.
+//
+// Its own entry point because the ladder is the one stage nothing else reaches.
+// Every dependency is verified in this same binary - the field, the point
+// encoding and the group law - so a failure here is the ladder. It is also the
+// only stage never exercised against a point that is not the identity: with
+// scalar = 1 the loop doubles the identity 255 times, which is free, and adds
+// once. Transposing `z` with `t` in the select survives exactly that case.
+//
+// Not constant-time. Carries and the ladder act on values derived from the key,
+// so an attacker able to measure signing time locally at high resolution may
+// recover the private key. The threat model here is a hostile relay or central,
+// neither of which sees anything but the result. Where the device itself must be
+// assumed hostile, use a constant-time library.
+bool ed25519ScalarMultBase(uint8_t out[32], const uint8_t scalar[32]);
+
 }  // namespace cauce

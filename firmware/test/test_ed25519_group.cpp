@@ -268,6 +268,53 @@ void test_the_intermediates_of_adding_two_distinct_points() {
   }
 }
 
+// NOT REGISTERED: the ladder is broken and this is the test that shows it.
+//
+// The finding is worth more than the failure: `[1]G` is correct and `[2]G` is
+// not. That splits the search cleanly. Every group-law test in this file passes
+// operands with Z = 1, because `ed25519AddPoints` takes affine coordinates and
+// `affineFromPoint` divides by Z on the way out. `[1]G` only ever adds the
+// identity to a point, so its operands also have Z = 1. Reaching `[2]G` means
+// accumulating, and the accumulator is projective with Z != 1 - so
+// `addPoints` has never been exercised on a point whose Z is not 1.
+//
+// So the fault is in the addition formula as applied to projective coordinates,
+// not in the ladder's loop and not in `selectGf`. The next test is therefore a
+// single one: add two points given projectively, with Z deliberately unequal to
+// 1, and compare against the affine sum.
+//
+// Register it the moment it passes.
+void test_the_ladder_against_reference_multiples_one_at_a_time() {
+  // Each scalar is printed separately rather than asserted in a loop that stops
+  // at the first mismatch. Knowing whether [2]G is wrong while [1]G is right is
+  // what separates a fault in the loop from a fault in the select: [1]G doubles
+  // the identity 255 times, which is free and proves very little.
+  static const char* digits = "0123456789abcdef";
+  bool allOk = true;
+  for (int scalar = 1; scalar <= 3 && scalar <= kCount; ++scalar) {
+    uint8_t buffer[32] = {0};
+    buffer[0] = static_cast<uint8_t>(scalar);
+    uint8_t got[32], want[32];
+    TEST_ASSERT_TRUE(cauce::ed25519ScalarMultBase(got, buffer));
+    unhex(want, kMultiples[scalar - 1].encoding);
+
+    char gotHex[65], wantHex[65];
+    for (int k = 0; k < 32; ++k) {
+      gotHex[k * 2] = digits[got[k] >> 4];
+      gotHex[k * 2 + 1] = digits[got[k] & 15];
+      wantHex[k * 2] = digits[want[k] >> 4];
+      wantHex[k * 2 + 1] = digits[want[k] & 15];
+    }
+    gotHex[64] = wantHex[64] = 0;
+    if (std::memcmp(got, want, 32) != 0) {
+      std::printf("ladder [%d]G MISMATCH\n  got  %s\n  want %s\n", scalar,
+                  gotHex, wantHex);
+      allOk = false;
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(allOk, "a scalar multiple differs");
+}
+
 void registerEd25519GroupTests() {
   RUN_TEST(test_adding_the_identity_changes_nothing);
   RUN_TEST(test_decoding_gives_the_reference_affine_coordinates);
