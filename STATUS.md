@@ -204,35 +204,39 @@ set that bit. `ed25519ScalarMultBase` sets it, so its output and this fixture's
 
 **The measurement that matters: for `[2]G` the ladder returns G itself.**
 
-```
-ladder [2]G MISMATCH
-  got  5866666666666666666666666666666666666666666666666666666666666666
-  want c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022
-```
+**Correction to the previous entry: only `[2]G` fails, and the ladder does advance.**
 
-`5866...66` is row 1's `affineY`, i.e. the base point. So the accumulator does not
-advance past the base point for any scalar of 1 or more. That is a far more specific
-fault than "the addition is wrong on projective inputs", and it points at the one
-thing that has never been checked: the state carried **between** iterations.
+`[1]G` and `[3]G` both match. So this is not "the accumulator never gets past the
+base point" - that claim was wrong, and it came from reading a single MISMATCH line
+as if it were the only one that had been produced. `[3]G` passing is the fact that
+matters: it means the loop, `selectGf`, the bit extraction and the state carried
+between iterations all work, because `[3]G` needs two accumulating steps and one
+doubling of a projective accumulator.
 
-`scalarMult` feeds `addPoints` its own previous output - `X`, `Y`, `Z` and `T` as
-limbs straight out of the previous step, never round-tripped through
-`gfToBytes`. Every other test in this file hands `addPoints` operands built by
-`pointFromAffine` or `pointFromProjective`, and both of those normalise their
-limbs and recompute `T`. So the accumulator is the only operand in the entire suite
-whose limbs have never been through a canonicalisation, and it is the only one that
-fails.
+`[2]G` is the case where every set bit is followed only by zeros: the accumulator
+takes `I + p` and is then **only ever doubled**, never added to again. `[3]G` takes
+`I + p`, then `2p + p`. So the failing shape is a projective accumulator that is
+immediately doubled, with nothing else.
 
-The two checks that would settle it, both one line of instrumentation:
+Two hypotheses were tested and eliminated this round:
 
-- canonicalise `acc` between iterations - `normalizeLimbs` on `x`, `y`, `z`, `t`, or
-  a `gfToBytes`/`gfFromBytes` round trip - and see whether `[2]G` starts matching;
-- print `acc.t * acc.z` against `acc.x * acc.y` after the first accumulating step. If
-  they differ, `addPoints` is emitting a `T` inconsistent with its own `X`, `Y`, `Z`,
-  and every second step compounds the error.
+- *the accumulator's limbs are never canonicalised.* Adding `normalizeLimbs` on all
+  four coordinates after each addition changes nothing - `[2]G` still returns G. The
+  accumulator is not failing for want of canonicalisation.
+- *`addPoints` emits a `T` inconsistent with its own `X`, `Y`, `Z`.* Instrumenting
+  the ladder to print `acc.t * acc.z` and `acc.x * acc.y` at the end shows them
+  **equal**. The invariant holds, so the extended-coordinate form is self-consistent.
 
-Note that the identity is the one point this cannot break: doubling it is free, and
-that is exactly why `[1]G` passes and gives false comfort.
+The instrumentation itself printed swap bits that contradict both `[1]G` and
+`[3]G` passing, so it is not trustworthy and was reverted rather than reasoned
+about. Re-derive it with hex output instead of `%s` on a byte array before trusting
+anything it says.
+
+What is left is narrow: `addPoints` on a projective accumulator, doubled, with no
+intervening addition. `ed25519AddPointsZ` already covers the y coordinate of that
+case correctly, since it recomputes `T = X*Y/Z`; the difference between it and the
+ladder is that the ladder carries `T` forward from the previous step. That
+difference is now the only thing not yet accounted for.
 
 `test_adding_the_identity_to_a_projective_point` stays registered and passing. The
 ladder test and the projective doubling test stay in the tree, unregistered, with
