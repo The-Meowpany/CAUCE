@@ -16,6 +16,7 @@ import base64
 
 from fastapi import HTTPException
 
+from . import revocation
 from .db import query
 from .lora_frames import (
     MAX_RECORDS,
@@ -30,10 +31,18 @@ from .signing import SignatureError, verify_frame
 def _node_key_material(node_id: str) -> tuple[str | None, str | None]:
     """The node's key and the algorithm that key belongs to.
 
-    Both come from provisioning, never from the request. A frame cannot choose
-    its own verification algorithm, because that would let an attacker relabel an
-    HMAC frame as Ed25519 and have the central run whichever check it liked.
+    Raises `NodeRetired` when the node's identity has been retired, before the key
+    is even read. A retired node with a perfectly valid signature must not be
+    ingested, and the cheapest place to say so is where the key would have come
+    from.
+
+    Both values come from provisioning, never from the request. A frame cannot
+    choose its own verification algorithm, because that would let an attacker
+    relabel an HMAC frame as Ed25519 and have the central run whichever check it
+    liked.
     """
+    revocation.require_not_retired(node_id)
+
     rows = query(
         "SELECT device_key, device_key_algorithm FROM nodes WHERE node_id=?",
         (node_id,),

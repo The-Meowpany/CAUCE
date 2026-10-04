@@ -352,6 +352,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # check is cheaper to pass. NULL means HMAC, which is what every node
         # provisioned before Ed25519 has.
         conn.execute("ALTER TABLE nodes ADD COLUMN device_key_algorithm TEXT")
+    if "revoked_at_utc_ms" not in cols:
+        # When this node's identity was retired, or NULL while it is good.
+        #
+        # Retirement is not deletion. The measurements a node contributed stay,
+        # because a compromised device does not retroactively make them false; what
+        # is withdrawn is the right to contribute more. Deleting the row would also
+        # cascade the measurements away and destroy the record of what the device
+        # claimed while it was trusted.
+        conn.execute("ALTER TABLE nodes ADD COLUMN revoked_at_utc_ms INTEGER")
+    if "revoked_reason" not in cols:
+        conn.execute("ALTER TABLE nodes ADD COLUMN revoked_reason TEXT")
     mcols = {
         r["name"]
         for r in conn.execute("PRAGMA table_info(measurements)").fetchall()

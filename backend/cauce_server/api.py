@@ -19,6 +19,7 @@ from .calibration import (
 from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
+from . import revocation
 from .retention import purge_older_than, read_state
 from .security import require_bearer_token, require_scope, require_site_access
 from .signing import (
@@ -147,11 +148,66 @@ def provision_node(
             (node_id, device_key, algorithm.name, int(time.time() * 1000),
              int(time.time() * 1000)),
         )
+
+    # Provisioning is the only way a retired node comes back, and it is coupled to
+    # the new key rather than exposed as an un-revoke. A retired node that could be
+    # reinstated by flipping a flag would be reinstated by whoever retired it.
+    was_retired = revocation.is_retired(node_id)
+    if was_retired:
+        revocation.reinstate_via_provisioning(node_id)
+
     return {
         "status": "provisioned",
         "node_id": node_id,
         "device_key_algorithm": algorithm.name,
         "signature_bytes": algorithm.signature_bytes,
+        # Said out loud, because provisioning a retired node is how a rotation is
+        # performed and an operator should not have to read the source to find out.
+        "reinstated": was_retired,
+    }
+
+
+@router.post("/nodes/{node_id}/revoke")
+def revoke_node(
+    node_id: str,
+    payload: dict | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Retires a node's identity.
+
+    Admin, not write: retiring a device removes its ability to report, which is a
+    bigger hammer than changing a setting, and a token scoped to `write` should not
+    reach it.
+
+    Idempotent, and it records the retirement even for a node id that was never
+    provisioned. A retirement that silently does nothing because the id was typed
+    wrong is the failure mode that matters here: the operator walks away believing
+    the device is off the network.
+    """
+    require_scope(authorization, "admin")
+    reason = (payload or {}).get("reason")
+    if reason is not None and not isinstance(reason, str):
+        raise HTTPException(status_code=422, detail="reason_must_be_a_string")
+    return revocation.retire(node_id, reason)
+
+
+@router.get("/nodes/{node_id}/revocation")
+def get_node_revocation(
+    node_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Whether a node's identity is retired. Read scope, like any other node read."""
+    require_site_access(require_scope(authorization, "read"), None)
+    retired_at, reason = revocation.retirement_state(node_id)
+    return {
+        "node_id": node_id,
+        "retired": retired_at is not None,
+        "retired_at_utc_ms": retired_at,
+        "reason": reason,
+        # There is no un-revoke endpoint on purpose. Reinstating a node means
+        # provisioning it again with a new key, and this field says so rather than
+        # leaving the reader to assume a flag can be flipped.
+        "reinstate_by": "POST /v1/provision",
     }
 
 
@@ -214,6 +270,22 @@ async def sync_batch(
     transport = payload.get("transport", "wifi")
     if transport not in ("wifi", "lora"):
         raise HTTPException(status_code=422, detail="unsupported_transport")
+
+    # Retirement is checked before the frame is authenticated. Checking afterwards
+    # would accept the request that a node uses to report its own retirement, and
+    # more importantly it would mean a retired identity still gets to spend the
+    # central's rate-limit budget on signature verification.
+    try:
+        revocation.require_not_retired(node_id)
+    except revocation.NodeRetired as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "node_retired",
+                "retired_at_utc_ms": exc.retired_at_ms,
+                "reason": exc.reason,
+            },
+        ) from exc
 
     # A relayed narrowband batch arrives as the frames the node signed, not as
     # reconstructed JSON. The relay never holds the node's key, so this is the
