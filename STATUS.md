@@ -179,29 +179,30 @@ firmware tests is now generated from an independent implementation, and
 `addPointsTrace` exists so the formula's intermediates can be compared directly
 rather than inferred from a final result.
 
-**What remains is the scalar ladder, and it is now the only unknown.** The
-ladder was implemented on top of the verified layers and **still fails**: with
-`scalar = 1` it returns the base point correctly, but the public key derived from
-a real seed does not match, first differing at byte 0 of `y`.
-
-Everything the ladder depends on is now proven:
+**What remains is the scalar ladder, and it is now confirmed broken.** The ladder
+was implemented on the verified layers and tested against the reference multiples
+directly - `scalarMultBase` with scalars 1, 2 and 3 - and it fails. Everything the
+ladder calls is proven:
 
 - the field layer (14/14 against Python),
 - the scalars mod L (6/6, including all-ones and a random 511-bit input),
 - point encode/decode (round-trip identity, and reference affine coordinates),
-- the group law (identity, doubling, distinct points, on-curve, `P + (-P)`,
-  and the four intermediates against the affine derivation).
+- the group law (identity, doubling, distinct points, on-curve, `P + (-P)`, and
+  the four intermediates against the affine derivation).
 
-So the fault is inside `scalarMult` itself - either the loop or `selectGf` - and
-not in anything it calls. The ladder is also the only stage never tested against
-a point that is not the identity: `scalar = 1` doubles the identity 255 times,
-which is free, and then adds once. A wrong branch or a swapped pair of
-coordinates in the select would survive exactly that case.
+So the fault is inside `scalarMult` itself - the loop or `selectGf` - and not in
+anything it calls. The group-law tests all pass in the same binary and the same
+run, which rules out the environment.
 
-The next step is therefore to test the ladder without seeds: `scalarMultBase` with
-scalars of 1, 2 and 3, compared against the reference multiples already
-generated. If `[2]G` comes out as something other than 2G, the bug is in the loop;
-if `[1]G` and `[2]G` are right but a large scalar is wrong, it is in `selectGf`.
+The next step is narrow. Compare `[1]G`, `[2]G` and `[3]G` one at a time against
+the reference multiples, printing each, rather than looping and failing on the
+first mismatch. `[1]G` is known to be right, and it is the weakest possible test:
+doubling the identity 255 times is free, so it never accumulates anything. If
+`[2]G` is wrong the loop's first real doubling is at fault; if `[2]G` and `[3]G`
+are right and only large scalars fail, it is `selectGf`. The most likely specific
+cause is that the four `selectGf` calls pair a coordinate with the wrong one -
+`acc.z` and `acc.t` are easy to transpose, and a transposition is invisible in
+every test that only reaches the identity.
 
 The signing entry points were removed again rather than committed returning wrong
 answers.
