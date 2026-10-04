@@ -1,0 +1,124 @@
+# Fully pinned dependency closure for the CAUCE central, with SHA-256 hashes.
+#
+# WHAT THIS IS FOR
+#
+# requirements.txt states intent with ranges, which means two installs a month apart get
+# different trees. That is fine for development and wrong for anything whose output has to
+# be attributable: a signature check, a security review, a release. This file pins every
+# package in the closure, so the tree behind a build can be named exactly.
+#
+# Install with:  pip install --require-hashes -r requirements.lock
+#
+# HOW IT WAS GENERATED, AND HOW TO REGENERATE IT
+#
+# One pip download per platform, into its own directory, then merge the hashes:
+#
+#   pip download --only-binary=:all: --python-version 3.12 -d dist/win_amd64
+#     --platform win_amd64 -r requirements.txt
+#   pip download --only-binary=:all: --python-version 3.12 -d dist/manylinux2014_x86_64
+#     --platform manylinux2014_x86_64 -r requirements.txt
+#   pip hash dist/*/*.whl
+#
+# (Kept as separate commands on purpose. No line in this header ends in a backslash,
+# because pip joins a trailing backslash to the following line even inside a comment, and
+# that silently swallows the first requirement in the file.)
+#
+# Passing several --platform values to a single pip download does NOT work either: pip
+# resolves one candidate per requirement and keeps the first platform that matches, so the
+# result covers only one platform. That is how the first version of this file ended up with
+# Windows hashes and would have failed on the Linux CI runner.
+#
+# Do not hand-edit it. Regenerate it in the same commit as any requirements.txt change, so
+# the two never disagree.
+#
+# WHAT IS AND IS NOT PINNED HERE
+#
+# Hashes cover CPython 3.12 on win_amd64 and manylinux2014_x86_64, which are the two
+# platforms this project runs on: a developer on Windows and CI on Linux. A third platform
+# cannot install with --require-hashes until its wheels are added, and that is the intended
+# behaviour - an unhashed platform should fail loudly rather than install something
+# unchecked. Adding one means adding its download above, not relaxing the hashes.
+#
+# cffi and pycparser are here because they are conditional dependencies of cryptography that
+# pip resolves for platforms whose wheel is not self-contained. Deriving the closure by
+# walking importlib.metadata misses them, which is why this file was generated with pip.
+#
+# The six direct dependencies, the ones requirements.txt names directly rather than as
+# something's dependency, are: cryptography, fastapi, httpx, pydantic, pytest, uvicorn.
+#
+# Do not annotate those lines with a trailing comment. A comment on a requirement line
+# swallows the backslash that continues it, so pip stops reading the hashes below and then
+# refuses to install in --require-hashes mode with "hashes are missing" - pointing at a file
+# that visibly has them.
+#
+# PlatformIO, ruff and the firmware toolchain are NOT here. They are development tools, not
+# the service's runtime, and they are pinned where they are used instead: the CI workflow
+# pins ruff and platformio to exact versions.
+
+annotated-doc==0.0.5 \
+    --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101
+annotated-types==0.8.0 \
+    --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494
+certifi==2026.5.20 \
+    --hash=sha256:3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897
+cffi==2.1.1 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf \
+    --hash=sha256:f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a
+click==8.5.0 \
+    --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+cryptography==50.0.0 \
+    --hash=sha256:06a32a980526a6ab9a4b9bf8f7385800791e2bb960903cb6b530e4817509a3b7 \
+    --hash=sha256:bd1c592e4d5974f0d08d4888e432157adba757c66da0246918e43677fafa2d30
+fastapi==0.141.1 \
+    --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3
+h11==0.16.0 \
+    --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+httpcore==1.0.9 \
+    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+httptools==0.8.0 \
+    --hash=sha256:b15fc622b0f869d19207c4089a501d9bcc63ca5e071ffdd2f03f922df882dcb2 \
+    --hash=sha256:cd96f29b4bab1d42fa6e3d008711c75e0f79e94e06827330160e3a304227f150
+httpx==0.28.1 \
+    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+idna==3.18 \
+    --hash=sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2
+iniconfig==2.3.0 \
+    --hash=sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12
+packaging==26.2 \
+    --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+pluggy==1.6.0 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pydantic==2.13.4 \
+    --hash=sha256:45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba
+pydantic-core==2.46.4 \
+    --hash=sha256:926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce \
+    --hash=sha256:e9c26f834c65f5752f3f06cb08cb86a913ceb7274d0db6e267808a708b46bc89
+pygments==2.20.0 \
+    --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+pytest==9.0.3 \
+    --hash=sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9
+python-dotenv==1.2.2 \
+    --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a
+pyyaml==6.0.3 \
+    --hash=sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
+starlette==1.6.0 \
+    --hash=sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c
+typing-extensions==4.15.0 \
+    --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
+typing-inspection==0.4.2 \
+    --hash=sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7
+uvicorn==0.35.0 \
+    --hash=sha256:197535216b25ff9b785e29a0b79199f55222193d47f820816e7da751e9bc8d4a
+watchfiles==1.2.0 \
+    --hash=sha256:e53a384f76b631c3ae5334ce6a52f0baa3a911eb94a4eac7f160079868b716d5 \
+    --hash=sha256:f155b3a1b2a5fc89cdc70d47ee5d54e3b75e88efa34982028a35daef9ba00379
+websockets==17.0.1 \
+    --hash=sha256:2b3f3020171202b135ca078e20434977c6b2b02af647130d6980c9e39b9462e3 \
+    --hash=sha256:f47b0815af3948ec6a440b3afa02f05b18cc0939549e91b5c677b5d9c2c8472a

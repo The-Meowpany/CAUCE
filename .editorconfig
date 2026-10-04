@@ -1,0 +1,35 @@
+# Editor behaviour, so a file does not come back re-indented or with a different
+# encoding depending on who opened it. The line endings themselves are decided by
+# .gitattributes, which is the authority; this file only tells editors what to write.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{cpp,h,c,hpp}]
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+[{*.ps1,*.bat,*.cmd}]
+end_of_line = crlf
+indent_size = 4
+
+[*.{yml,yaml,json,md}]
+indent_size = 2
+
+# Generated. Not ours to reformat, and a formatter pass over them would produce a diff
+# nobody can review.
+[backend/sbom/*.json]
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+[firmware/test/point_vectors.inc]
+insert_final_newline = unset
+trim_trailing_whitespace = unset

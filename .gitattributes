@@ -1,0 +1,30 @@
+# Normalised so a diff is a diff. Without this the repository carries 68 files with CRLF
+# and 197 with LF, which makes every whole-file change show up as every line changed on
+# whichever machine did it.
+#
+# The renormalisation itself (`git add --renormalize .`) is deliberately NOT done here:
+# it touches every file in the tree and belongs in its own commit, not inside an
+# unrelated change.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Generated and vendored artefacts: not ours to reformat.
+backend/sbom/*.json -diff linguist-generated=true
+firmware/test/point_vectors.inc -diff linguist-generated=true
+
+# Binary. Listed explicitly because text=auto guesses from content, and a wrong guess
+# corrupts the file in the index.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.sqlite binary
+*.sqlite-wal binary
+*.sqlite-shm binary
+*.bin binary
+*.elf binary
+*.pyc binary
