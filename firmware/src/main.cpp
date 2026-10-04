@@ -22,6 +22,7 @@
 
 #include "cauce/app/ApiRouter.h"
 #include "cauce/app/CommandExecutor.h"
+#include "cauce/core/NodeActuator.h"
 #include "cauce/app/Esp32ApiServer.h"
 #include "cauce/app/Esp32CaptivePortal.h"
 #include "cauce/app/Esp32Ota.h"
@@ -67,6 +68,7 @@ static cauce::app::Esp32FirmwareInstaller* g_otaInstaller = nullptr;
 static cauce::app::OtaManager* g_otaManager = nullptr;
 static cauce::app::Esp32OtaControl* g_otaControl = nullptr;
 static cauce::app::CommandExecutor* g_commands = nullptr;
+static cauce::NodeActuator* g_actuator = nullptr;
 static cauce::app::OtaBootConfirm* g_bootConfirm = nullptr;
 static bool g_ntpConfigured = false;
 static cauce::NodeConfig g_activeConfig{};
@@ -93,46 +95,47 @@ bool jsonUintField(const char* json, const char* field, uint32_t& out) {
   return true;
 }
 
-// Deliberately side-effect free handlers. They validate and report; they do not
-// reconfigure the running node from the field, because a command that could
-// stop the node reporting is a command nobody should be able to send by
-// accident. Real actuation lands with the actuator work, once there is
-// hardware to actuate.
+// Actuating handlers.
+//
+// These used to validate and report without changing anything, on the grounds
+// that a command able to stop a node reporting is a command nobody should be able
+// to send by accident. That worry was right and the response was wrong: the answer
+// is bounds plus an explicit refusal, not inaction. NodeActuator owns both, and
+// what reaches the central is the value that was APPLIED, so a command clamped or
+// refused is visible to the operator instead of looking successful.
 bool cmdSetSamplingInterval(const char* payload, char* detail, size_t cap) {
   uint32_t seconds = 0;
-  if (!jsonUintField(payload, "seconds", seconds) || seconds < 10 ||
-      seconds > 86400) {
-    snprintf(detail, cap, "rejected:seconds_out_of_range");
+  if (!jsonUintField(payload, "seconds", seconds)) {
+    snprintf(detail, cap, "refused:seconds_missing");
     return false;
   }
-  snprintf(detail, cap, "validated_seconds=%u", static_cast<unsigned>(seconds));
-  return true;
+  return g_actuator != nullptr &&
+         g_actuator->setSamplingInterval(seconds, detail, cap);
 }
 
 bool cmdSetSyncInterval(const char* payload, char* detail, size_t cap) {
   uint32_t seconds = 0;
-  if (!jsonUintField(payload, "seconds", seconds) || seconds < 60 ||
-      seconds > 86400) {
-    snprintf(detail, cap, "rejected:seconds_out_of_range");
+  if (!jsonUintField(payload, "seconds", seconds)) {
+    snprintf(detail, cap, "refused:seconds_missing");
     return false;
   }
-  snprintf(detail, cap, "validated_seconds=%u", static_cast<unsigned>(seconds));
-  return true;
+  return g_actuator != nullptr &&
+         g_actuator->setSyncInterval(seconds, detail, cap);
 }
 
-bool cmdRequestResync(const char*, char* detail, size_t cap) {
-  snprintf(detail, cap, "resync_requested");
-  return true;
+bool cmdRequestResync(const char* payload, char* detail, size_t cap) {
+  (void)payload;
+  return g_actuator != nullptr &&
+         g_actuator->requestResync(millis(), detail, cap);
 }
 
 bool cmdSetLedMode(const char* payload, char* detail, size_t cap) {
   uint32_t mode = 0;
-  if (!jsonUintField(payload, "mode", mode) || mode > 3) {
-    snprintf(detail, cap, "rejected:mode_out_of_range");
+  if (!jsonUintField(payload, "mode", mode)) {
+    snprintf(detail, cap, "refused:mode_missing");
     return false;
   }
-  snprintf(detail, cap, "validated_mode=%u", static_cast<unsigned>(mode));
-  return true;
+  return g_actuator != nullptr && g_actuator->setLedMode(mode, detail, cap);
 }
 
 }  // namespace
@@ -213,6 +216,12 @@ void setup() {
   // Downlink. The central keeps offering a command until it sees its receipt,
   // so the executor has to remember applied ids in flash or the node would
   // re-run them on every poll.
+  //
+  // The actuator is loaded before the handlers are registered, because a handler
+  // that arrives before it would have nothing to apply to and would report a
+  // refusal for a reason the operator would not understand.
+  g_actuator = new cauce::NodeActuator(g_fs, *g_logger, "/state/settings");
+  g_actuator->load();
   g_commands = new cauce::app::CommandExecutor(g_fs, *g_logger,
                                                "/state/applied_commands");
   g_commands->loadApplied();
@@ -250,6 +259,33 @@ void setup() {
 
 void loop() {
   esp_task_wdt_reset();
+  // Downlink actuation, applied at the top of the loop rather than inside the
+  // handler. The command usually arrives in the same batch as the sync response,
+  // so a change made during ingestion would be racing the code that reads it.
+  if (g_actuator != nullptr) {
+    // A resync request is honoured by resetting the retry backoff rather than by
+    // poking the scheduler: the command usually arrives with a sync response that
+    // already failed, and the reason it is still failing is a backoff that has not
+    // expired.
+    if (g_actuator->consumeResyncRequest()) {
+      g_syncManager->requestSyncNow();
+      g_logger->event(cauce::LogLevel::Info, "resync_requested_by_command");
+    }
+    if (g_actuator->isDirty()) {
+      // Written once per change rather than once per loop: flash does not care
+      // that the setting did not change again ten milliseconds later.
+      if (g_actuator->persist()) {
+        const auto& s = g_actuator->settings();
+        g_scheduler->setSamplingInterval(s.samplingIntervalSeconds);
+        g_syncManager->setSyncIntervalS(s.syncIntervalSeconds);
+        g_logger->eventf(cauce::LogLevel::Info, "settings_applied",
+                         "sampling_s=%u sync_s=%u led=%u",
+                         static_cast<unsigned>(s.samplingIntervalSeconds),
+                         static_cast<unsigned>(s.syncIntervalSeconds),
+                         static_cast<unsigned>(s.ledMode));
+      }
+    }
+  }
   g_networkManager->tick();
   g_health.netState = g_networkManager->state();
   g_health.rssiDbm = g_netController->rssiDbm();

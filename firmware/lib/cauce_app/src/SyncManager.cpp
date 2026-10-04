@@ -101,6 +101,16 @@ void SyncManager::onNetworkLost() {
   }
 }
 
+void SyncManager::requestSyncNow() {
+  // Zeroing the backoff is the whole point: an operator asking for a resync is
+  // telling us the previous attempts did not happen yet, not that they failed
+  // again. Leaving the counter alone means the next failure still backs off from
+  // where it was, which is the correct behaviour for a failure and the wrong one
+  // here.
+  failures_ = 0;
+  nextAttemptMonotonicMs_ = 0;
+}
+
 void SyncManager::scheduleRetry(bool authFailure) {
   ++failures_;
   uint32_t backoffS = authFailure

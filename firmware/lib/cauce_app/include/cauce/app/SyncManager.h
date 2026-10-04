@@ -50,9 +50,17 @@ class SyncManager {
   uint64_t lastSyncUtcMs() const { return lastSyncUtcMs_; }
   uint32_t consecutiveFailures() const { return failures_; }
 
- private:
   bool syncOneBatch();
   void runPendingCommands();
+
+  // Clears the retry backoff and syncs on the next tick. Public because a
+  // downlink resync request has to be able to reach it: the command usually
+  // arrives alongside a sync response that already failed, and the reason it is
+  // still failing is a backoff that has not expired.
+  void requestSyncNow();
+
+  // Backs off after a failure. Public only so the tests can assert the backoff
+  // grows; production code reaches it through syncOneBatch's own failure path.
   void scheduleRetry(bool authFailure);
   bool saveWatermark();
   void loadWatermarkLocked();
