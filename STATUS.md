@@ -202,17 +202,41 @@ It is *not* invisible to a comparison against an encoder, because an encoder mus
 set that bit. `ed25519ScalarMultBase` sets it, so its output and this fixture's
 `encoding` differ in the top bit whenever `x` is odd.
 
-So `a733205` is a false retraction and should be disregarded: the group-law
-verification stands, and nothing here licenses regenerating the fixture. What is
-still unexplained is the one hard fact from the previous round -
-`ed25519ScalarMultBase` for `[2]G` printed as `MISMATCH` while producing
-`c9a3f86a...9f3cd6022`, which is exactly row 2's `affineY` and `encoding`. A test
-that mismatches a value it prints as the reference is a test bug: the parity bit
-is the first thing to check, not the last.
+**The measurement that matters: for `[2]G` the ladder returns G itself.**
 
-The three tests stay in the tree. `test_adding_the_identity_to_a_projective_point`
-is registered and passing, and it remains solid evidence that `pointFromProjective`,
-its `T = X*Y/Z` and the divide by non-unit `Z` are all correct.
+```
+ladder [2]G MISMATCH
+  got  5866666666666666666666666666666666666666666666666666666666666666
+  want c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022
+```
+
+`5866...66` is row 1's `affineY`, i.e. the base point. So the accumulator does not
+advance past the base point for any scalar of 1 or more. That is a far more specific
+fault than "the addition is wrong on projective inputs", and it points at the one
+thing that has never been checked: the state carried **between** iterations.
+
+`scalarMult` feeds `addPoints` its own previous output - `X`, `Y`, `Z` and `T` as
+limbs straight out of the previous step, never round-tripped through
+`gfToBytes`. Every other test in this file hands `addPoints` operands built by
+`pointFromAffine` or `pointFromProjective`, and both of those normalise their
+limbs and recompute `T`. So the accumulator is the only operand in the entire suite
+whose limbs have never been through a canonicalisation, and it is the only one that
+fails.
+
+The two checks that would settle it, both one line of instrumentation:
+
+- canonicalise `acc` between iterations - `normalizeLimbs` on `x`, `y`, `z`, `t`, or
+  a `gfToBytes`/`gfFromBytes` round trip - and see whether `[2]G` starts matching;
+- print `acc.t * acc.z` against `acc.x * acc.y` after the first accumulating step. If
+  they differ, `addPoints` is emitting a `T` inconsistent with its own `X`, `Y`, `Z`,
+  and every second step compounds the error.
+
+Note that the identity is the one point this cannot break: doubling it is free, and
+that is exactly why `[1]G` passes and gives false comfort.
+
+`test_adding_the_identity_to_a_projective_point` stays registered and passing. The
+ladder test and the projective doubling test stay in the tree, unregistered, with
+their outputs above.
 
 ### C1 - peer-to-peer exchange (merge DONE, transport NOT)
 
