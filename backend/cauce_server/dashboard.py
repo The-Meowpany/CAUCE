@@ -986,10 +986,11 @@ def node_events_page(node_id: str, request: Request,
             + rows + "</table></div>")
     else:
         peak_txt = "—" if peak_seen is None else f"{peak_seen:.1f} °C"
+        safe_threshold_txt = html.escape(_form_value(threshold))
         body = (
             f"<div class=\"empty\"><p>{labels['no_events']}</p>"
             f"<p class=\"mut\">{labels['max_seen']}: {peak_txt} · "
-            f"{labels['threshold']}: {threshold} °C</p>"
+            f"{labels['threshold']}: {safe_threshold_txt} °C</p>"
             f"<p class=\"mut\">{labels['no_events_hint']}</p></div>")
     opts_v = "".join(
         f"<option value=\"{html.escape(v)}\""
