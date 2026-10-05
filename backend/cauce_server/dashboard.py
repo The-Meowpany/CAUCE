@@ -1038,6 +1038,60 @@ _CSV_ROW = ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14}\n"
 _CSV_CHUNK_LINES = 500
 
 
+def _csv_cell(value) -> str:
+    """One CSV field, safe in a spreadsheet as well as safe in the grammar.
+
+    Two separate problems, and quoting only solves the first.
+
+    The grammar problem: a value containing a comma, a quote or a newline has to be quoted
+    and its quotes doubled, per RFC 4180. That is the part `str` formatting gets wrong by
+    default and the only part most CSV code bothers with.
+
+    The spreadsheet problem: Excel and LibreOffice treat a cell whose text begins with `=`,
+    `+`, `-` or `@` as a formula, and they do so *inside* the quotes. A perfectly valid,
+    correctly quoted `=cmd|'/C calc'!A0` is executed by whoever opens the file. Confirmed
+    against HEAD: a node could sync under that id, it was accepted with a 200, and it came
+    out of this export in the first column unquoted.
+
+    Fixed with a leading apostrophe, which a spreadsheet reads as "this is text" and which
+    disappears once the cell is displayed. It prefixes the value rather than refusing it,
+    because a node with an `=` in its id should still report its data - dropping the row
+    would make an export quietly incomplete, which is worse than a slightly odd character.
+
+    `node_id` is now shape-checked on the way in, so this is defence in depth rather than the
+    only guard: an operator pasting a row, or a future importer, would otherwise put a formula
+    back.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    if text == "":
+        return ""
+    # A number is not a formula, and a negative one is not a formula either. Without this the
+    # `calibration_offset` column came out as `'-1.5` for every site with a negative
+    # correction, which a test caught immediately - a good argument for testing the CSV
+    # writer's output rather than only the endpoint's status code.
+    #
+    # The test is numeric rather than "does not start with a digit", so `-1.5e3` and `-0` are
+    # still numbers, and `+1.5` too: a leading `+` is numeric syntax even though the formula
+    # prefix list includes it.
+    stripped = text.strip()
+    try:
+        float(stripped)
+        return text if not any(c in text for c in (",", '"', "\n", "\r")) else (
+            '"' + text.replace('"', '""') + '"')
+    except ValueError:
+        pass
+    # Leading whitespace defeats a naive first-character check: the spreadsheet trims it and
+    # evaluates what follows.
+    probe = text.lstrip(" \t")
+    if probe[:1] in ("=", "+", "-", "@"):
+        text = "'" + text
+    if any(c in text for c in (",", '"', "\n", "\r")):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
 def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
     """Formats rows in SQL and streams them in blocks, so a 60-day export
     does not spend its time in Python datetime formatting nor in one HTTP
@@ -1061,12 +1115,18 @@ def _csv_chunks(sql: str, params: tuple = (), size: int = 2000):
                 # different fact from an uncertainty of zero.
                 uncertainty = calibrated_uncertainty(cal)
                 block.append(_CSV_ROW.format(
-                    r[0], r[1], r[2], r[3], r[4], r[5], value, r[7], r[8],
-                    r[9], r[10],
-                    "" if calibrated is None else f"{calibrated}",
-                    "" if not cal else f"{cal['scale']}",
-                    "" if not cal else f"{cal['offset']}",
-                    "" if uncertainty is None else f"{uncertainty}"))
+                    # Every field through the escaper, not just the identifier. `unit` and
+                    # `sensor_id` come from the node too, and the fix is only a fix if it is
+                    # applied to the row rather than to the one column that happened to be
+                    # demonstrated.
+                    *(_csv_cell(x) for x in (
+                        r[0], r[1], r[2], r[3], r[4], r[5], value, r[7], r[8],
+                        r[9], r[10],
+                        "" if calibrated is None else f"{calibrated}",
+                        "" if not cal else f"{cal['scale']}",
+                        "" if not cal else f"{cal['offset']}",
+                        "" if uncertainty is None else f"{uncertainty}",
+                    ))))
                 if len(block) >= _CSV_CHUNK_LINES:
                     yield "".join(block)
                     block = []

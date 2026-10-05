@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (319 firmware + 495 backend tests, E2E green)
+## Implemented and verified (325 firmware + 495 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -39,6 +39,8 @@ not. It overrides any aspirational claim elsewhere.
 | **Gateway forwarding loop**: frames to reassembly to `POST /v1/sync` to acknowledgement, driven against the real app and verified by reading rows back out of SQLite; noise counted, failures never acknowledged | 11 backend tests |
 | **Acknowledgement pinned cross-language**: the exact bytes the gateway builds are asserted by the firmware parser and vice versa, so the two cannot drift apart while each still passes its own tests | 1 firmware + 1 backend test |
 | **Identifier validation**: `site_id` restricted to `[A-Za-z0-9_-]` and 64 chars at every write endpoint, closing a stored-markup vector that the JSON API used to echo back; `nosniff` on every non-HTML response | 10 backend tests |
+| **`node_id` had no shape check at all, so a node could sync under a spreadsheet formula**: `variable` and `sensor_id` were both validated against a character class because the dashboard renders them; `node_id` only had to be a non-empty string, and it is stored, rendered, exported and used as a filename. Confirmed against HEAD: `=cmd\|'/C calc'!A0` was accepted with a 200 and came out of `/v1/export-all.csv` unquoted in the first column, so an operator opening the export in a spreadsheet evaluated it | Fixed at all three doors - `/v1/sync`, `/v1/provision` and the LoRa relay - via a shared `identifiers.py`, because a check at two of three is a check waiting to be forgotten at the third and the third is a physical device on a radio. 422 `invalid_node_id`, distinct from `missing_node_id` |
+| **CSV formula injection in both writers, on both sides of the link**: quoting a CSV field does not make it safe in a spreadsheet - Excel and LibreOffice evaluate a cell starting with `=`, `+`, `-` or `@` **inside** the quotes. RFC 4180 says nothing about this, which is exactly why the existing RFC 4180 test passed throughout. The leading whitespace case matters too: the spreadsheet trims it and evaluates what follows, so a naive first-character check misses `"  =1+1"` | Fixed in the firmware's `escapeCsvField` and in the central's new `_csv_cell`, by prefixing an apostrophe inside the quotes. It prefixes rather than refuses, because dropping the row would make an export quietly incomplete. Numbers are exempt - the `-` of `-1.5` is the same byte as the formula prefix, and the backend test caught that within a minute of the central-side fix landing. Leading whitespace is preserved and the guard goes immediately before the `=`. 6 firmware + 2 backend tests |
 | **`haversine_m` measured the wrong distance across the antimeridian**: longitudes were subtracted without normalising, so (0,179) to (0,-179) - 222 km apart - produced a 358-degree separation and a distance of 39,875 km | A site pair across the date line would be grouped as being on opposite sides of the planet, in the control-vs-treatment comparison, with a finite plausible-looking number and no error | Fixed by wrapping both longitudes into [-180,180) *before* the difference. Normalising after the subtraction would not have worked: 181-179 is already 2, so the wrap never runs, which is why there is a test with an out-of-range input as well as one across the line. 1 of 26 new tests |
 | **Three decision functions had no test naming them**: `classify_gap` (why a gap happened - `no_data` vs `measured_not_delivered` vs `clock_uncertain`, which demand different responses), `is_identity` (whether a calibration does anything, and every reporting path branches on it) and `haversine_m`. All three were defined, called and reachable from a report with nothing asserting their answers | A wrong answer here is a study result rather than a visible error | 26 tests. `classify_gap`'s precedence is asserted rather than assumed - clock uncertainty outranks a delivered batch, because if when the samples were taken is unknown then whether a batch fell inside the gap cannot be concluded from its arrival time. `is_identity` has no threshold, and there is a test saying why: calling 1e-9 identity would make a real correction invisible, which is the failure the `calibrated` key exists to prevent |
 | **Bounded text building**: `TextBuffer` replaces unguarded `snprintf` accumulation in `ApiRouter` and `SyncManager`, so `used` can no longer pass the capacity and underflow the remaining-size arithmetic | 8 firmware tests |
@@ -409,7 +411,7 @@ rst:0x8 (TG1WDT_SYS_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
 The upload succeeded, the hash verified, LittleFS mounted, and the config loaded
 with defaults. Then the task watchdog fires before `loop()` ever logs anything.
 
-**What this is worth.** 319 firmware tests pass, the ESP32 cross-build is clean, and
+**What this is worth.** 325 firmware tests pass, the ESP32 cross-build is clean, and
 the node cannot boot. Every test in this repository runs on the host, and the host
 build defines `CAUCE_HOST_SIMULATION` and links none of the ESP32 code. So "the
 suite is green" said nothing about this, and it never could have. This is the
@@ -524,7 +526,7 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio==6.1.19
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 319 succeeded
+cd firmware && pio test -e native      # expect: 325 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
 python -m pytest tests -q              # expect: 495 passed, 1 skipped

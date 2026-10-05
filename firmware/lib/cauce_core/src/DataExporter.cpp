@@ -8,12 +8,77 @@
 namespace cauce {
 
 namespace {
-bool fieldNeedsCsvQuoting(const char* s) {
-  for (const char* p = s; *p; ++p) {
-    if (*p == ',' || *p == '"' || *p == '\n' || *p == '\r') return true;
+// The four characters that decide whether a field is quoted at all.
+//
+// WHY THE LEADING-CHARACTER CHECK IS SEPARATE AND COMES FIRST
+//
+// Quoting a field does not make it safe in a spreadsheet. Excel and LibreOffice both treat a
+// cell whose text begins with `=`, `+`, `-` or `@` as a formula, *inside the quotes*. Quoting
+// only handles commas, quotes and newlines, so `=cmd|'/C calc'!A0` came out of this escaper
+// looking like a plain field and was evaluated by whoever opened the file.
+//
+// The central has the same bug in its own CSV export, fixed there at the same time; this is
+// the device-side half and both write `node_id` into the first column.
+//
+// The mitigation is to prefix an apostrophe, which every spreadsheet treats as "this is text"
+// and which no consumer of the file sees once the cell is displayed. It changes the field
+// rather than refusing it: refusing would drop the row, and a node with a `=` in its id
+// should report its data rather than vanish from the export. The apostrophe is only added
+// when the field would otherwise be quoted, because an unquoted `=x` is evaluated too - the
+// check has to run on every field, not only the ones containing structural characters.
+// True when the text is a number.
+//
+// The central's escaper has the same carve-out and it is not optional there: without it every
+// negative `calibration_offset` came out as `'-1.5`, which a backend test caught the moment
+// the fix landed. A device with a negative correction would have written the same thing, and
+// an apostrophe in front of a number is a lie about the data.
+bool fieldIsNumber(const char* s) {
+    if (!s || !*s) return false;
+    const char* p = s;
+    if (*p == '+' || *p == '-') ++p;
+    bool digits = false;
+    bool dot = false;
+    for (; *p; ++p) {
+      if (*p >= '0' && *p <= '9') {
+        digits = true;
+        continue;
+      }
+      if (*p == '.' && !dot) {
+        dot = true;
+        continue;
+      }
+      // An exponent, so -1.5e3 counts. Deliberately narrow: `strtod` would also accept
+      // "nan", "inf" and hex, and prefixing those is harmless but surprising, while a
+      // hand-rolled check cannot be surprised by a locale.
+      if ((*p == 'e' || *p == 'E') && digits) {
+        const char* q = p + 1;
+        if (*q == '+' || *q == '-') ++q;
+        if (*q < '0' || *q > '9') return false;
+        digits = false;  // the mantissa digits do not count as exponent digits
+        continue;
+      }
+      return false;
+    }
+    return digits;
   }
-  return false;
-}
+
+  bool fieldLooksLikeFormula(const char* s) {
+    return s[0] == '=' || s[0] == '+' || s[0] == '-' || s[0] == '@';
+  }
+
+  bool fieldNeedsCsvQuoting(const char* s) {
+    // Leading whitespace defeats the check: Excel trims it and evaluates what follows. So the
+    // formula test skips spaces, tabs and quotes, which is the other way a leading `=` gets
+    // past a naive check.
+    const char* p = s;
+    while (*p == ' ' || *p == '\t' || *p == '"') ++p;
+    if (fieldIsNumber(p)) return false;
+    if (fieldLooksLikeFormula(p)) return true;
+    for (const char* q = s; *q; ++q) {
+      if (*q == ',' || *q == '"' || *q == '\n' || *q == '\r') return true;
+    }
+    return false;
+  }
 
 void appendText(char*& cursor, size_t& remaining, const char* text) {
   if (!text || remaining == 0) return;
@@ -29,30 +94,66 @@ size_t escapeCsvField(const char* field, char* out, size_t capacity) {
   if (!out || capacity == 0) return 0;
   out[0] = '\0';
   if (!field) return 0;
-  if (capacity < 3) return 0;
+  // Everything below writes in place, so a failure has to leave the buffer empty rather
+  // than half a cell. The lambda does that and is called at every early return.
+  const auto fail = [&]() -> size_t {
+    out[0] = '\0';
+    return 0;
+  };
+  // Room for the shortest quoted output, `""`, plus the terminator.
+  if (capacity < 3) return fail();
   if (!fieldNeedsCsvQuoting(field)) {
     const size_t len = std::strlen(field);
-    if (len >= capacity) return 0;
+    if (len >= capacity) return fail();
     std::memcpy(out, field, len + 1);
     return len;
   }
+// The formula guard goes inside the quotes, and AFTER any leading whitespace rather than
+  // at the very front of the cell.
+  //
+  // Both halves matter. Outside the quotes an apostrophe would be part of the value instead
+  // of a spreadsheet directive; in front of the whitespace it would do nothing at all,
+  // because the spreadsheet trims `"  '=1+1"` back to `=1+1` and evaluates that. The cell
+  // has to read `"  '=1+1"`.
+  //
+  // Numbers are exempt. The leading `-` of a negative value is the same byte as the leading
+  // `-` of a formula, and prefixing every negative value would be a lie in the data column -
+  // the central's writer has the identical carve-out and its test is what caught the same
+  // mistake there.
+  const char* formulaAt = field;
+  while (*formulaAt == ' ' || *formulaAt == '\t' || *formulaAt == '"') ++formulaAt;
+  const bool guard = !fieldIsNumber(formulaAt) && fieldLooksLikeFormula(formulaAt);
+
   size_t used = 0;
   out[used++] = '"';
   for (const char* p = field; *p; ++p) {
+    // The apostrophe is inserted at the position the scan reached, which is after any
+    // leading whitespace and before the `=`.
+    if (p == formulaAt && guard) {
+      if (used + 2 > capacity) return fail();
+      out[used++] = '\'';
+    }
     if (*p == '"') {
-      if (used + 2 >= capacity) return 0;
+      if (used + 2 > capacity) return fail();
       out[used++] = '"';
     }
-    if (used + 1 >= capacity) return 0;
+    if (used + 2 > capacity) return fail();
     out[used++] = *p;
   }
-  if (used + 2 >= capacity) return 0;
+  if (used + 2 > capacity) return fail();
   out[used++] = '"';
   out[used] = '\0';
   return used;
 }
 
 size_t escapeJsonString(const char* text, char* out, size_t capacity) {
+  // Same contract as `escapeCsvField`, and for the same reason: a caller that ignores the
+  // return value must not be handed a half-written string. Restoring that by hand at seven
+  // return sites is discipline that lasts exactly until somebody adds an eighth.
+  const auto fail = [&]() -> size_t {
+    out[0] = '\0';
+    return 0;
+  };
   if (!out || capacity == 0) return 0;
   out[0] = '\0';
   if (!text) return 0;
@@ -62,37 +163,37 @@ size_t escapeJsonString(const char* text, char* out, size_t capacity) {
     out[used++] = c;
     return true;
   };
-  if (!put('"')) return 0;
+  if (!put('"')) return fail();
   for (const char* p = text; *p; ++p) {
     const unsigned char c = static_cast<unsigned char>(*p);
     switch (c) {
       case '"':
-        if (!put('\\') || !put('"')) return 0;
+        if (!put('\\') || !put('"')) return fail();
         break;
       case '\\':
-        if (!put('\\') || !put('\\')) return 0;
+        if (!put('\\') || !put('\\')) return fail();
         break;
       case '\n':
-        if (!put('\\') || !put('n')) return 0;
+        if (!put('\\') || !put('n')) return fail();
         break;
       case '\r':
-        if (!put('\\') || !put('r')) return 0;
+        if (!put('\\') || !put('r')) return fail();
         break;
       case '\t':
-        if (!put('\\') || !put('t')) return 0;
+        if (!put('\\') || !put('t')) return fail();
         break;
       default:
         if (c < 0x20) {
           char buf[8];
           std::snprintf(buf, sizeof(buf), "\\u%04x", c);
           for (const char* q = buf; *q; ++q)
-            if (!put(*q)) return 0;
+            if (!put(*q)) return fail();
         } else if (!put(static_cast<char>(c))) {
-          return 0;
+          return fail();
         }
     }
   }
-  if (!put('"')) return 0;
+  if (!put('"')) return fail();
   out[used] = '\0';
   return used;
 }
