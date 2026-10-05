@@ -292,7 +292,23 @@ decoder was never the thing under test.
   is wrong but self-consistent cannot pass.
 - `test_the_core_decoder_matches_the_fixture` - decode against `affineX`/`affineY`.
 
-**Still open in C2: wiring the algorithm choice into `LoRaSyncTransport`.**
+**LoRa transport wiring: closed, and the reason it was still listed is now recorded.**
+
+`LoRaSyncTransport` does take the algorithm - `setFrameAlgorithm` plus `setDeviceKey`,
+with `hasUsableAlgorithm()` so a misconfiguration is visible before the first transmission
+rather than as a central silently dropping every frame. `signFrame` dispatches on it and
+refuses any Ed25519 seed that is not exactly 32 bytes. Both directions are covered by
+tests.
+
+What was genuinely missing is narrower and now stated plainly: **no product firmware
+constructs the LoRa transport at all.** `main.cpp` has no `LoRaSyncTransport` and no
+`setFrameAlgorithm` call, because there is no LoRa radio wired into a node yet - Phase 2 is
+unstarted and the SX1276 has never been on a board. So there was no wiring to complete: a
+node cannot choose an algorithm for a transport it does not have.
+
+That is a Phase 2 item, not a Phase 1 one, and moving a sentence to make C2 look finished
+would have been the wrong trade. What C2 delivers is verified field arithmetic, a verified
+scalar ladder, and a signing entry point the host suite exercises end to end.
 
 ### C2b - signing (DONE)
 
@@ -359,7 +375,7 @@ channel is a liability rather than a finished product.
 | 2 - air interface | Driver written and host-tested after three real register bugs were found and fixed; no board, no measured link budget. See the SX1276 row above. |
 | 3 - bench | Not started. Needs a board and `docs/en/BENCH_PLAN.md`. |
 | 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory self-test **done**: `bench_main.cpp` runs sensor read with a plausibility range, config, storage append/reopen with a value check, `listFiles` termination, provisioning, and the signed-batch path, ending in a `FACTORY_RESULT` line for a line-side script. Stages a bare unit cannot perform report `SKIP`, not `FAIL` - requiring a signed sync with no server would fail every unit for a reason unrelated to the unit, and a test everyone ignores is worse than none. An enclosure does not exist, and no unit has yet been run through it. |
-| 5 - release engineering | SBOM tool (scoped to the real dependency closure, no longer a listing of the build machine), release gate (`.sh` and `.ps1`) and runbook **done**. Lockfile with hashes **done** (`backend/requirements.lock`, CI installs with `--require-hashes`). The image now installs that lock, which it previously ignored: `backend/Dockerfile` copied `requirements.txt` and resolved fresh versions at build time, so the pinned closure in the repository was documentation. The base image is a required `ARG BASE_IMAGE` with no default, so a build cannot pick a floating tag, and the gate fails a release whose Dockerfile does not. Gate also checks semver and that the tag matches the version the application reports. **Still open: no release tag**, and the base digest has no value recorded here because resolving one needs Docker, which is not installed here - supplying a digest unverified would be a correctness claim with no evidence behind it. |
+| 5 - release engineering | SBOM tool (scoped to the real dependency closure, no longer a listing of the build machine), release gate (`.sh` and `.ps1`) and runbook **done**. Lockfile with hashes **done** (`backend/requirements.lock`, CI installs with `--require-hashes`). The image now installs that lock, which it previously ignored: `backend/Dockerfile` copied `requirements.txt` and resolved fresh versions at build time, so the pinned closure in the repository was documentation. The base image is a required `ARG BASE_IMAGE` with no default, so a build cannot pick a floating tag, and the gate fails a release whose Dockerfile does not. Gate also checks semver and that the tag matches the version the application reports. The base image is pinned to a **multi-platform index digest**, resolved from the registry rather than composed from memory, and recorded in both the Dockerfile and the gate so the two cannot drift. Index rather than per-architecture, because the pilot Raspberry Pis are arm64 and an amd64 manifest digest would fail there rather than fall back. **Still open: no release tag**, and the image has never actually been built - Docker is not installed on this machine and neither is WSL, so the digest is verified as resolvable and correct for its tag, not as producing a working central. The gate requires both copies to agree instead of claiming a build happened. |
 | 6 - declare the freeze | Not started, and cannot start before Phase 3. |
 
 The release gate is the one thing here that keeps the remaining phases honest:

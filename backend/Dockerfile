@@ -3,15 +3,22 @@
 #
 # A floating tag is the quiet way an artifact stops being reproducible. `python:3.12-slim`
 # is a moving target: the same Dockerfile builds different bytes on different days, and a
-# central that was tested against one set of system libraries ships against another. There
-# is no digest to pin here by default because a digest that nobody re-resolves is a
-# correctness claim with no evidence behind it, so the caller has to supply a real one:
+# central that was tested against one set of system libraries ships against another.
 #
-#   docker build --build-arg BASE_IMAGE=python:3.12-slim@sha256:<digest> -t cauce-central .
+# The caller supplies a resolved digest, and the value below is the multi-platform index
+# digest for `python:3.12-slim` at the time of writing, taken from the registry rather than
+# composed from memory:
 #
-# `scripts/release-gate.ps1` fails a release whose Dockerfile does not take the base image
-# this way, so an unpinned base cannot reach a tag.
-ARG BASE_IMAGE
+#   docker build --build-arg BASE_IMAGE=python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d -t cauce-central .
+#
+# An index digest, not a per-architecture one, so the same value builds on amd64 and arm64 -
+# which matters because the pilot Raspberry Pis are arm64 and an amd64 manifest digest would
+# fail there rather than fall back. It is recorded in `scripts/release-gate.ps1`, which fails
+# a release whose Dockerfile and gate disagree about it, so the two cannot drift.
+#
+# To move to a newer base, re-resolve it rather than editing the tag by hand:
+#   docker buildx imagetools inspect python:3.12-slim --format '{{.Manifest.Digest}}'
+ARG BASE_IMAGE=python:3.12-slim@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d
 FROM ${BASE_IMAGE}
 
 WORKDIR /app

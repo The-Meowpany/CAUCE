@@ -85,10 +85,24 @@ Step "backend image is pinned"
 # requirements.txt while the repository carried a hash-pinned requirements.lock that no
 # build ever read.
 $dockerfile = Get-Content backend\Dockerfile -Raw
-if ($dockerfile -match '(?m)^\s*ARG\s+BASE_IMAGE\s*$') {
-    Ok "base image is a required build ARG, so no build can pick a floating tag"
+# The expected digest is recorded here as well as in the Dockerfile. One copy would be enough
+# for the build; two is what makes drift detectable, which is the property that matters - a
+# gate that reads its expectation from the file it is checking cannot fail.
+$expectedBase = "sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d"
+if ($dockerfile -match 'ARG\s+BASE_IMAGE=\S+@sha256:[0-9a-f]{64}') {
+    Ok "base image is pinned to a digest, so no build can pick a floating tag"
 } else {
-    Fail "backend/Dockerfile does not take the base image as a required ARG"
+    Fail "backend/Dockerfile does not pin the base image to a digest"
+}
+if ($dockerfile -match [regex]::Escape($expectedBase)) {
+    Ok "base digest is the one this gate expects ($($expectedBase.Substring(0,19))...)"
+} else {
+    Fail "backend/Dockerfile base digest differs from the gate's; re-resolve both together"
+}
+if ($dockerfile -match 'imagetools inspect') {
+    Ok "the documented way to move the base is a re-resolve, not a hand edit"
+} else {
+    $notes.Add("Dockerfile does not say how to re-resolve the base digest")
 }
 if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-hashes') {
     Ok "image installs the hash-pinned lock, not the loose requirements"
