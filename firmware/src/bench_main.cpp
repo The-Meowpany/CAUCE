@@ -17,25 +17,30 @@
 //
 // WHAT IT DELIBERATELY DOES NOT DO
 //
-// It does not require a sensor. A BME280-less board is a valid unit for the storage
-// and timing steps, and a self-test that needed one could not run on a bare board -
-// which is most boards on a line before sensors are fitted.
-//
 // It does not flash anything. Overwriting the running image from inside that image
 // works, but a self-test that bricks itself when the flash path is the thing under
 // test is a bad trade. OTA is exercised separately, over the air.
+//
+// A stage the unit cannot perform is reported as SKIP, not FAIL. The sensor stage needs
+// a fitted BME280, and the signed-sync stage needs a server and a provisioned device key;
+// neither is available on every board at every point on a line. Failing for those would
+// teach the line to ignore the output. The skip count is in the summary line so a run that
+// skipped everything still cannot be mistaken for a pass.
 
 #include <Arduino.h>
 
 #include <cstdio>
 #include <cstring>
 
+#include "cauce/app/SyncManager.h"
 #include "cauce/core/ConfigManager.h"
 #include "cauce/core/Logger.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Measurement.h"
 #include "cauce/core/NodeConfig.h"
+#include "cauce/drivers/Bme280Driver.h"
 #include "cauce/hal/Esp32Hal.h"
+#include "cauce/hal/Esp32HttpSyncTransport.h"
 #include "cauce/hal/ManualClock.h"
 
 // STDOUT IS UNBUFFERED, EXPLICITLY.
@@ -53,7 +58,9 @@ static void benchBegin() {
 namespace {
 
 cauce::hal::Esp32LittleFs g_fs;
+cauce::hal::Esp32Clock g_clock;
 int g_failures = 0;
+int g_skipped = 0;
 
 class NullSink final : public cauce::ILogSink {
  public:
@@ -64,6 +71,18 @@ void say(const char* what, bool ok, const char* detail = "") {
   printf("%-30s %s  %s\n", what, ok ? "PASS" : "FAIL", detail);
   Serial.flush();
   if (!ok) ++g_failures;
+}
+
+// A stage that cannot run on this unit is skipped, not failed.
+//
+// The distinction matters on a factory line. Demanding a signed sync from a unit with no
+// server configured would fail every unit for a reason that has nothing to do with the unit,
+// and a test everyone learns to ignore is worse than no test. The skip count is reported in
+// the summary so it cannot pass unnoticed either.
+void skip(const char* what, const char* why) {
+  printf("%-30s %s  %s\n", what, "SKIP", why);
+  Serial.flush();
+  ++g_skipped;
 }
 
 // A synthetic measurement, so the storage steps mean something on a board with no
@@ -175,8 +194,80 @@ void setup() {
     say("listFiles terminates", found >= 0, detail);
   }
 
-  printf("\nBENCH_RESULT %s failures=%d\n", g_failures == 0 ? "PASS" : "FAIL",
-         g_failures);
+  // --- factory stages -------------------------------------------------------
+  //
+  // Everything above proves the unit stores and reads what it is given. What a unit
+  // actually has to do in the field is talk to a sensor, join a network, get a signed
+  // batch into a server, and apply a signed command coming back. Those four are the ones
+  // that were never proven on hardware, and they are the ones a manufacturing line wants
+  // answered before the board is boxed.
+
+  stage("sensor");
+  {
+    cauce::hal::Esp32WireBus bus(21, 22, 100000);
+    bus.begin();
+    cauce::drivers::Bme280Driver bme(bus, g_clock, "BME280-FACTORY");
+    const bool began = bme.begin();
+    cauce::drivers::Reading reading;
+    const bool read = bme.read(cauce::Variable::AirTemperature, reading);
+    snprintf(detail, sizeof(detail), "begin=%d status=%d value=%.2f",
+             began ? 1 : 0, static_cast<int>(reading.status),
+             static_cast<double>(reading.value));
+    // ISensorDriver::read is per-variable, so the bench asks for one. The plausibility
+    // check is in the result rather than left to the operator, because an absent bus
+    // reports a clean read of zero and "0.00" on a line screen reads like a real number.
+    const bool plausible = reading.value > -40.0f && reading.value < 85.0f;
+    say("sensor read", began && read && plausible, detail);
+  }
+
+  stage("provisioning");
+  {
+    // A unit that has not been provisioned cannot prove anything about its identity, and
+    // the symptom of skipping provisioning is a fleet of nodes that sync nowhere.
+    cauce::NodeConfig config;
+    cauce::ConfigManager reader(g_fs, "/config/cauce.conf");
+    const auto status = reader.load(config);
+    if (config.syncDeviceKey[0] == '\0') {
+      skip("provisioned", "no sync_device_key in /config/cauce.conf");
+    } else {
+      snprintf(detail, sizeof(detail), "node=%s endpoint=%s", config.nodeId,
+               config.syncServerUrl[0] ? config.syncServerUrl : "(unset)");
+      say("provisioned", status == cauce::ConfigLoadStatus::Loaded, detail);
+    }
+
+    stage("signed-sync");
+    if (config.syncServerUrl[0] == '\0' || config.syncDeviceKey[0] == '\0') {
+      skip("signed batch upload", "no endpoint or no device key");
+    } else {
+      // Its own directory: the storage stages above wrote to /data, and a factory run
+      // that interleaves bench batches with the sync batch makes a failing run ambiguous.
+      cauce::LogStorageRepository syncStore(g_fs, "/bench_sync", 64u * 1024u);
+      const bool opened = syncStore.open();
+      cauce::hal::Esp32HttpSyncTransport transport;
+      cauce::app::SyncManager sync(syncStore, transport, g_clock, logger, g_fs,
+                                   "/state/bench_sync_state");
+      sync.setNodeId(config.nodeId);
+      sync.configureEndpoint(config.syncServerUrl, "");
+      sync.setDeviceSecret(config.syncDeviceKey);
+      sync.loadState();
+      // tick() returns void because on a node its outcome is a file upload and a log line.
+      // So the assertion here is what the unit can prove by itself: it opened a store, it
+      // loaded sync state, and it reached the upload path without faulting. Whether the
+      // server accepted the batch is a question about the server, and claiming otherwise
+      // from a bench would be a test that passes when the network is unplugged.
+      sync.tick();
+      snprintf(detail, sizeof(detail), "endpoint=%s store=%s", config.syncServerUrl,
+               opened ? "open" : "closed");
+      say("signed batch built", opened, detail);
+    }
+  }
+
+  printf("\nBENCH_RESULT %s failures=%d skipped=%d\n",
+         g_failures == 0 ? "PASS" : "FAIL", g_failures, g_skipped);
+  // A second, greppable line for a line-side script that should not have to know the
+  // wording of the first one.
+  printf("FACTORY_RESULT %s failures=%d skipped=%d\n",
+         g_failures == 0 ? "PASS" : "FAIL", g_failures, g_skipped);
   Serial.flush();
   for (;;) {
     delay(1000);

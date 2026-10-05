@@ -20,6 +20,10 @@ MAX_WINDOW_MS = 730 * 86400_000
 # Resolution guard: see _window.
 MAX_BUCKETS = 100_000
 MAX_GAPS_REPORTED = 20
+# The most a single page may return, so `gap_limit` cannot be used to pull a whole
+# window's worth of gaps into one response. Without a ceiling the pagination would work
+# and then be pointless.
+MAX_GAPS_PER_PAGE = 200
 
 REASON_NO_DATA = "no_data"
 REASON_NOT_DELIVERED = "measured_not_delivered"
@@ -55,19 +59,76 @@ def classify_gap(node_id: str, start_ms: int, end_ms: int) -> str:
     return REASON_NO_DATA
 
 
+def _gap_cte(node_id: str, variable: str, from_ms: int, to_ms: int) -> str:
+    """The shared per-measurement delta expression used by the gap queries."""
+    return """WITH ordered AS (
+                   SELECT timestamp_utc_ms AS ts,
+                          timestamp_utc_ms - LAG(timestamp_utc_ms)
+                            OVER (ORDER BY timestamp_utc_ms) AS delta
+                   FROM measurements
+                   WHERE node_id=? AND variable=?
+                     AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?)
+               """
+
+
+def _count_gaps(
+    node_id: str, variable: str, from_ms: int, to_ms: int, gap_threshold: int,
+) -> int:
+    """Total gaps in the window, independent of any page.
+
+    Only needed when a page came back empty, where the paged query's window-function count
+    has no row to be read from. It costs a second scan of the window, and it is spent only
+    on the page that would otherwise have reported an outage history of zero.
+    """
+    rows = query(
+        _gap_cte(node_id, variable, from_ms, to_ms)
+        + "SELECT COUNT(*) AS n FROM ordered"
+          " WHERE delta IS NOT NULL AND delta>?",
+        (node_id, variable, from_ms, to_ms, gap_threshold),
+    )
+    return rows[0]["n"] if rows else 0
+
+
+def _max_gap(
+    node_id: str, variable: str, from_ms: int, to_ms: int, gap_threshold: int,
+) -> int:
+    """The longest gap in the window, which a paged listing cannot supply."""
+    rows = query(
+        _gap_cte(node_id, variable, from_ms, to_ms)
+        + "SELECT MAX(delta) AS m FROM ordered"
+          " WHERE delta IS NOT NULL AND delta>?",
+        (node_id, variable, from_ms, to_ms, gap_threshold),
+    )
+    value = rows[0]["m"] if rows else None
+    return int(value) if value is not None else 0
+
+
 def node_coverage(
     node_id: str,
     variable: str,
     from_ms: int,
     to_ms: int,
     interval_ms: int,
+    gap_offset: int = 0,
+    gap_limit: int | None = None,
 ) -> dict:
     """Expected-versus-received accounting for one node and variable.
 
     `interval_ms` is the configured sample period, which the central does not
     own, so the expected count is an assumption derived from the query.
+
+    `gap_offset` and `gap_limit` page through the gaps, longest first. The
+    window can hold far more gaps than any caller wants in one response, and
+    `gaps_truncated` alone only says that there were more, not which. The old
+    behaviour - return the twenty longest and stop - is still the default.
     """
     interval_ms = max(MIN_INTERVAL_MS, min(interval_ms, 24 * 3600_000))
+    if gap_offset < 0:
+        raise ValueError("gap_offset must not be negative")
+    if gap_limit is None:
+        gap_limit = MAX_GAPS_REPORTED
+    else:
+        gap_limit = max(1, min(gap_limit, MAX_GAPS_PER_PAGE))
     total = query(
         """SELECT COUNT(*) AS received,
                    MIN(timestamp_utc_ms) AS first_ts,
@@ -99,6 +160,14 @@ def node_coverage(
     gaps_total = 0
     first_ts = total["first_ts"]
     last_ts = total["last_ts"]
+    # The gap from the last measurement to the end of the window, synthesised rather than
+    # read from the table. Declared here because the no-data branch below leaves it unset,
+    # and it is referenced after both branches.
+    trailing_gap = None
+    # The longest gap in the whole window, tracked as gaps are built. It cannot be read
+    # back off the page afterwards, because paging means the page is not the window, and
+    # `rows` does not exist at all when the node sent nothing.
+    longest_gap_ms = 0
     if first_ts is None or last_ts is None:
         if expected:
             gaps.append(
@@ -110,6 +179,7 @@ def node_coverage(
                     "reason": REASON_NO_DATA,
                 }
             )
+            longest_gap_ms = to_ms - from_ms
     else:
         if first_ts - from_ms >= gap_threshold:
             gaps.append(
@@ -123,26 +193,36 @@ def node_coverage(
                     "reason": classify_gap(node_id, from_ms, first_ts),
                 }
             )
+            longest_gap_ms = max(longest_gap_ms, first_ts - from_ms)
         rows = query(
-            """WITH ordered AS (
-                   SELECT timestamp_utc_ms AS ts,
-                          timestamp_utc_ms - LAG(timestamp_utc_ms)
-                            OVER (ORDER BY timestamp_utc_ms) AS delta
-                   FROM measurements
-                   WHERE node_id=? AND variable=?
-                     AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?)
-               SELECT ts, delta, COUNT(*) OVER () AS total_gaps
+            _gap_cte(node_id, variable, from_ms, to_ms)
+            + """SELECT ts, delta, COUNT(*) OVER () AS total_gaps
                FROM ordered
                WHERE delta IS NOT NULL AND delta>?
-               ORDER BY delta DESC LIMIT ?""",
-            (node_id, variable, from_ms, to_ms, gap_threshold, MAX_GAPS_REPORTED),
+               ORDER BY delta DESC, ts ASC LIMIT ? OFFSET ?""",
+            (node_id, variable, from_ms, to_ms, gap_threshold, gap_limit, gap_offset),
         )
         # How many gaps exist, not just how many are returned.
         #
         # `gaps_truncated` alone says "there were more" without saying how much
         # more, so a caller cannot tell a site with 21 gaps from one with 21,000.
         # The window function is free here because LIMIT is applied after it.
+        #
+        # It is only correct while the page is non-empty: paging past the end returns no
+        # rows at all, and reading the count off `rows[0]` would then report a site with
+        # zero gaps. A caller that paged too far would be told the outage history it just
+        # walked through does not exist.
         gaps_total = rows[0]["total_gaps"] if rows else 0
+        if not rows and gap_offset > 0:
+            gaps_total = _count_gaps(
+                node_id, variable, from_ms, to_ms, gap_threshold)
+        # The longest gap in the window, which is a property of the window and not of the
+        # page. It cannot be read off `rows` once the list is pageable, because page two
+        # by construction does not contain the worst outage. Derived per page, paging
+        # would report a shrinking worst-case as the pages advanced, which reads as the
+        # site getting better while somebody is still reading it.
+        longest_gap_ms = max(longest_gap_ms, _max_gap(
+            node_id, variable, from_ms, to_ms, gap_threshold))
         for row in rows:
             gap_start = row["ts"] - row["delta"]
             gap_end = row["ts"]
@@ -156,24 +236,49 @@ def node_coverage(
                 }
             )
         if to_ms - last_ts >= gap_threshold:
-            gaps.append(
-                {
-                    "start_utc_ms": last_ts,
-                    "end_utc_ms": to_ms,
-                    "duration_ms": to_ms - last_ts,
-                    "missing_samples": max(0, (to_ms - last_ts) // interval_ms),
-                    "reason": classify_gap(node_id, last_ts, to_ms),
-                }
-            )
+            trailing_gap = {
+                "start_utc_ms": last_ts,
+                "end_utc_ms": to_ms,
+                "duration_ms": to_ms - last_ts,
+                "missing_samples": max(0, (to_ms - last_ts) // interval_ms),
+                "reason": classify_gap(node_id, last_ts, to_ms),
+            }
+    # Folded in once, and only when the trailing gap actually qualifies. Done inline next
+    # to the assignment it would count a sub-threshold remainder - a window whose ends are
+    # inclusive can stop one sample short of its last measurement without that being a gap,
+    # and `longest_gap_ms` would then report an outage where the list reports none.
+    if trailing_gap is not None:
+        longest_gap_ms = max(longest_gap_ms, trailing_gap["duration_ms"])
         # Outside the branch above on purpose: with no data the only gap is the
     # synthetic whole-window one, and it still has to be counted and still has to be
     # subject to the cap.
     gaps.sort(key=lambda g: g["duration_ms"], reverse=True)
     # Erring toward reporting more gaps than were returned rather than fewer.
     gaps_total = max(gaps_total, len(gaps))
-    gaps = gaps[:MAX_GAPS_REPORTED]
 
-    longest_gap_ms = gaps[0]["duration_ms"] if gaps else 0
+    # The trailing gap is synthesised here rather than read from the table, so it has no
+    # rank in the SQL ordering. On the first page it is merged in and ranked with the
+    # rest, which is what every existing caller sees. On a later page its rank is not
+    # knowable without paging through everything before it, so it is reported in its own
+    # field instead of being appended to a page whose contract is "the Nth longest first".
+    # Appending it unconditionally is how a paginated list silently grows an extra element
+    # that breaks a caller's loop.
+    if trailing_gap is not None:
+        # The window-function count only sees gaps between two measurements, so the
+        # synthesised one is never in it and has to be added here on every page. Without
+        # this the reported total silently disagreed with the list by one on page one and
+        # by one on page two, which is the kind of off-by-one nobody trusts a second time.
+        gaps_total += 1
+        if gap_offset == 0:
+            gaps.append(trailing_gap)
+            gaps.sort(key=lambda g: g["duration_ms"], reverse=True)
+            gaps_total = max(gaps_total, len(gaps))
+            gaps = gaps[:gap_limit]
+    if gap_offset > 0 and gap_offset >= gaps_total:
+        gaps = []
+    # `longest_gap_ms` is the longest gap in the window, not the longest on this page, so
+    # it was accumulated while the gaps were built. Deriving it from the page instead would
+    # report a shrinking number as pages advance, which reads as the site improving.
     return {
         "node_id": node_id,
         "variable": variable,
@@ -192,8 +297,16 @@ def node_coverage(
         "reconstructed_samples": total["reconstructed"] or 0,
         "gap_count_total": gaps_total,
         "gap_count_reported": len(gaps),
+        "gap_offset": gap_offset,
+        "gap_limit": gap_limit,
         "longest_gap_ms": longest_gap_ms,
-        "gaps_truncated": gaps_total > len(gaps),
+        # Offset-aware. The old form was `gaps_total > len(gaps)`, which is correct only
+        # for the first page: on the last page of a set it compares the total against the
+        # remainder and reports that more gaps exist when none do. A caller following this
+        # flag to fetch the next page would loop forever on a site that had already been
+        # fully read.
+        "gaps_truncated": (gap_offset + len(gaps)) < gaps_total,
+        "trailing_gap": trailing_gap,
         "gaps": gaps,
     }
 
@@ -254,15 +367,25 @@ def node_coverage_endpoint(
     from_utc_ms: int | None = None,
     to_utc_ms: int | None = None,
     expected_interval_ms: int | None = None,
+    gap_offset: int = 0,
+    gap_limit: int | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
     require_bearer_token(authorization, settings.api_token)
+    # Validated before the node lookup, so a malformed parameter is reported as itself
+    # rather than as `node_not_found` for a node that does exist. The 404 would send the
+    # caller looking for a node problem they do not have.
+    if gap_offset < 0:
+        raise HTTPException(status_code=422, detail="invalid_gap_offset")
     if not query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)):
         raise HTTPException(status_code=404, detail="node_not_found")
     interval = _interval(expected_interval_ms)
     from_ms, to_ms = _window(from_utc_ms, to_utc_ms, interval)
-    result = node_coverage(node_id, variable, from_ms, to_ms, interval)
+    result = node_coverage(
+        node_id, variable, from_ms, to_ms, interval,
+        gap_offset=gap_offset, gap_limit=gap_limit,
+    )
     return {
         "metric_type": "derived_coverage",
         "note": (

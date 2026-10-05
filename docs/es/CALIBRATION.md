@@ -172,7 +172,40 @@ Escrito para que dos personas produzcan los mismos números. Completo donde el
 método está decidido y explícitamente vacío donde no lo está, porque una celda
 sin llenar es una decisión que nadie tomó.
 
-| paso | air_temperature | relative_humidity | pressure |
+### Cómo ejecutarlo
+
+La tabla de abajo la ejecuta `backend/tools/calibrate.py`, así que el ajuste no
+depende de quien la lea:
+
+```bash
+python tools/calibrate.py --site SITE-A --variable air_temperature \
+    --reference CAUCE-REF --hours 48
+
+# guarda las calibraciones aceptadas a través de la API, y solo esas
+python tools/calibrate.py --site SITE-A --variable air_temperature \
+    --reference CAUCE-REF --hours 48 --apply
+```
+
+Lee las filas co-localizadas del propio central, ajusta el mapa, evalúa el límite
+de aceptación de la tabla y reporta `accept`, `reject` o `provisional` por nodo.
+Sin `--apply` solo informa, porque una calibración aplicada por un script que nadie
+leyó es una calibración que nadie decidió.
+
+Dos decisiones que cierra, y que la prosa sola no fijaba:
+
+- **`scale` es 1.0 por defecto y solo se ajusta `offset`**, como la media de las
+  diferencias con signo. Mínimos cuadrados sobre ambos términos está disponible
+  con `--fit-scale`, y es lo correcto cuando la discrepancia es ganancia y no
+  sesgo.
+- **Menos de 20 pares da `provisional`, nunca `accept`.** Cuatro muestras no son
+  los 48 del procedimiento.
+
+Un resultado que conviene leer antes de interpretar la salida: **un offset no puede
+reducir la dispersión.** Los residuales tras un ajuste solo-offset son las
+diferencias crudas menos su propia media, y una desviación típica no se mueve al
+desplazar todos los valores una constante. Así que `spread` solo baja con
+`--fit-scale`. Un informe que muestra la dispersión sin cambios no es una
+calibración rota: está diciendo que la discrepancia es dispersa y no un sesgo.
 |---|---|---|---|
 | referencia | nodo de referencia co-localizado, calibrado contra un termómetro de referencia | nodo de referencia co-localizado | nodo de referencia co-localizado |
 | método | `co-location-relative` | `co-location-relative` | `co-location-relative` |

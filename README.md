@@ -30,7 +30,7 @@ pio test -e native          # 317 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 395 tests
+python -m pytest tests -q   # 420 tests
 ..\scripts\run-e2e.ps1      # C++ node → FastAPI → SQLite (3 phases)
 ..\scripts\verify-all.ps1   # everything above in one gate
 ```
@@ -156,7 +156,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-317 firmware + 395 backend tests + ESP32 build + E2E = **712 automated
+317 firmware + 420 backend tests + ESP32 build + E2E = **737 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).

@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (317 firmware + 395 backend tests, E2E green)
+## Implemented and verified (317 firmware + 420 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -100,11 +100,11 @@ not. It overrides any aspirational claim elsewhere.
   co-location overlays instead.
 - Calibration **uncertainty**: records can carry an absolute uncertainty and
   the kind it came from, and it scales with the correction, so a report can
-  separate measurement from method. There is still no formal calibration
-  procedure and no metrological traceability.
-- Coverage accounting caps a query at 400 days and reports the top 20
-  gaps with `gaps_truncated` set when there are more, so a very long
-  window is bounded rather than complete.
+  separate measurement from method. There is still no metrological traceability:
+  the reference is another node, and the chain ends at a sensor datasheet.
+- Coverage accounting caps a query at 400 days. The gap list is pageable
+  (`gap_offset`, `gap_limit`, 200 per page), so a long window is bounded per
+  response and complete across pages.
 - TLS ships ACME by default (`CAUCE_TLS_MODE` empty). A public deployment
   still needs a real DNS name pointing at the host.
 - Deep sleep is wired but **disabled by default**: turning it on requires
@@ -131,10 +131,10 @@ not. It overrides any aspirational claim elsewhere.
 - ESP-NOW / mDNS peer-to-peer. `Replication` and `IPeerLink` exist and are
   tested; the radio and discovery do not. This is a Phase 0 decision, not an
   oversight.
-- A **factory test command**: one invocation that proves a unit works before it
-  ships (sensor read, storage write, join, signed sync, signed downlink).
-- Semantic versioning applied, a release tag, and a reproducible backend build
-  or at least a recorded lockfile hash.
+- A **signed downlink that has never been observed arriving**. The command path exists
+  end to end and is host-tested; the bench now reaches the batch-building and
+  credential-loading stages of the same path on real hardware, but no command has been
+  seen to complete a round trip to a central and back.
 - Public-key infrastructure beyond Ed25519: there is no Ed25519 **public key to
   certificate** mapping, so TLS still relies on the shared admin token for API
   access.
@@ -350,11 +350,11 @@ channel is a liability rather than a finished product.
 | Phase | State |
 |---|---|
 | 0 - freeze the specification | Not started. Needs a decision on ESP-NOW and one on LoRa. |
-| 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure, uncertainty budget, coverage completeness, test binary isolation and a public certificate remain. |
+| 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure and uncertainty budget **done** (`backend/tools/calibrate.py` executes the documented fit and evaluates the acceptance limit; 15 tests). Coverage gap paging **done** (`gap_offset`/`gap_limit`). Test binary isolation partially done - the registry and gate exist and mutations are adopted, but no suite shares a filesystem so the directory half has no callers. A public certificate mapping remains. |
 | 2 - air interface | Driver written and host-tested after three real register bugs were found and fixed; no board, no measured link budget. See the SX1276 row above. |
 | 3 - bench | Not started. Needs a board and `docs/en/BENCH_PLAN.md`. |
-| 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory test command and an enclosure do not exist. |
-| 5 - release engineering | SBOM tool (scoped to the real dependency closure, no longer a listing of the build machine), release gate (`.sh` and `.ps1`) and runbook **done**. Lockfile with hashes **done** (`backend/requirements.lock`, CI installs with `--require-hashes`). Still open: no release tag, and no reproducible backend image build. |
+| 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory self-test **done**: `bench_main.cpp` runs sensor read with a plausibility range, config, storage append/reopen with a value check, `listFiles` termination, provisioning, and the signed-batch path, ending in a `FACTORY_RESULT` line for a line-side script. Stages a bare unit cannot perform report `SKIP`, not `FAIL` - requiring a signed sync with no server would fail every unit for a reason unrelated to the unit, and a test everyone ignores is worse than none. An enclosure does not exist, and no unit has yet been run through it. |
+| 5 - release engineering | SBOM tool (scoped to the real dependency closure, no longer a listing of the build machine), release gate (`.sh` and `.ps1`) and runbook **done**. Lockfile with hashes **done** (`backend/requirements.lock`, CI installs with `--require-hashes`). The image now installs that lock, which it previously ignored: `backend/Dockerfile` copied `requirements.txt` and resolved fresh versions at build time, so the pinned closure in the repository was documentation. The base image is a required `ARG BASE_IMAGE` with no default, so a build cannot pick a floating tag, and the gate fails a release whose Dockerfile does not. Gate also checks semver and that the tag matches the version the application reports. **Still open: no release tag**, and the base digest has no value recorded here because resolving one needs Docker, which is not installed here - supplying a digest unverified would be a correctness claim with no evidence behind it. |
 | 6 - declare the freeze | Not started, and cannot start before Phase 3. |
 
 The release gate is the one thing here that keeps the remaining phases honest:
@@ -423,7 +423,8 @@ be closed from a desk, and `docs/en/BENCH_PLAN.md` is the procedure.
 | 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) - **increased to 512 B** | Long messages | Done |
 | 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Partially done: the declaration registry and the end-of-run gate are implemented and tested. **Mutations are adopted** - the three file-scope mutable statics in the suite declare themselves. The directory half still has no callers, because no suite shares a filesystem: each one that writes files builds its own in-memory or temporary store, so a claim would be a false positive rather than a finding. An earlier version of this row said adoption was zero, which was already wrong |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
-| 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is already a SQL window function (`LAG`) capped at 20 gaps, so no Python row loop remains |
+| 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is a SQL window function (`LAG`), so no Python row loop remains |
+| 10 | MED | The coverage response reported the 20 longest gaps and said only that more existed, so a caller could not reach the rest of a window's outage history | A site with thousands of gaps was unauditable below rank 20 | **Done.** `gap_offset`/`gap_limit` page the list, longest first. Four defects found while doing it, all of which would have shipped as a paging API that lied: `ORDER BY delta DESC` alone is not a total order, so `LIMIT/OFFSET` dropped and repeated equal-length gaps - the tiebreak on `ts` is what makes paging exact; `gaps_truncated` compared the total against the page remainder, so the last page claimed more forever and a caller following it never terminated; `gap_count_total` was read off `rows[0]`, so paging past the end reported a site with zero gaps; and `longest_gap_ms` came off the page, so paging made the worst outage look like it was shrinking. The trailing gap is synthesised in Python and has no rank in the SQL order, so it is reported in its own field on later pages instead of being appended to a list whose contract is "Nth longest first". 10 tests |
 
 ### Closed this round
 
@@ -498,6 +499,6 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
 cd firmware && pio test -e native      # expect: 317 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
-python -m pytest tests -q              # expect: 395 passed, 1 skipped
+python -m pytest tests -q              # expect: 420 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

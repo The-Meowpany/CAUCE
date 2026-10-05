@@ -164,6 +164,40 @@ Written so two people produce the same numbers. Filled in where the method is
 decided and left explicit where it is not, because an unfilled cell is a decision
 nobody has made yet.
 
+### Running it
+
+The table below is executed by `backend/tools/calibrate.py`, so the fit is not
+left to the reader:
+
+```bash
+python tools/calibrate.py --site SITE-A --variable air_temperature \
+    --reference CAUCE-REF --hours 48
+
+# writes the accepted calibrations through the API, and only those
+python tools/calibrate.py --site SITE-A --variable air_temperature \
+    --reference CAUCE-REF --hours 48 --apply
+```
+
+It reads the central's own co-located rows, fits the map, evaluates the acceptance
+limit above, and reports `accept`, `reject` or `provisional` per node. Without
+`--apply` it only reports, because a calibration applied by a script nobody read is
+a calibration nobody decided on.
+
+Two decisions it settles, which the prose alone did not:
+
+- **`scale` is 1.0 by default and only `offset` is fitted**, as the mean signed
+  difference. Least squares over both terms is available behind `--fit-scale`, and
+  is the right choice when the disagreement is gain rather than bias.
+- **Fewer than 20 pairs yields `provisional`, never `accept`.** Four samples are not
+  the procedure's 48.
+
+One result worth reading before interpreting output: **an offset cannot reduce the
+spread.** The residuals after an offset-only fit are the raw differences minus their
+own mean, and a standard deviation does not move when every value shifts by a
+constant. So `spread` only drops under `--fit-scale`. A report showing an unchanged
+spread is not a broken calibration; it is saying the disagreement is scattered
+rather than offset.
+
 | step | air_temperature | relative_humidity | pressure |
 |---|---|---|---|
 | reference | co-located reference node, calibrated against a reference thermometer | co-located reference node | co-located reference node |

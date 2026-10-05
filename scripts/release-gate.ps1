@@ -49,6 +49,53 @@ if ($Tag -ne "") {
     $notes.Add("no -Tag given, so this run checks the tree but not the tag")
 }
 
+# Semver, and the tag has to be the version the application reports.
+#
+# Without this a tag is just a string someone typed, and nothing connects it to the code.
+# `git describe` happily returns whatever the most recent tag says, so `v0.1.0-rc1` or
+# `banana` both pass every other check in this script.
+if ($version -ne "none" -and $version -ne "") {
+    $bare = $version -replace '^v', ''
+    if ($bare -match '^\d+\.\d+\.\d+$') {
+        Ok "tag $version is semantic version $bare"
+    } else {
+        Fail "tag $version is not MAJOR.MINOR.PATCH; semver is what the OTA manifest carries"
+    }
+}
+
+# The application version and the tag are two statements about the same fact, so they are
+# checked against each other here rather than trusted. A central advertising 0.1.0 next to a
+# node image tagged 0.2.0 sends operators to the wrong release notes.
+$appVersion = (Select-String -Path backend\cauce_server\main.py -Pattern 'version="([^"]+)"' |
+    Select-Object -First 1).Matches.Groups[1].Value
+if ([string]::IsNullOrWhiteSpace($appVersion)) {
+    Fail "could not read version= out of backend/cauce_server/main.py"
+} elseif ($version -ne "none" -and $version -ne "") {
+    $bare = $version -replace '^v', ''
+    if ($appVersion -eq $bare) {
+        Ok "app version $appVersion matches tag $version"
+    } else {
+        Fail "app reports $appVersion but the tag says $bare"
+    }
+}
+
+Step "backend image is pinned"
+# A floating base tag is the quiet way a release stops being reproducible, and the artifact
+# that shipped unpinned dependencies is not a hypothetical: the Dockerfile installed
+# requirements.txt while the repository carried a hash-pinned requirements.lock that no
+# build ever read.
+$dockerfile = Get-Content backend\Dockerfile -Raw
+if ($dockerfile -match '(?m)^\s*ARG\s+BASE_IMAGE\s*$') {
+    Ok "base image is a required build ARG, so no build can pick a floating tag"
+} else {
+    Fail "backend/Dockerfile does not take the base image as a required ARG"
+}
+if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-hashes') {
+    Ok "image installs the hash-pinned lock, not the loose requirements"
+} else {
+    Fail "backend/Dockerfile does not install requirements.lock with --require-hashes"
+}
+
 Step "full verification (firmware, ESP32 build, backend, E2E)"
 & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1
 if ($LASTEXITCODE -eq 0) { Ok "verify-all.ps1" } else { Fail "verify-all.ps1" }
