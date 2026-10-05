@@ -79,6 +79,11 @@ uint32_t freeHeapBytes() { return ESP.getFreeHeap(); }
 
 void espRestartNow() { ESP.restart(); }
 
+// Feeds the task watchdog on behalf of the OTA manager. The return value is dropped on
+// purpose: there is nothing useful to do about a failed feed other than continue, and a
+// failure here means the window was missed, which the reset will report on the next boot.
+void feedOtaWatchdog() { (void)esp_task_wdt_reset(); }
+
 // Reads an unsigned integer out of a small JSON payload without pulling in a
 // parser. Downlink commands are flat objects written by our own central, so a
 // full parser would be more dependency than the job needs.
@@ -336,6 +341,10 @@ void setup() {
     g_otaManager->setFirmwareVersion(cauce::Versions::kFirmware);
     g_otaManager->setSafetyHooks(&freeHeapBytes, nullptr);
     g_otaManager->setRebootHook(&espRestartNow);
+// A named wrapper rather than the function itself: `esp_task_wdt_reset` returns esp_err_t,
+// and a function pointer is not convertible to `void(*)()` regardless of the caller
+// ignoring the result. The wrapper says the return value is deliberately discarded.
+g_otaManager->setFeedHook(&feedOtaWatchdog);
     if (config.syncDeviceKey[0] != '\0') {
       uint8_t manifestKey[32];
       cauce::sha256(reinterpret_cast<const uint8_t*>(config.syncDeviceKey),

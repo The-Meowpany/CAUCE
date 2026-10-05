@@ -16,6 +16,15 @@ using namespace cauce::app;
 
 namespace {
 
+// The watchdog feed counter, and the count as it stood when each blocking call was entered.
+// See `test_the_watchdog_is_fed_before_each_blocking_call` for why the ordering is the
+// assertion rather than the count.
+int g_feedCalls = 0;
+int g_feedsBeforeFetch = -1;
+int g_feedsBeforeOpen = -1;
+
+void feedSpy() { ++g_feedCalls; }
+
 class FakeCatalog final : public IManifestSource {
  public:
   bool hasRelease{false};
@@ -23,12 +32,24 @@ class FakeCatalog final : public IManifestSource {
   int fetchCalls{0};
 
   bool fetchLatest(const char*, OtaRelease& out) override {
+    // Stamped at entry, which is where the HTTP GET happens.
+    g_feedsBeforeFetch = g_feedCalls;
     ++fetchCalls;
     if (!hasRelease) return false;
     out = release;
     return true;
   }
 };
+
+// Counts how many times the watchdog was fed, and records the state it was fed in.
+//
+// The point of the record is ordering: the guarantee is not "the watchdog got fed during
+// the download", it is "it was fed before each blocking call". A count alone would be
+// satisfied by a single feed at the top of `tick()`, which is the implementation that has
+// the bug.
+// The feed counter, the spy that raises it, and the count as it stood when each blocking
+// call was entered, are all declared above `FakeCatalog`, because that is where
+// `fetchLatest` needs them.
 
 class FakeReader final : public IFirmwareReader {
  public:
@@ -38,11 +59,14 @@ class FakeReader final : public IFirmwareReader {
   int openCalls{0};
 
 bool open(const char*) override {
-       isOpen = true;
-       pos = 0;
-       ++openCalls;
-       return true;
-     }
+    // Stamped at entry: this is the whole HTTP GET, and the budget it runs against is the
+    // one the previous feed started.
+    g_feedsBeforeOpen = g_feedCalls;
+    isOpen = true;
+    pos = 0;
+    ++openCalls;
+    return true;
+  }
      ReadStatus read(uint8_t* buffer, size_t capacity,
                      size_t* bytesRead) override {
        if (bytesRead != nullptr) *bytesRead = 0;
@@ -124,6 +148,15 @@ struct OtaRig {
     manager.setFirmwareVersion("1.0.0");
     manager.setManifestKey(defaultManifestKey());
     sink2.lines.clear();
+  }
+
+  // Resets the counter, stamps the fakes as not-yet-entered, and installs the spy. Done
+  // per test so one test's blocking calls cannot satisfy another's assertion.
+  void watchTheWatchdog() {
+    g_feedCalls = 0;
+    g_feedsBeforeFetch = -1;
+    g_feedsBeforeOpen = -1;
+    manager.setFeedHook(&feedSpy);
   }
 
   bool logContains(const char* needle) const { return sink2.contains(needle); }
@@ -538,6 +571,59 @@ void test_zero_stall_budget_is_clamped() {
   TEST_ASSERT_EQUAL(OtaState::VerifyFailed, rig.manager.state());
 }
 
+// The watchdog is fed immediately before each blocking HTTP call, not once at the top of
+// tick().
+//
+// WHY THIS IS THE ASSERTION THAT MATTERS
+//
+// `fetchLatest` and `open` each perform a whole HTTP GET inside `tick()`, inside `loop()`.
+// A feed at the top of tick() would raise the call count and still leave a 15-second
+// socket timeout running against a budget the earlier stages of the same tick already spent,
+// which is the original bug. So these fakes stamp the feed count *at entry*, and the test
+// asks whether the count had already advanced - which a boundary feed cannot fake.
+void test_the_watchdog_is_fed_before_each_blocking_call() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  rig.watchTheWatchdog();
+  const std::string fw = makeFirmware(42, 1200);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+
+  // The first tick runs the check and opens the download.
+  rig.manager.tick();
+  TEST_ASSERT_TRUE_MESSAGE(g_feedsBeforeFetch > 0,
+                           "fetchLatest was reached with the watchdog unfed");
+  TEST_ASSERT_TRUE_MESSAGE(g_feedsBeforeOpen > 0,
+                           "open was reached with the watchdog unfed");
+  // Two blocking calls in one tick, and the second saw a later feed than the first. If the
+  // two had shared a feed taken before the first, these would be equal.
+  TEST_ASSERT_TRUE_MESSAGE(g_feedsBeforeOpen > g_feedsBeforeFetch,
+                           "the download open reused the budget started for fetchLatest");
+
+  drainOta(rig.manager, otaClock);
+  TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
+}
+
+// And the default is no hook at all, so the host suite is not pretending to model a
+// watchdog. Without this, a test that forgot to install the spy would still pass and the
+// guarantee would quietly stop being checked.
+void test_no_watchdog_hook_is_safe_and_the_download_still_completes() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  rig.manager.setFeedHook(nullptr);
+  const std::string fw = makeFirmware(7, 900);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+
+  rig.manager.tick();
+  drainOta(rig.manager, otaClock);
+
+  TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
+  TEST_ASSERT_EQUAL_UINT32(900, rig.installer.received.size());
+}
+
 void registerOtaTests() {
   UNITY_BEGIN();
   RUN_TEST(test_compare_semver_pairs);
@@ -560,6 +646,8 @@ void registerOtaTests() {
   RUN_TEST(test_reading_slowly_still_completes);
   RUN_TEST(test_reader_that_never_delivers_aborts_as_stalled);
   RUN_TEST(test_zero_stall_budget_is_clamped);
+  RUN_TEST(test_the_watchdog_is_fed_before_each_blocking_call);
+  RUN_TEST(test_no_watchdog_hook_is_safe_and_the_download_still_completes);
   UNITY_END();
 }
 

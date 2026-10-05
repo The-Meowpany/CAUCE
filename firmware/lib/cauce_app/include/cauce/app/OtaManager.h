@@ -39,6 +39,28 @@ class OtaManager {
   using BatteryFn = float (*)();
   using RebootFn = void (*)();
 
+  // Called from inside `tick()`, at the points where it may block.
+  //
+  // WHY THIS EXISTS
+  //
+  // Downloading is mostly non-blocking: `read` returns NoDataYet and the manager waits for
+  // the next tick. But two calls are not. `IFirmwareReader::open` performs a whole HTTP GET
+  // - headers, and up to the socket read timeout - and `IManifestSource::fetchLatest` does
+  // the same for the manifest. Both happen inside `tick()`, which runs inside `loop()`.
+  //
+  // The task watchdog is 30 s and the socket timeout is 15 s, so one blocking call fits.
+  // What is not guaranteed is that only one happens per tick: a tick can open a download and
+  // then, in the same pass, fetch a manifest for the next release, and 15 + 15 is already
+  // past half the budget with the rest of loop() still to run. The margin was arithmetic
+  // rather than a design, and the failure mode is a board that reboots mid-update with no
+  // log line explaining it - the same class of symptom that made the original nine-second
+  // reboot loop hard to read.
+  //
+  // Feeding at each blocking point makes the budget an invariant rather than a hope. A
+  // default of nullptr keeps the host tests unchanged and honest: they are not pretending
+  // to model a watchdog.
+  using FeedFn = void (*)();
+
   OtaManager(IManifestSource& catalog, IFirmwareReader& reader,
              IFirmwareInstaller& installer, hal::IClock& clock, Logger& logger);
 
@@ -53,6 +75,8 @@ class OtaManager {
   // to do that before.
   void clearManifestKey() { hasManifestKey_ = false; }
   void setRebootHook(RebootFn reboot);
+  // See `FeedFn`. Passing nullptr, or never calling this, is supported.
+  void setFeedHook(FeedFn feed) { feed_ = feed; }
   void setInterval(uint32_t checkIntervalS);
   void setMaxStallTicks(uint32_t ticks);
   void tick();
@@ -67,6 +91,7 @@ class OtaManager {
   void runCheck();
   bool startDownload();
   bool pumpChunk();
+  void feedWatchdog();
   bool finishDownload();
   void abortDownload(const char* event, OtaState failState, LogLevel level);
   void scheduleFailure(OtaState failureState, const char* event, LogLevel level);
@@ -86,6 +111,7 @@ class OtaManager {
   FreeHeapFn freeHeap_{nullptr};
   BatteryFn battery_{nullptr};
   RebootFn reboot_{nullptr};
+  FeedFn feed_{nullptr};
   uint8_t manifestKey_[32];
   bool hasManifestKey_{false};
 

@@ -104,6 +104,13 @@ void OtaManager::setManifestKey(const uint8_t key[32]) {
 
 void OtaManager::setRebootHook(RebootFn reboot) { reboot_ = reboot; }
 
+void OtaManager::feedWatchdog() {
+  // Null-checked rather than asserted: the host suite never installs a hook, and requiring
+  // one would mean every test that touches the download path had to provide a function
+  // whose only job is to be called, which is noise that hides the calls that matter.
+  if (feed_ != nullptr) feed_();
+}
+
 void OtaManager::setInterval(uint32_t checkIntervalS) {
    tuning_.checkIntervalS = checkIntervalS;
  }
@@ -137,6 +144,8 @@ void OtaManager::resetDownload() {
 
 void OtaManager::runCheck() {
   OtaRelease release{};
+  // An HTTP GET inside `tick()`, inside `loop()`. See `FeedFn`.
+  feedWatchdog();
   if (!catalog_.fetchLatest(currentVersion_, release)) {
     state_ = OtaState::UpToDate;
     nextCheckMonotonicMs_ =
@@ -221,12 +230,16 @@ void OtaManager::runCheck() {
 }
 
 bool OtaManager::startDownload() {
+  // Fed before as well as after: the time already spent in this tick's earlier stages is
+  // still time the watchdog has been counting.
+  feedWatchdog();
   if (!reader_.open(pendingRelease_.url)) {
     installer_.abortInstall();
     scheduleFailure(OtaState::InstallFailed, "OTA_DOWNLOAD_OPEN_FAILED",
                     LogLevel::Error);
     return false;
   }
+  feedWatchdog();
   readerOpened_ = true;
   downloadReceived_ = 0;
   sha256Begin(&shaCtx_);
