@@ -301,6 +301,49 @@ def test_the_events_page_escapes_the_values_it_reflects(client):
     assert "&quot;" not in response.text.split("<main")[0], "an attribute was broken out of"
 
 
+def test_a_value_is_escaped_once_and_only_once(client):
+    """Escaping is not idempotent, and a second layer shows the user the wrong text.
+
+    `_form_value` already escapes. When the events page's empty-state branch also escaped its
+    result, a legitimate `min_duration_min` was still fine - but the two sinks disagreed: the
+    `{thr}` attribute got one layer and the threshold summary text got two. Someone reading the
+    page sees `&amp;` where they typed `&`, which is a small bug that looks like the escaping is
+    broken rather than doubled, and the natural "fix" is to remove the helper's escaping - which
+    would reintroduce the CodeQL finding this was added to close.
+
+    So: exactly one layer, at every sink, asserted both ways.
+    """
+    _seed(client)
+    response = client.get("/nodes/CAUCE-001/events",
+                          params={"threshold": "32.5", "min_duration_min": "90"})
+    assert response.status_code == 200
+    text = response.text
+    # No entity appears encoded twice anywhere on the page.
+    assert "&amp;amp;" not in text, "a value was escaped twice"
+    assert "&amp;quot;" not in text, "a value was escaped twice"
+    assert "&amp;lt;" not in text, "a value was escaped twice"
+    assert "&amp;#" not in text, "a value was escaped twice"
+    # And the value itself is intact, so this is not passing by escaping everything away.
+    assert "32.5" in text
+
+
+def test_escaping_is_not_idempotent_and_that_is_why_the_helpers_exist():
+    """The property the test above leans on, stated rather than assumed."""
+    import html
+
+    once = html.escape("a & b")
+    twice = html.escape(once)
+    assert once == "a &amp; b"
+    assert twice == "a &amp;amp; b"
+    assert twice != once
+
+    from cauce_server.dashboard import _form_value
+
+    # The helper escapes, so its callers must not escape again. If someone ever removes the
+    # helper's escaping this fails here rather than as a CodeQL alert months later.
+    assert _form_value("a & b") == "a &amp; b"
+
+
 def _sync_quality(client, quality, sequence=1):
     return client.post("/v1/sync", json=sync_payload([
         dict(_series("CAUCE-001", BASE_TS, 1)[0], quality=quality, sequence=sequence),

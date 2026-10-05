@@ -114,6 +114,56 @@ provision or persist the wrong half. Ed25519 requires exactly a 32-byte seed: 1,
 perfectly and verifies nowhere, and the only symptom is a central silently dropping
 every frame.
 
+## Node certificates
+
+A provisioned public key proves the node holds the private half. It does **not** establish
+that the central ever vouched for the binding — `nodes.device_key` is a row an operator
+wrote with the admin token, so adding a node and rotating a compromised key were the same
+operation with the same blast radius, and a key compromised once stayed compromised.
+
+`CAUCE_CA_KEY` holds an Ed25519 **seed** for a certificate authority, configured separately
+from `CAUCE_API_TOKEN`. It signs a certificate binding node identity to public key, with a
+serial and an expiry:
+
+| | |
+|---|---|
+| `POST /v1/nodes/{id}/certificate` | issues one; requires `write` |
+| `GET /v1/nodes/{id}/certificate` | the node's current one, re-verified on the way out |
+| `GET /v1/certificates/{serial}` | status: signature validity and authorisation, separately |
+
+What this buys, precisely: **a verifier holding only the CA public key** can check a node's
+identity with no database and no admin token. That is the property the shared token cannot
+provide at all.
+
+Four things it deliberately does not do:
+
+- **It is not X.509.** No ASN.1, no chain, no name constraints. One certificate, one CA,
+  fixed shape. Do not plan interoperability around it.
+- **The CA key cannot be rolled over by this code.** Rotation means changing the key every
+  verifier holds, which is a deployment decision. A CA that re-signed with a new key while
+  verifiers trusted the old one would not be rotating, it would be re-signing.
+- **The public key comes from `nodes.device_key`, never from the request.** A CA that
+  certified whatever it was handed would certify nothing.
+- **An HMAC node cannot be certified** (409). An HMAC key is a shared secret; putting it in
+  a document meant to be handed to verifiers would distribute the secret to all of them.
+
+With `CAUCE_CA_KEY` unset every endpoint answers `503
+certificate_authority_not_configured`. The alternative — issuing documents signed by
+nothing — would produce certificates that look authoritative and verify against no key.
+
+Issuing refuses a validity above 366 days rather than clamping it, and refuses a public key
+that is not a curve point. The second check is not a length check: `from_public_bytes`
+accepts all 32 bytes and defers the failure to verification time, so about half of all
+32-byte values are accepted as keys and can never verify anything. Checking the curve point
+turns "never works, much later, on a node" into "refused now".
+
+Rotation **replaces**. Re-issuing marks the previous certificate `retired` and keeps the
+row, because a table where rotation destroyed the old certificate could not answer which key
+a node was using when a measurement arrived. `trusted` is the conjunction of signature
+validity, `status='active'` and not-expired; a retired certificate is still a genuine
+document from the CA, and collapsing that distinction is how "valid" starts meaning
+"authorised".
+
 Ed25519 in this firmware is **not constant-time** — the carries and the scalar ladder
 act on values derived from the key. A hostile relay or central sees only the
 signature and is unaffected; an attacker able to measure signing time locally at

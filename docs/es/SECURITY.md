@@ -119,6 +119,61 @@ exactamente una semilla de 32 bytes: 1, 16, 31, 33 y 64 bytes se rechazan todos,
 porque una semilla rellenada o truncada firma perfectamente y no verifica en ningún
 sitio, y el único síntoma es un central que descarta en silencio todos los frames.
 
+## Certificados de nodo
+
+Una clave pública aprovisionada prueba que el nodo tiene la mitad privada. **No** establece
+que el central respaldara nunca esa vinculación: `nodes.device_key` es una fila que un
+operador escribió con el token de admin, así que dar de alta un nodo y rotar una clave
+comprometida eran la misma operación con el mismo radio de impacto, y una clave
+comprometida lo seguíacomprometida.
+
+`CAUCE_CA_KEY` guarda una **semilla** Ed25519 de una autoridad de certificación,
+configurada por separado de `CAUCE_API_TOKEN`. Firma un certificado que vincula la
+identidad del nodo con su clave pública, con número de serie y caducidad:
+
+| | |
+|---|---|
+| `POST /v1/nodes/{id}/certificate` | emite uno; requiere `write` |
+| `GET /v1/nodes/{id}/certificate` | el actual, re-verificado al salir |
+| `GET /v1/certificates/{serial}` | estado: validez de firma y autorización, por separado |
+
+Lo que esto compra, con precisión: **un verificador que solo tiene la clave pública de la
+CA** puede comprobar la identidad de un nodo sin base de datos y sin token de admin. Esa es
+la propiedad que el token compartido no puede dar.
+
+Cuatro cosas que deliberadamente **no** hace:
+
+- **No es X.509.** Sin ASN.1, sin cadena, sin restricciones de nombre. Un certificado, una
+  CA, forma fija. No planifiques interoperabilidad alrededor de esto.
+- **La clave de la CA no se puede rotar con este código.** Rotar significa cambiar la clave
+  que tiene cada verificador, y eso es una decisión de despliegue. Una CA que volviera a
+  firmar con una clave nueva mientras los verificadores confiaban en la anterior no estaría
+  rotando, estaría re-firmando.
+- **La clave pública viene de `nodes.device_key`, nunca del request.** Una CA que
+  certificara lo que le entregaran no certificaría nada.
+- **Un nodo HMAC no se puede certificar** (409). Una clave HMAC es un secreto compartido;
+  ponerla en un documento pensado para entregar a verificadores distribuiría el secreto a
+  todos ellos.
+
+Sin `CAUCE_CA_KEY`, todos los endpoints responden `503
+certificate_authority_not_configured`. La alternativa — emitir documentos que no firma
+nadie — produciría certificados con aspecto de autoritativos que no verifican contra
+ninguna clave.
+
+La emisión rechaza una validez superior a 366 días en vez de recortarla, y rechaza una
+clave pública que no sea un punto de la curva. El segundo control no es de longitud:
+`from_public_bytes` acepta los 32 bytes y aplaza el fallo al momento de verificar, así que
+la mitad de los valores de 32 bytes se aceptan como claves y nunca pueden verificar nada.
+Comprobar el punto de la curva convierte "nunca funciona, mucho más tarde, en un nodo" en
+"rechazado ahora".
+
+La rotación **reemplaza**. Reemitir marca el certificado anterior como `retired` y conserva
+la fila, porque una tabla donde la rotación destruyera el certificado viejo no podría
+responder qué clave usaba un nodo cuando llegó una medición. `trusted` es la conjunción de
+firma válida, `status='active'` y no caducado; un certificado retirado sigue siendo un
+documento auténtico de la CA, y colapsar esa distinción es lo que hace que "válido" empiece
+a significar "autorizado".
+
 El Ed25519 de este firmware **no es de tiempo constante**: los acarreos y la escalera
 escalar operan sobre valores derivados de la clave. Un relé o un central hostil solo
 ve la firma y no le afecta; un atacante capaz de medir el tiempo de firma en local

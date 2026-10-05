@@ -112,6 +112,29 @@ if ($python) {
     Fail "no python found for the SBOM step"
 }
 
+Step "the certificate authority fails closed"
+# A CA that silently issues certificates signed by nothing, or that falls back to the admin
+# token when its key is missing, would make every issued document a claim the central never
+# actually made. Both of those are checked structurally rather than by running the service,
+# so the gate needs no configuration of its own.
+$caEndpoint = Get-Content backend\cauce_server\certs_endpoint.py -Raw
+if ($caEndpoint -match 'CAUCE_CA_KEY|certificate_authority_not_configured') {
+    Ok "certificate endpoints fail closed when the CA is unconfigured"
+} else {
+    Fail "certs_endpoint.py does not refuse when no CA key is configured"
+}
+$caModule = Get-Content backend\cauce_server\certificates.py -Raw
+if ($caModule -match 'def is_on_curve') {
+    Ok "certificate issuance rejects a key that is not a curve point"
+} else {
+    Fail "certificates.py has no curve-point check; a key that can never verify would be certified"
+}
+if ($caModule -match 'def canonical_body' -and $caEndpoint -match 'nodes/\{node_id\}/certificate') {
+    Ok "certificates are canonically serialised and exposed per node"
+} else {
+    Fail "certificate canonicalisation or the per-node endpoint is missing"
+}
+
 function Test-Docs($dir, $names) {
     $missing = @()
     foreach ($n in $names) {

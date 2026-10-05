@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (317 firmware + 420 backend tests, E2E green)
+## Implemented and verified (317 firmware + 463 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -125,9 +125,10 @@ not. It overrides any aspirational claim elsewhere.
   `OTA_NO_MANIFEST_KEY` instead of accepting whatever manifest it is handed.
   What is still missing is a key hierarchy - the manifest key is derived from the
   node's own `sync_device_key`, so the same secret that authenticates batches also
-  authorises firmware. Separating them, and mapping an Ed25519 public key to a
-  certificate, is the remaining work. `docs/en/RUNBOOK.md` says so plainly rather
-  than leaving it implied.
+  authorises firmware. Separating them is the remaining work. A certificate authority
+  now exists for the other half of that problem - who vouched for a node's key - and it
+  is not yet in TLS. `docs/en/RUNBOOK.md` says so plainly rather than leaving it
+  implied.
 - ESP-NOW / mDNS peer-to-peer. `Replication` and `IPeerLink` exist and are
   tested; the radio and discovery do not. This is a Phase 0 decision, not an
   oversight.
@@ -135,9 +136,12 @@ not. It overrides any aspirational claim elsewhere.
   end to end and is host-tested; the bench now reaches the batch-building and
   credential-loading stages of the same path on real hardware, but no command has been
   seen to complete a round trip to a central and back.
-- Public-key infrastructure beyond Ed25519: there is no Ed25519 **public key to
-  certificate** mapping, so TLS still relies on the shared admin token for API
-  access.
+- TLS still relies on the shared admin token for API access. A node **certificate**
+  now exists - `CAUCE_CA_KEY` signs a binding of node identity to public key with an
+  expiry, and a verifier needs only the CA public key - but it is not wired into TLS.
+  Turning it into mutual TLS, or into the credential a node presents to `/v1/sync`,
+  is the remaining work and it is not small: the firmware would have to hold and rotate
+  a certificate rather than a seed.
 
 ## Roadmap: what is left, and why
 
@@ -350,7 +354,7 @@ channel is a liability rather than a finished product.
 | Phase | State |
 |---|---|
 | 0 - freeze the specification | Not started. Needs a decision on ESP-NOW and one on LoRa. |
-| 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure and uncertainty budget **done** (`backend/tools/calibrate.py` executes the documented fit and evaluates the acceptance limit; 15 tests). Coverage gap paging **done** (`gap_offset`/`gap_limit`). Test binary isolation partially done - the registry and gate exist and mutations are adopted, but no suite shares a filesystem so the directory half has no callers. A public certificate mapping remains. |
+| 1 - software gaps | Ed25519 in the transport, downlink actuation and exercised backup/restore **done**. Calibration procedure and uncertainty budget **done** (`backend/tools/calibrate.py` executes the documented fit and evaluates the acceptance limit; 15 tests). Coverage gap paging **done** (`gap_offset`/`gap_limit`). Node certificates **done** - `CAUCE_CA_KEY` signs a binding of identity to public key with an expiry, verifiable with the CA public key alone (41 tests); not yet in TLS. Test binary isolation partially done - the registry and gate exist and mutations are adopted, but no suite shares a filesystem so the directory half has no callers. |
 | 2 - air interface | Driver written and host-tested after three real register bugs were found and fixed; no board, no measured link budget. See the SX1276 row above. |
 | 3 - bench | Not started. Needs a board and `docs/en/BENCH_PLAN.md`. |
 | 4 - manufacturing | Provisioning tool and identity retirement **done**. Factory self-test **done**: `bench_main.cpp` runs sensor read with a plausibility range, config, storage append/reopen with a value check, `listFiles` termination, provisioning, and the signed-batch path, ending in a `FACTORY_RESULT` line for a line-side script. Stages a bare unit cannot perform report `SKIP`, not `FAIL` - requiring a signed sync with no server would fail every unit for a reason unrelated to the unit, and a test everyone ignores is worse than none. An enclosure does not exist, and no unit has yet been run through it. |
@@ -424,6 +428,10 @@ be closed from a desk, and `docs/en/BENCH_PLAN.md` is the procedure.
 | 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Partially done: the declaration registry and the end-of-run gate are implemented and tested. **Mutations are adopted** - the three file-scope mutable statics in the suite declare themselves. The directory half still has no callers, because no suite shares a filesystem: each one that writes files builds its own in-memory or temporary store, so a claim would be a false positive rather than a finding. An earlier version of this row said adoption was zero, which was already wrong |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
 | 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is a SQL window function (`LAG`), so no Python row loop remains |
+| 11 | MED | A provisioned public key proved possession but nothing established that the central vouched for it: `nodes.device_key` is a row an operator wrote with the admin token | Adding a node and rotating a compromised key were the same operation with the same blast radius, and a key compromised once stayed compromised | **Done.** `CAUCE_CA_KEY` holds an Ed25519 seed for a CA, configured separately from the admin token, and signs a certificate binding node identity to public key with a serial and an expiry. The property that matters: a verifier holding **only the CA public key** checks a node with no database and no admin token, which the shared token cannot do at all. Fails closed - with no CA key every endpoint is `503`, because issuing documents signed by nothing would look authoritative and verify against no key. The key comes from `nodes.device_key` and never from the request; an HMAC node is refused (409) since publishing a shared secret to verifiers is worse than no certificate. Rotation replaces rather than accumulates, keeping the retired row because a table that destroys the old certificate cannot answer which key a node held when a measurement arrived. 25 unit + 16 endpoint tests |
+| 12 | MED | `Ed25519PublicKey.from_public_bytes` accepts any 32 bytes, deferring the point check to verification time | A certificate could be issued for a key that can never verify anything, and the failure would appear on a node with the CA looking innocent | Fixed in `certificates.is_on_curve`: a `y` at or above p is non-canonical and rejected, and about half of all 32-byte values have no corresponding `x` and are refused at issuance. "Never works, much later" becomes "refused now". Also guarded the other direction, since a check that rejected every key would fail every provision in the fleet |
+| 13 | LOW | Test modules set `os.environ["CAUCE_DB_PATH"]` believing it selects their database; it does not, because `config.Settings` snapshots the environment once at import | Harmless for the path - isolation comes from `db.reset_for_tests()` - but the same pattern on a value nothing resets is a silent order-dependent failure | **Found while adding the certificate tests.** `test_cert_endpoint.py` set `CAUCE_CA_KEY` that way and passed alone, then failed 7 times in the full suite, because whichever module triggered the first `cauce_server` import decided the CA key for all of them. It now assigns `settings.ca_private_key` through an autouse fixture, and `tests/conftest.py` says why the per-module lines are decorative. The rule is written down: a setting nothing resets is set on `settings`, not on `os.environ` |
+| 14 | LOW | Double-escaped threshold on the events page - `html.escape(_form_value(x))` - so the two sinks disagreed and a value the user typed came back as `&amp;` | Not a vulnerability, and the tempting "fix" is to remove the helper's escaping, which would reintroduce the CodeQL finding it exists to close | Fixed to a single layer, with a test asserting `&amp;amp;` and friends appear nowhere on the page and that `32.5` survives intact, so it passes by not escaping rather than by escaping everything away. Escaping is not idempotent, and that is stated where the helper is |
 | 10 | MED | The coverage response reported the 20 longest gaps and said only that more existed, so a caller could not reach the rest of a window's outage history | A site with thousands of gaps was unauditable below rank 20 | **Done.** `gap_offset`/`gap_limit` page the list, longest first. Four defects found while doing it, all of which would have shipped as a paging API that lied: `ORDER BY delta DESC` alone is not a total order, so `LIMIT/OFFSET` dropped and repeated equal-length gaps - the tiebreak on `ts` is what makes paging exact; `gaps_truncated` compared the total against the page remainder, so the last page claimed more forever and a caller following it never terminated; `gap_count_total` was read off `rows[0]`, so paging past the end reported a site with zero gaps; and `longest_gap_ms` came off the page, so paging made the worst outage look like it was shrinking. The trailing gap is synthesised in Python and has no rank in the SQL order, so it is reported in its own field on later pages instead of being appended to a list whose contract is "Nth longest first". 10 tests |
 
 ### Closed this round
@@ -499,6 +507,6 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
 cd firmware && pio test -e native      # expect: 317 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
-python -m pytest tests -q              # expect: 420 passed, 1 skipped
+python -m pytest tests -q              # expect: 463 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

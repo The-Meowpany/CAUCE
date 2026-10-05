@@ -7,6 +7,7 @@ from . import db
 from .alerts import router as alerts_router
 from .api import router
 from .calibration import router as calibration_router
+from .certs_endpoint import router as certs_router
 from .commands import router as commands_router
 from .config import settings
 from .coverage import router as coverage_router
@@ -97,3 +98,6 @@ app.include_router(fleet_router)
 app.include_router(calibration_router)
 app.include_router(commands_router)
 app.include_router(tokens_router)
+# Certificates. Separate module because the trust story differs: these are gated by a CA
+# signature, not by the shared admin token. See `certs_endpoint`'s module docstring.
+app.include_router(certs_router)

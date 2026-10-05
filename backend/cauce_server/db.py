@@ -364,6 +364,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE nodes ADD COLUMN revoked_at_utc_ms INTEGER")
     if "revoked_reason" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN revoked_reason TEXT")
+    # Certificates issued by the CA. The full body is stored as canonical JSON so the
+    # signature can be re-checked later without reconstructing anything, and so the
+    # certificate a node holds can be shown to an operator exactly as it was issued.
+    #
+    # Nothing overwrites a certificate. Rotation adds a row with status=retired on the old
+    # one, for the same reason node retirement is not deletion: the record of what was
+    # trusted when is the audit trail. A table where issuing a new certificate destroyed the
+    # old one could not answer "which key was this node using in March".
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS certificates (
+               serial TEXT PRIMARY KEY,
+               node_id TEXT NOT NULL REFERENCES nodes(node_id),
+               site_id TEXT,
+               public_key TEXT NOT NULL,
+               issued_utc_ms INTEGER NOT NULL,
+               not_after_utc_ms INTEGER NOT NULL,
+               body TEXT NOT NULL,
+               status TEXT NOT NULL DEFAULT 'active'
+           )"""
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cert_node"
+        " ON certificates(node_id, status)"
+    )
     mcols = {
         r["name"]
         for r in conn.execute("PRAGMA table_info(measurements)").fetchall()

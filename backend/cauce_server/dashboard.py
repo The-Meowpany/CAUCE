@@ -989,7 +989,11 @@ def node_events_page(node_id: str, request: Request,
             + rows + "</table></div>")
     else:
         peak_txt = "—" if peak_seen is None else f"{peak_seen:.1f} °C"
-        safe_threshold_txt = html.escape(_form_value(threshold))
+        # `_form_value` already escapes. Escaping its result a second time turns a value
+        # the user typed into the literal text they see: type `1 &amp; 2` and the page
+        # would say `1 &amp;amp; 2`. Escaping is not idempotent, so exactly one layer
+        # belongs here and it is the one inside the helper.
+        safe_threshold_txt = _form_value(threshold)
         body = (
             f"<div class=\"empty\"><p>{labels['no_events']}</p>"
             f"<p class=\"mut\">{labels['max_seen']}: {peak_txt} · "
