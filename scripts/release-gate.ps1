@@ -10,7 +10,13 @@
 #   pwsh -File scripts\release-gate.ps1 -Tag v1.0.0
 
 [CmdletBinding()]
-param([string]$Tag = "")
+param(
+    [string]$Tag = "",
+    # The lock install downloads every wheel, so it needs network and about a minute. The
+    # other checks do not. Off by default would be dishonest - the check is the point - so it
+    # is on by default and this is the escape hatch for an offline machine.
+    [switch]$SkipLock
+)
 
 $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $PSScriptRoot
@@ -113,6 +119,27 @@ if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-h
 Step "full verification (firmware, ESP32 build, backend, E2E)"
 & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1
 if ($LASTEXITCODE -eq 0) { Ok "verify-all.ps1" } else { Fail "verify-all.ps1" }
+
+Step "the pinned closure installs and the application runs from it"
+# No container runtime here, so the image cannot be built and this does not pretend to. What
+# it can check is the claim the Dockerfile actually makes - that the image installs
+# `requirements.lock` and the application then works - by doing exactly that in a throwaway
+# virtual environment containing nothing else.
+#
+# This is the check that catches a dependency the code imports but the lock omits. CI cannot:
+# it installs `ruff` separately and runs in an environment that happens to contain everything,
+# so a missing entry passes there and 500s in the image. `--require-hashes` cannot either -
+# it verifies the packages that are listed and says nothing about one that is absent.
+if ($SkipLock) {
+    $notes.Add("-SkipLock given, so the lock was not installed and verified")
+} else {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-lock.ps1 -SkipTests
+    if ($LASTEXITCODE -eq 0) {
+        Ok "the lock installs with every hash verified and the app imports from it alone"
+    } else {
+        Fail "verify-lock.ps1; this is what the container build would do"
+    }
+}
 
 Step "SBOM and its pins"
 $python = Get-Command python -ErrorAction SilentlyContinue
