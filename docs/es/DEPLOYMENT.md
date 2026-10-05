@@ -13,6 +13,42 @@ servidor central). En orden, sin saltear pasos.
 | Docker (opcional) | — | contenedor backend |
 | Hardware por nodo | ver HARDWARE.md | ESP32 + BME280 |
 
+### Qué se ha construido y qué no
+
+**La imagen del contenedor nunca se ha construido.** No hay runtime de contenedores en la
+máquina que produjo el tag `v0.1.0`, e instalar uno requiere reiniciar. Así que si vas a
+desplegar con Docker, eres la primera persona que ejecuta ese build, y los dos puntos de más
+abajo te tocará descubrirlos a ti en vez de yo haberlos verificado.
+
+Lo que **sí** está verificado es la afirmación en la que se apoya la línea importante del
+Dockerfile:
+
+```
+./scripts/verify-lock.ps1
+```
+
+Crea un entorno virtual desechable que contiene nada más que
+`backend/requirements.lock`, lo instala con `--require-hashes` y ejecuta toda la suite del
+backend dentro: **501 pasan, 1 se omite**, con `/healthz` respondiendo 200 desde ese entorno.
+Así que el cierre de dependencias que instalaría la imagen se sabe que instala y se sabe que
+hace funcionar la aplicación.
+
+Dos cosas que un lock no puede comprobar, y que deberías comprobar en tu primer build:
+
+- que `WORKDIR /app` más las capas `COPY` producen un sistema de archivos desde el que
+  uvicorn puede servir;
+- que el conjunto de bibliotecas del runtime `python:3.12-slim` funciona con las ruedas
+  bloqueadas. El lock lleva hashes tanto de `win_amd64` como de `manylinux2014_x86_64`, así
+  que las ruedas de Linux están cubiertas, pero nada las ha ejecutado.
+
+La imagen base está fijada a un digest de índice multiplataforma ya resuelto, anotado tanto
+en el Dockerfile como en el gate de release, así que no pueden divergir. Para moverlo,
+resuélvelo de nuevo en vez de editar el tag a mano:
+
+```bash
+docker buildx imagetools inspect python:3.12-slim --format '{{.Manifest.Digest}}'
+```
+
 ## 1. Verificar el entorno desde cero
 
 ```powershell

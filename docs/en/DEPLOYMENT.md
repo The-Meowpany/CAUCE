@@ -10,8 +10,42 @@ the central server). Followed in order, no steps skipped.
 | Python | ≥3.10 (tested 3.12) | PlatformIO CLI + backend |
 | PlatformIO Core | ≥6.1 | firmware build/test |
 | GCC MinGW-w64 (Windows) / gcc (Linux) | ≥9 | native tests & binaries |
-| Docker (optional) | — | backend container |
+| Docker (optional) | — | backend container. See the note below before relying on it |
 | Per-node hardware | see HARDWARE.md | ESP32 + BME280 |
+
+### What has and has not been built
+
+**The container image has never been built.** There is no container runtime on the machine
+that produced the `v0.1.0` tag, and installing one needs a reboot. So if you are deploying
+with Docker, you are the first person to run that build, and the first two steps below are
+yours to discover rather than mine to have verified.
+
+What *is* verified is the claim the Dockerfile's one important line rests on:
+
+```
+./scripts/verify-lock.ps1
+```
+
+That builds a throwaway virtual environment containing nothing but
+`backend/requirements.lock`, installs it with `--require-hashes`, and runs the entire backend
+suite inside it: **501 passed, 1 skipped**, with `/healthz` answering 200 from that
+environment. So the dependency closure the image would install is known to install and known
+to run the application.
+
+Two things a lock cannot check, and which you should check on your first build:
+
+- that `WORKDIR /app` plus the `COPY` layers produce a filesystem uvicorn can serve from;
+- that the `python:3.12-slim` runtime's library set works with the locked wheels. The lock
+  carries hashes for both `win_amd64` and `manylinux2014_x86_64`, so Linux wheels are covered,
+  but nothing has executed them.
+
+The base image is pinned to a resolved multi-platform index digest, recorded in both the
+Dockerfile and the release gate, so the two cannot drift. Re-resolve rather than editing the
+tag by hand:
+
+```bash
+docker buildx imagetools inspect python:3.12-slim --format '{{.Manifest.Digest}}'
+```
 
 ## 1. Verify the environment from zero
 
