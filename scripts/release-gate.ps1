@@ -15,7 +15,11 @@ param(
     # The lock install downloads every wheel, so it needs network and about a minute. The
     # other checks do not. Off by default would be dishonest - the check is the point - so it
     # is on by default and this is the escape hatch for an offline machine.
-    [switch]$SkipLock
+    [switch]$SkipLock,
+    # Building the image needs podman and a podman VM, which is minutes of work on a machine
+    # that has neither. On by default when podman is absent the check reports SKIP rather than
+    # a failure, so an offline or container-less machine can still run the gate.
+    [switch]$SkipImage
 )
 
 $ErrorActionPreference = "Continue"
@@ -137,6 +141,28 @@ if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-h
 Step "full verification (firmware, ESP32 build, backend, E2E)"
 & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1
 if ($LASTEXITCODE -eq 0) { Ok "verify-all.ps1" } else { Fail "verify-all.ps1" }
+
+Step "the backend image builds, serves and is reproducible"
+# Podman, rootless, no daemon and no elevation, so this can live in the gate rather than in a
+# note saying somebody should run it elsewhere. `-SkipImage` for a machine with no runtime.
+if ($SkipImage) {
+    $notes.Add("-SkipImage given, so the container image was not built")
+} else {
+    # Run once and keep the output. verify-image.ps1 exits 0 both on PASS and on SKIP and
+    # distinguishes them in its text, so treating a skip as a pass would be the one outcome
+    # worse than not checking at all.
+    $imageLines = & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-image.ps1 2>&1
+    $imageExit = $LASTEXITCODE
+    $imageLines | ForEach-Object { Write-Host "  $_" }
+    $imageText = $imageLines -join "`n"
+    if ($imageExit -ne 0) {
+        Fail "verify-image.ps1; the image does not build, serve, or is not reproducible"
+    } elseif ($imageText -match "IMAGE VERIFICATION: SKIP") {
+        $notes.Add("the image was not built: no podman machine on this machine")
+    } elseif ($imageText -match "IMAGE VERIFICATION: PASS") {
+        Ok "the image builds, serves /healthz, and two builds produce one image ID"
+    }
+}
 
 Step "the pinned closure installs and the application runs from it"
 # No container runtime here, so the image cannot be built and this does not pretend to. What

@@ -15,37 +15,46 @@ the central server). Followed in order, no steps skipped.
 
 ### What has and has not been built
 
-**The container image has never been built.** There is no container runtime on the machine
-that produced the `v0.1.0` tag, and installing one needs a reboot. So if you are deploying
-with Docker, you are the first person to run that build, and the first two steps below are
-yours to discover rather than mine to have verified.
-
-What *is* verified is the claim the Dockerfile's one important line rests on:
+**The container image builds, serves, and is reproducible.** Verified with podman, and the
+whole check is one command:
 
 ```
-./scripts/verify-lock.ps1
+./scripts/verify-image.ps1
 ```
 
-That builds a throwaway virtual environment containing nothing but
-`backend/requirements.lock`, installs it with `--require-hashes`, and runs the entire backend
-suite inside it: **501 passed, 1 skipped**, with `/healthz` answering 200 from that
-environment. So the dependency closure the image would install is known to install and known
-to run the application.
+What it establishes:
 
-Two things a lock cannot check, and which you should check on your first build:
+| | result |
+|---|---|
+| the pinned digest pulls | yes |
+| the index carries `linux/arm64` as well as amd64 | yes |
+| the image builds from the real Dockerfile | 197 MB |
+| `WORKDIR /app` plus the `COPY` layers produce a servable filesystem | yes |
+| the declared `CMD` answers `GET /healthz` over real HTTP | 200, version 0.1.0 |
+| writes are refused without `CAUCE_API_TOKEN` | 503 |
+| the backend suite passes **inside the image** | 502 passed |
+| two builds of one tree produce one image ID | identical |
 
-- that `WORKDIR /app` plus the `COPY` layers produce a filesystem uvicorn can serve from;
-- that the `python:3.12-slim` runtime's library set works with the locked wheels. The lock
-  carries hashes for both `win_amd64` and `manylinux2014_x86_64`, so Linux wheels are covered,
-  but nothing has executed them.
+Podman rather than Docker because it needs no daemon and no elevation, so this can run in
+`scripts/release-gate.ps1` rather than in a note asking somebody else to try it. Docker
+works too; the Dockerfile is identical.
 
-The base image is pinned to a resolved multi-platform index digest, recorded in both the
-Dockerfile and the release gate, so the two cannot drift. Re-resolve rather than editing the
-tag by hand:
+**What is not established: the arm64 image has never been executed.** This machine is amd64.
+The index is confirmed to carry a `linux/arm64` manifest, which is what makes one digest work
+for both, but nothing has run it. On a Raspberry Pi:
+
+```bash
+podman build --platform linux/arm64 -t cauce-central .
+```
+
+Re-resolve the base rather than editing the tag by hand when you move it:
 
 ```bash
 docker buildx imagetools inspect python:3.12-slim --format '{{.Manifest.Digest}}'
 ```
+
+The digest is recorded in both the Dockerfile and the release gate, so the two cannot drift
+apart without failing a release.
 
 ## 1. Verify the environment from zero
 
