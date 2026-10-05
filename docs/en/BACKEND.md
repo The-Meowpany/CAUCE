@@ -26,7 +26,8 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/v1/nodes/{id}/diagnostics` | Latest stored bundle summary |
 | GET | `/v1/fleet` | Per-node fleet state: firmware, last sync, storage, flags, `needs_visit` |
 | GET/POST | `/v1/sites` · PUT `/v1/sites/{id}/control` | Installation sites + assignment; flag a site as an untreated control |
-| PUT/GET | `/v1/sites/{id}/calibration` | Per-(site,variable) offset/scale; raw rows are never rewritten, calibrated values are derived on read |
+| PUT/GET | `/v1/sites/{id}/calibration` | Per-(site,variable) offset/scale; raw rows are never rewritten, calibrated values are derived on read. Computed from co-location data by `tools/calibrate.py` |
+| POST/GET | `/v1/nodes/{id}/certificate`, GET `/v1/certificates/{serial}` | Node certificates from `CAUCE_CA_KEY`; see `SECURITY.md` |
 | POST/GET | `/v1/sites/{id}/maintenance` | Maintenance log: install, calibration, sensor replacement, relocation |
 | GET | `/v1/maintenance/backup` | Download a VACUUM INTO SQLite snapshot (auth-gated) |
 | POST/GET | `/v1/sites` · PUT `/v1/nodes/{id}/site` | Installation sites + assignment |

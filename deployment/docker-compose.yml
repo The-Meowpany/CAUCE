@@ -14,6 +14,15 @@ services:
       # dashboard works on a trusted LAN. Generate one with:
       #   python -c "import secrets; print(secrets.token_urlsafe(32))"
       CAUCE_API_TOKEN: ${CAUCE_API_TOKEN:-}
+      # The certificate authority seed. Empty and the three certificate endpoints answer
+      # 503, which is deliberate for the same reason the admin token does: an unconfigured
+      # CA that issued anyway would produce documents that look authoritative and verify
+      # against no key. NOT the same seed as CAUCE_API_TOKEN - that is the point of having
+      # two, since a certificate authority whose key is also the admin credential is one
+      # compromise away from minting certificates for any node.
+      #   python -c "import secrets; print(secrets.token_hex(32))"
+      CAUCE_CA_KEY: ${CAUCE_CA_KEY:-}
+      CAUCE_CERT_VALIDITY_SECONDS: ${CAUCE_CERT_VALIDITY_SECONDS:-7776000}
       CAUCE_RATE_LIMIT: ${CAUCE_RATE_LIMIT:-120}
       CAUCE_RETENTION_ENABLED: ${CAUCE_RETENTION_ENABLED:-1}
       CAUCE_RETENTION_DAYS: ${CAUCE_RETENTION_DAYS:-365}

@@ -48,7 +48,33 @@ characters (`:` → `%3A`).
 | 404 | Unknown route, or no measurements yet |
 | 405 | Method not allowed |
 | 422 | Config parsed but invalid → `{"errors":[...]}` with every problem listed |
-| 503 | Administration not configured |
+| 503 | Administration not configured, or no CA configured (`certificate_authority_not_configured`) |
+
+## Node certificates (central)
+
+Three endpoints, gated by `write` for issuing and `read` for the two reads.
+They are in their own section because their trust story differs from the rest
+of the API: everything else is gated by the shared admin token, these are
+ultimately gated by a signature from a CA key configured separately in
+`CAUCE_CA_KEY`.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/v1/nodes/{id}/certificate` | Issue one. Body: `{}` or `{"validity_seconds": N}`. Supersedes any previous certificate |
+| GET | `/v1/nodes/{id}/certificate` | The node's current certificate, re-verified on the way out |
+| GET | `/v1/certificates/{serial}` | Status of one: `signature_valid` and `trusted` reported separately |
+
+Refusals worth knowing before calling these:
+
+| Code | Detail | Why |
+|---|---|---|
+| 409 | `node_has_no_device_key_provision_it_first` | Nothing to certify. Provisioning is the only way a key arrives |
+| 409 | `node_key_algorithm_is_not_public_key_based` | An HMAC node's key is a shared secret, and a certificate is meant to be handed to verifiers |
+| 503 | `certificate_authority_not_configured` | `CAUCE_CA_KEY` unset. Failing closed rather than issuing documents signed by nothing |
+
+The public key comes from the node's registered `device_key`, never from the
+request — a CA that certified whatever it was handed would certify nothing.
+`SECURITY.md` has the shape and the reasoning.
 
 ## Field diagnostics
 

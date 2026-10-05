@@ -50,7 +50,33 @@ caracteres incómodos (`:` → `%3A`).
 | 404 | Ruta desconocida, o aún sin mediciones |
 | 405 | Método no permitido |
 | 422 | Config parseada pero inválida → `{"errors":[...]}` con cada problema listado |
-| 503 | Administración no configurada |
+| 503 | Administración no configurada, o sin CA configurada (`certificate_authority_not_configured`) |
+
+## Certificados de nodo (central)
+
+Tres endpoints: la emisión exige `write` y las dos lecturas `read`. Van en
+su propia sección porque su historia de confianza es distinta de la del
+resto de la API: todo lo demás lo vigila el token de admin compartido,
+estos lo vigila en última instancia una firma de una clave de CA
+configurada aparte en `CAUCE_CA_KEY`.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/v1/nodes/{id}/certificate` | Emite uno. Cuerpo: `{}` o `{"validity_seconds": N}`. Sustituye al certificado anterior |
+| GET | `/v1/nodes/{id}/certificate` | El certificado actual del nodo, re-verificado al salir |
+| GET | `/v1/certificates/{serial}` | Estado de uno: `signature_valid` y `trusted` se informan por separado |
+
+Rechazos que conviene conocer antes de llamar a estos endpoints:
+
+| Código | Detalle | Por qué |
+|---|---|---|
+| 409 | `node_has_no_device_key_provision_it_first` | No hay nada que certificar. El aprovisionamiento es la única vía de entrada de una clave |
+| 409 | `node_key_algorithm_is_not_public_key_based` | La clave de un nodo HMAC es un secreto compartido, y un certificado está pensado para entregarse a verificadores |
+| 503 | `certificate_authority_not_configured` | `CAUCE_CA_KEY` sin definir. Falla cerrado en vez de emitir documentos que no firma nadie |
+
+La clave pública viene del `device_key` registrado del nodo, nunca del
+request: una CA que certificara lo que le entregaran no certificaría nada.
+`SECURITY.md` tiene la forma y el razonamiento.
 
 ## Diagnóstico de campo
 

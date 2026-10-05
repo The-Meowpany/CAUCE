@@ -57,6 +57,32 @@ Chequear `GET http://<server>:8000/healthz`; el dashboard central está
 en `/`. Si `/healthz` no responde, arreglar eso antes de tocar ningún
 nodo.
 
+### Credenciales, y cuál es cuál
+
+Tres secretos, y confundir cualquiera de los dos primeros elimina una separación
+que quieres conservar:
+
+| Variable | Para qué | Si no está definida |
+|---|---|---|
+| `CAUCE_SYNC_TOKEN` | Autentican a los nodos en `/v1/sync`. Compartido | El sync queda abierto, que es el comportamiento previo a la autenticación |
+| `CAUCE_API_TOKEN` | La API de administración. Compartido | Toda escritura responde `503 admin_api_not_configured` |
+| `CAUCE_CA_KEY` | Una **semilla** Ed25519 que firma certificados de nodo | Los tres endpoints de certificados responden `503 certificate_authority_not_configured` |
+
+`CAUCE_CA_KEY` es una semilla de 32 bytes en hex, y deliberadamente **no** es el mismo
+valor que `CAUCE_API_TOKEN`. El token de admin ya puede cambiar la calibración, emitir
+credenciales con scope y retirar un nodo; dejar que además emita certificados haría que una
+sola filtración bastara para suplantar cualquier nodo de la flota.
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Los certificados duran 90 días por defecto (`CAUCE_CERT_VALIDITY_SECONDS`). Por encima de
+366 días la API lo rechaza en vez de recortarlo, para que una errata no emita un
+certificado que sobreviva al despliegue. **No hay rotación de la clave de CA** en este
+código: rotar significa cambiar la clave que tiene cada verificador, que es un paso manual
+deliberado. Perder la clave implica reemitir todos los certificados.
+
 ## 2b. TLS delante del central
 
 El backend habla HTTP plano a propósito y **no se publica a la LAN**. Caddy

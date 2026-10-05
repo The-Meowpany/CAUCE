@@ -56,6 +56,31 @@ docker compose -f deployment/docker-compose.yml up -d --build
 Check `GET http://<server>:8000/healthz`; the central dashboard is at
 `/`. If `/healthz` doesn't answer, fix that before touching any node.
 
+### Credentials, and which is which
+
+Three secrets, and conflating any two of them removes a separation you want:
+
+| Variable | Purpose | If unset |
+|---|---|---|
+| `CAUCE_SYNC_TOKEN` | Nodes authenticate to `/v1/sync`. Shared | Sync is open, which is the pre-auth behaviour |
+| `CAUCE_API_TOKEN` | The admin API. Shared | Every write answers `503 admin_api_not_configured` |
+| `CAUCE_CA_KEY` | An Ed25519 **seed** that signs node certificates | The three certificate endpoints answer `503 certificate_authority_not_configured` |
+
+`CAUCE_CA_KEY` is a 32-byte seed in hex, and it is deliberately **not** the same value as
+`CAUCE_API_TOKEN`. The admin token can already change calibration, issue scoped credentials
+and retire a node; letting it also mint a certificate would make one leak sufficient to
+impersonate every node in the fleet.
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Certificates default to 90 days (`CAUCE_CERT_VALIDITY_SECONDS`). Above 366 days the API
+refuses rather than clamping, so a typo cannot issue a certificate that outlives the
+deployment. There is **no CA key rotation** in this code: rotation means changing the key
+every verifier holds, which is a deliberate manual step. Losing the key means re-issuing
+every certificate.
+
 ## 2b. TLS in front of the central
 
 The backend speaks plain HTTP on purpose and is **not published to the

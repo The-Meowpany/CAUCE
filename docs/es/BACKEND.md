@@ -26,7 +26,8 @@ PostgreSQL, la migración está acotada a `db.py` y a ningún otro lado.
 | GET | `/v1/nodes/{id}/diagnostics` | último bundle almacenado |
 | GET | `/v1/fleet` | Estado por nodo: firmware, último sync, storage, señales, `needs_visit` |
 | GET/POST | `/v1/sites` · PUT `/v1/sites/{id}/control` | Sitios de instalación + asignación; marcar un sitio como control sin tratamiento |
-| PUT/GET | `/v1/sites/{id}/calibration` | Offset/escala por (sitio,variable); las filas crudas nunca se reescriben, el valor calibrado se deriva en la lectura |
+| PUT/GET | `/v1/sites/{id}/calibration` | Offset/escala por (sitio,variable); las filas crudas nunca se reescriben, el valor calibrado se deriva en la lectura. Lo calcula `tools/calibrate.py` a partir de datos co-localizados |
+| POST/GET | `/v1/nodes/{id}/certificate`, GET `/v1/certificates/{serial}` | Certificados de nodo desde `CAUCE_CA_KEY`; ver `SECURITY.md` |
 | POST/GET | `/v1/sites/{id}/maintenance` | Bitácora: instalación, calibración, recambio de sensor, traslado |
 | GET | `/v1/maintenance/backup` | Descarga snapshot SQLite vía VACUUM INTO (con auth) |
 | POST/GET | `/v1/sites` · PUT `/v1/nodes/{id}/site` | Sitios de instalación + asignación |
