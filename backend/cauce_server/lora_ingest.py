@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from . import revocation
 from .db import query
+from .identifiers import require_node_id
 from .lora_frames import (
     MAX_RECORDS,
     DecodeError,
@@ -60,9 +61,7 @@ def expand_signed_frames(payload: dict) -> dict:
     to know which frames belong together; every frame's signature is checked
     individually and none is trusted because a sibling verified.
     """
-    node_id = payload.get("node_id")
-    if not isinstance(node_id, str) or not node_id:
-        raise HTTPException(status_code=422, detail="missing_node_id")
+    node_id = require_node_id(payload.get("node_id"))
 
     raw_frames = payload.get("frames")
     if not isinstance(raw_frames, list) or not raw_frames:

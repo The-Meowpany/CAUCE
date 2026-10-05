@@ -44,6 +44,13 @@ router = APIRouter(prefix="/v1")
 # alone is a condition on everything else staying correct.
 NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
+# The validation itself lives in `identifiers`, shared with the LoRa relay and with
+# `variable`/`sensor_id`. It used to live here, which meant the relay - a physical device on a
+# radio, not something behind the admin token - had no way to reach it without importing this
+# module, and so had no check. `NAME_PATTERN` is re-exported because tests and the sync
+# handler read it from here.
+from .identifiers import require_name, require_node_id  # noqa: E402
+
 # Every quality value the firmware can put on the wire, taken from
 # `cauce::core::qualityName` in firmware/lib/cauce_core/src/Types.cpp rather than from
 # memory. A node that sends anything else is either a different firmware or an attack, and
@@ -135,10 +142,8 @@ def provision_node(
 ) -> dict:
     _check_rate(request)
     require_scope(authorization, "write")
-    node_id = payload.get("node_id")
+    node_id = require_node_id(payload.get("node_id"))
     device_key = payload.get("device_key")
-    if not isinstance(node_id, str) or not node_id:
-        raise HTTPException(status_code=422, detail="missing_node_id")
 
     algorithm_name = payload.get("device_key_algorithm") or DEFAULT_ALGORITHM
     try:
@@ -323,6 +328,20 @@ async def sync_batch(
     if not isinstance(measurements, list):
         raise HTTPException(status_code=422, detail="missing_measurements")
 
+    # `node_id` is stored, rendered, exported and used as a filename, and it was the one
+    # identifier on this path with no shape check at all - `variable` and `sensor_id` both
+    # had one, `node_id` was only required to be a non-empty string.
+    #
+    # What that allowed, confirmed against HEAD before fixing: a node could sync as
+    # `=cmd|'/C calc'!A0` and the central answered 200. The identifier then reached
+    # `/v1/export-all.csv` unquoted in the first column, so an operator who opened the export
+    # in a spreadsheet evaluated the operator's formula rather than reading a node id. That is
+    # CSV formula injection, and it is a stored issue: it fires on whoever opens the file
+    # next, which is nobody who can see the cause.
+    #
+    # `require_node_id` and the reasoning behind the character class are in `identifiers`.
+    node_id = require_node_id(payload.get("node_id"))
+
     required_fields = {"sequence", "timestamp_utc_ms", "variable", "quality"}
     for rec in measurements:
         missing = required_fields - rec.keys()
@@ -342,15 +361,8 @@ async def sync_batch(
         # A character class rather than an allowlist of known variables, because the set of
         # variables is meant to grow: the protocol version, not this regex, decides what is
         # understood. Mirrors SITE_ID_PATTERN in evaluation.py.
-        for field, pattern in (("variable", NAME_PATTERN), ("sensor_id", NAME_PATTERN)):
-            value = rec.get(field)
-            if value is None and field == "sensor_id":
-                continue
-            if not isinstance(value, str) or not pattern.fullmatch(value):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"invalid_{field}",
-                )
+        for field in ("variable", "sensor_id"):
+            require_name(rec.get(field), field, optional=(field == "sensor_id"))
         # `quality` is the third field that reaches the dashboard unescaped, in a class
         # attribute this time: `class="q-{quality}"`. A node could sync
         # `x" onmouseover="alert(1)` and the central's node page returned
