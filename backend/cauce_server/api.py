@@ -40,9 +40,22 @@ router = APIRouter(prefix="/v1")
 # and incapable of carrying markup, a quote, a backslash or a `</script>`.
 #
 # The dashboard renders these, so this is the input half of an XSS fix whose output half is
-# dashboard._json_for_script. Both halves exist because either alone is a condition on
-# everything else staying correct.
+# dashboard._json_for_script and dashboard._form_value. Both halves exist because either
+# alone is a condition on everything else staying correct.
 NAME_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+# Every quality value the firmware can put on the wire, taken from
+# `cauce::core::qualityName` in firmware/lib/cauce_core/src/Types.cpp rather than from
+# memory. A node that sends anything else is either a different firmware or an attack, and
+# both are worth a 422 rather than a row in the database.
+#
+# Distinct from coverage.USABLE_QUALITIES, which answers a different question: which of
+# these count towards coverage. INVALID and MISSING are perfectly legitimate values that
+# that set deliberately excludes. Conflating the two would have refused honest data.
+FIRMWARE_QUALITIES = frozenset({
+    "VALID", "CALIBRATED", "UNCALIBRATED", "ESTIMATED",
+    "SUSPECT", "INVALID", "MISSING", "UNKNOWN",
+})
 
 def _check_rate(request: Request) -> None:
     check_rate(request)
@@ -338,6 +351,17 @@ async def sync_batch(
                     status_code=422,
                     detail=f"invalid_{field}",
                 )
+        # `quality` is the third field that reaches the dashboard unescaped, in a class
+        # attribute this time: `class="q-{quality}"`. A node could sync
+        # `x" onmouseover="alert(1)` and the central's node page returned
+        # `<td class="q-x" onmouseover="alert(1)">`, which fires without a click.
+        #
+        # Unlike variable and sensor_id, this one has a closed set rather than a shape, so
+        # membership is the check. `estimated` and `unknown` are in the firmware enum and
+        # were missing from an earlier version of this list, which would have refused
+        # honest readings from a node that sends them.
+        if rec.get("quality") not in FIRMWARE_QUALITIES:
+            raise HTTPException(status_code=422, detail="invalid_quality")
 
     now_ms = int(time.time() * 1000)
     with transaction() as conn:
@@ -466,8 +490,22 @@ async def sync_batch(
 def ota_manifest(
     request: Request,
     node_id: str | None = None,
+    authorization: str | None = Header(default=None),
 ) -> dict:
+    """The release descriptor a node updates from.
+
+    Authenticated, which it was not for its whole life: the handler took no
+    `authorization` at all, so it ignored `CAUCE_API_TOKEN` even when one was configured.
+    Every other admin surface checks it. That made this the one endpoint where an operator
+    who had deliberately locked the central down still published the exact version, URL,
+    size and per-node HMAC of the next firmware to anyone who asked.
+
+    `require_bearer_token` rather than `require_admin_write`: this is a read, and reads stay
+    open when no token is configured so the dashboard works on a trusted LAN. Setting the
+    token closes it, which is the same rule every other admin read follows.
+    """
     _check_rate(request)
+    require_bearer_token(authorization, settings.api_token)
     path = settings.ota_releases_path
     if not path:
         raise HTTPException(status_code=404, detail="ota_not_configured")
@@ -490,9 +528,25 @@ def ota_manifest(
     if node_id:
         rows = query("SELECT device_key FROM nodes WHERE node_id=?", (node_id,))
         if rows and rows[0]["device_key"]:
-            canonical = f"{version}|{url}|{total_size}"
-            signature = hmac.new(rows[0]["device_key"].encode(),
-                                 canonical.encode(),
+            # The canonical string and the key derivation must be byte-identical to
+            # OtaManager::runCheck in the firmware, or the node rejects every manifest.
+            #
+            # It was not. The firmware keyed the HMAC with SHA-256(device_key) as 32 raw
+            # bytes and signed "version|sha256|url|total_size"; this side keyed it with the
+            # ASCII device_key and signed "version|url|total_size". Two independent
+            # mismatches, so no signature produced here could ever have been accepted by a
+            # node. It failed in the safe direction - the node refuses the update - which is
+            # why it went unnoticed, and also why the manifest gate had never actually
+            # protected anything: it had never let an update through either.
+            #
+            # `version|sha256|url|total_size` rather than a shorter canonical, because the
+            # signature has to commit to the image hash. Signing version, URL and size
+            # alone would let a rewritten `sha256` field ride along under a signature that
+            # still verifies.
+            canonical = f"{version}|{sha256}|{url}|{total_size}"
+            manifest_key = hashlib.sha256(
+                rows[0]["device_key"].encode("utf-8")).digest()
+            signature = hmac.new(manifest_key, canonical.encode("utf-8"),
                                  hashlib.sha256).hexdigest()
     return {"version": version, "sha256": sha256, "url": url,
             "total_size": total_size, "hmac": signature}

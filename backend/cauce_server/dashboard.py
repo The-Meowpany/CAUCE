@@ -748,7 +748,9 @@ def dashboard(request: Request):
         tval = "—" if temp.get("value") is None else f"{temp['value']:.1f}"
         hval = "—" if hum.get("value") is None else f"{hum['value']:.1f}"
         quals = sorted({row["quality"] for row in latest if row["quality"]})
-        qline = (" · ".join(f"<span class=\"q-{q}\">{q}</span>" for q in quals)
+        qline = (" · ".join(
+            f"<span class=\"q-{html.escape(q)}\">{html.escape(q)}</span>"
+            for q in quals)
                  or labels["none"])
         pts = query(
             "SELECT timestamp_utc_ms, value FROM measurements"
@@ -834,7 +836,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
         val = labels["none"] if r["value"] is None else f"{r['value']:.1f}"
         cards.append(_CARD.format(
             var=html.escape(_human_var(r["variable"])), val=val,
-            unit=html.escape(r["unit"] or ""), q=r["quality"],
+            unit=html.escape(r["unit"] or ""), q=html.escape(r["quality"]),
             ts=_fmt_utc(r["timestamp_utc_ms"])))
     if not cards:
         cards.append(f"<p class=\"mut\">{labels['no_data']}</p>")
@@ -848,7 +850,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
         rows.append(_RECENT_ROW.format(
             ts=_fmt_utc(r["timestamp_utc_ms"]),
             var=html.escape(_human_var(r["variable"])), val=val,
-            unit=html.escape(r["unit"] or ""), q=r["quality"]))
+            unit=html.escape(r["unit"] or ""), q=html.escape(r["quality"])))
     all_vars = [r["variable"] for r in query(
         "SELECT DISTINCT variable FROM measurements WHERE node_id=?"
         " ORDER BY variable", (node_id,))]
@@ -892,7 +894,8 @@ def node_page(node_id: str, request: Request, days: int = 1,
         " GROUP BY quality ORDER BY c DESC",
         (node_id, since, until))
     qrows = "".join(
-        f"<tr><td class=\"q-{r['quality']}\">{r['quality']}</td>"
+        f"<tr><td class=\"q-{html.escape(r['quality'])}\">"
+        f"{html.escape(r['quality'])}</td>"
         f"<td>{r['c']}</td></tr>" for r in qbreak)
     varboxes = " ".join(
         f"<label><input type=\"checkbox\" name=\"var\" value=\"{html.escape(v)}\""
@@ -1471,7 +1474,8 @@ def node_report(node_id: str, request: Request,
                    " WHERE node_id=? GROUP BY quality ORDER BY c DESC",
                    (node_id,))
     qrows = "".join(
-        f"<tr><td class=\"q-{r['quality']}\">{r['quality']}</td>"
+        f"<tr><td class=\"q-{html.escape(r['quality'])}\">"
+        f"{html.escape(r['quality'])}</td>"
         f"<td>{r['c']}</td></tr>" for r in qbreak)
     try:
         heat = analytics_heat_events(node_id=node_id, request=request,

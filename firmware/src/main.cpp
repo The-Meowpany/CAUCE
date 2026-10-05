@@ -141,63 +141,132 @@ bool cmdSetLedMode(const char* payload, char* detail, size_t cap) {
 }  // namespace
 
 
+// WHY THE WATCHDOG IS FED HERE AND NOT ONLY IN loop()
+//
+// The board rebooted every ~9 s with rst:0x8 (TG1WDT_SYS_RESET) and the last thing in
+// the log was CONFIG_LOADED - never BOOT_COMPLETE. TG1 is what esp_task_wdt uses, so that
+// is the task watchdog, and the loop task is the one subscribed: on the Arduino core
+// setup() and loop() both run on loopTask, so esp_task_wdt_add(NULL) inside setup()
+// subscribes loopTask, not the idle task. That was worth ruling out, because an
+// idle-task watchdog would trip for a different reason entirely.
+//
+// loop() feeds it on its first statement, so a hang inside loop() cannot be the cause.
+// Nothing in setup() fed it, though, and setup() does the flash mount, the store open,
+// Wi-Fi init, a web server and the OTA bookkeeping in one pass. Thirty seconds for all of
+// that is not obviously generous on a cold mount, and when it is exceeded the board
+// resets before BOOT_COMPLETE - which is exactly the signature observed, and exactly why
+// nobody could tell which step was slow.
+//
+// So every step below announces itself, feeds the watchdog on entry and exit, and reports
+// its own duration. A hang inside a step still resets after 30 s, but the log now names
+// the step, which is what the previous code could not do.
+namespace {
+
+struct SetupStepScope {
+  const char* name;
+  uint32_t startedMs;
+
+  explicit SetupStepScope(const char* stepName)
+      : name(stepName), startedMs(millis()) {
+    esp_task_wdt_reset();
+    Serial.printf("SETUP_STEP %s begin\n", name);
+    Serial.flush();
+  }
+
+  ~SetupStepScope() {
+    esp_task_wdt_reset();
+    Serial.printf("SETUP_STEP %s end ms=%lu\n", name,
+                  static_cast<unsigned long>(millis() - startedMs));
+    Serial.flush();
+  }
+};
+
+}  // namespace
+
+// Two levels of indirection because `##` suppresses expansion of its neighbour: pasting
+// __LINE__ directly yields a variable literally named cauce_step___LINE__ and every
+// invocation collides with the first.
+#define CAUCE_STEP_CONCAT_INNER(a, b) a##b
+#define CAUCE_STEP_CONCAT(a, b) CAUCE_STEP_CONCAT_INNER(a, b)
+#define CAUCE_SETUP_STEP(name) \
+  SetupStepScope CAUCE_STEP_CONCAT(cauce_step_, __LINE__)(name)
+
 void setup() {
   Serial.begin(115200);
   delay(200);
   esp_task_wdt_init(30, true);
   esp_task_wdt_add(NULL);
 
-  if (!g_fs.mount()) {
-    Serial.println("ERROR STORAGE_MOUNT_FAILED fs=littlefs");
-    while (true) delay(1000);
+  {
+    CAUCE_SETUP_STEP("mount_fs");
+    if (!g_fs.mount()) {
+      Serial.println("ERROR STORAGE_MOUNT_FAILED fs=littlefs");
+      while (true) delay(1000);
+    }
   }
   g_bus = new cauce::hal::Esp32WireBus(21, 22, 100000);
   g_sink = new cauce::app::SerialLogSink(Serial);
   g_logger = new cauce::Logger(*g_sink);
   g_validator = new cauce::ValidationEngine(cauce::defaultThresholds());
-  g_store = new cauce::LogStorageRepository(g_fs, "/data", 64u * 1024u);
-  g_configManager = new cauce::ConfigManager(g_fs, "/config/cauce.conf");
-
+  // Declared at function scope, not inside the config step: every later step reads
+  // config.nodeId, and a block-scoped copy would be a wall of "'config' was not declared".
   cauce::NodeConfig config;
-  const auto status = g_configManager->load(config);
-  g_activeConfig = config;
-  g_logger->eventf(cauce::LogLevel::Info, "CONFIG_LOADED", "status=%d node=%s",
-                   static_cast<int>(status), config.nodeId);
 
-  const auto validation = cauce::ConfigManager::validate(config);
-  if (!validation.ok) {
-    g_logger->event(cauce::LogLevel::Warn,
-                    "CONFIG_INVALID_USING_DEGRADED_DEFAULTS");
+  {
+    CAUCE_SETUP_STEP("open_store");
+    g_store = new cauce::LogStorageRepository(g_fs, "/data", 64u * 1024u);
+    g_configManager = new cauce::ConfigManager(g_fs, "/config/cauce.conf");
+
+    const auto status = g_configManager->load(config);
+    g_activeConfig = config;
+    g_store->open();
+    g_logger->eventf(cauce::LogLevel::Info, "CONFIG_LOADED", "status=%d node=%s",
+                     static_cast<int>(status), config.nodeId);
+
+    const auto validation = cauce::ConfigManager::validate(config);
+    if (!validation.ok) {
+      g_logger->event(cauce::LogLevel::Warn,
+                      "CONFIG_INVALID_USING_DEGRADED_DEFAULTS");
+    }
   }
 
-  g_store->open();
   // Rollback bookkeeping starts as early as possible: if the image is bad
   // enough to crash before the OTA wiring, the attempt still has to be
   // counted or the guard would never reach its limit.
-  g_otaControl = new cauce::app::Esp32OtaControl();
-  g_bootConfirm = new cauce::app::OtaBootConfirm(*g_otaControl, g_fs,
-                                                  *g_logger, "/state/ota_boot");
-  g_bootConfirm->loadAttempts();
-  if (g_otaControl->isPendingVerify()) {
-    g_logger->eventf(cauce::LogLevel::Warn, "OTA_BOOT_PENDING",
-                     "attempt=%lu", static_cast<unsigned long>(g_bootConfirm->attempts()));
+  {
+    CAUCE_SETUP_STEP("ota_bookkeeping");
+    g_otaControl = new cauce::app::Esp32OtaControl();
+    g_bootConfirm = new cauce::app::OtaBootConfirm(*g_otaControl, g_fs,
+                                                    *g_logger, "/state/ota_boot");
+    g_bootConfirm->loadAttempts();
+    if (g_otaControl->isPendingVerify()) {
+      g_logger->eventf(cauce::LogLevel::Warn, "OTA_BOOT_PENDING",
+                       "attempt=%lu",
+                       static_cast<unsigned long>(g_bootConfirm->attempts()));
+    }
   }
-  g_scheduler = new cauce::app::MeasurementScheduler(
-      g_clock, *g_store, *g_validator, *g_logger);
-  g_scheduler->setNodeId(config.nodeId);
-  g_scheduler->setSamplingInterval(config.samplingIntervalS);
-  g_scheduler->setSequenceStart(g_store->lastSequence());
+  {
+    CAUCE_SETUP_STEP("scheduler");
+    g_scheduler = new cauce::app::MeasurementScheduler(
+        g_clock, *g_store, *g_validator, *g_logger);
+    g_scheduler->setNodeId(config.nodeId);
+    g_scheduler->setSamplingInterval(config.samplingIntervalS);
+    g_scheduler->setSequenceStart(g_store->lastSequence());
 
-  g_health.nodeState = cauce::NodeState::Ready;
-  g_health.storageRecords = g_store->totalRecords();
-  g_health.storageBytes = g_store->totalBytes();
+    g_health.nodeState = cauce::NodeState::Ready;
+    g_health.storageRecords = g_store->totalRecords();
+    g_health.storageBytes = g_store->totalBytes();
+  }
 
-  g_bus->begin();
-  g_bme = new cauce::drivers::Bme280Driver(*g_bus, g_clock, "BME280-1");
-  g_scheduler->addSensor(g_bme);
-  g_scheduler->beginAllSensors();
+  {
+    CAUCE_SETUP_STEP("sensors");
+    g_bus->begin();
+    g_bme = new cauce::drivers::Bme280Driver(*g_bus, g_clock, "BME280-1");
+    g_scheduler->addSensor(g_bme);
+    g_scheduler->beginAllSensors();
+  }
 
-g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
+  g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
                                           *g_logger, g_health);
   // WiFi mode is set here, before anything opens a socket, and not left to
   // NetworkManager later.
@@ -210,6 +279,7 @@ g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
   //
   // NetworkManager still sets up station and softAP; this only establishes the mode
   // early enough that opening a socket is legal.
+  CAUCE_SETUP_STEP("web_server");
   WiFi.mode(WIFI_STA);
   g_webServer = new WebServer(80);
   g_apiServer = new cauce::app::Esp32ApiServer(*g_webServer, *g_apiRouter);
@@ -217,14 +287,17 @@ g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
   g_portal = new cauce::app::Esp32CaptivePortal();
   g_portal->begin();
 
-  g_syncTransport = new cauce::hal::Esp32HttpSyncTransport();
-  g_syncManager = new cauce::app::SyncManager(*g_store, *g_syncTransport,
-                                              g_clock, *g_logger, g_fs,
-                                              "/state/sync_state");
-  g_syncManager->setNodeId(config.nodeId);
-  g_syncManager->configureEndpoint(config.syncServerUrl, "");
-  g_syncManager->setDeviceSecret(config.syncDeviceKey);
-  g_syncManager->loadState();
+  {
+    CAUCE_SETUP_STEP("sync_state");
+    g_syncTransport = new cauce::hal::Esp32HttpSyncTransport();
+    g_syncManager = new cauce::app::SyncManager(*g_store, *g_syncTransport,
+                                                g_clock, *g_logger, g_fs,
+                                                "/state/sync_state");
+    g_syncManager->setNodeId(config.nodeId);
+    g_syncManager->configureEndpoint(config.syncServerUrl, "");
+    g_syncManager->setDeviceSecret(config.syncDeviceKey);
+    g_syncManager->loadState();
+  }
 
   // Downlink. The central keeps offering a command until it sees its receipt,
   // so the executor has to remember applied ids in flash or the node would
@@ -244,27 +317,40 @@ g_apiRouter = new cauce::app::ApiRouter(*g_store, *g_configManager, g_clock,
   g_commands->setHandler("set_led_mode", cmdSetLedMode);
   g_syncManager->setCommandExecutor(g_commands);
 
-  g_netController = new cauce::hal::Esp32WifiController();
-  g_networkManager = new cauce::app::NetworkManager(
-      *g_netController, g_clock, *g_logger, config, config.nodeId);
-
-  g_otaCatalog = new cauce::app::Esp32ManifestSource();
-  g_otaCatalog->configure(config.otaManifestUrl, config.nodeId);
-  g_otaReader = new cauce::app::Esp32FirmwareReader();
-  g_otaInstaller = new cauce::app::Esp32FirmwareInstaller();
-  g_otaManager = new cauce::app::OtaManager(*g_otaCatalog, *g_otaReader,
-                                            *g_otaInstaller, g_clock,
-                                            *g_logger);
-  g_otaManager->setFirmwareVersion(cauce::Versions::kFirmware);
-  g_otaManager->setSafetyHooks(&freeHeapBytes, nullptr);
-  g_otaManager->setRebootHook(&espRestartNow);
-  if (config.syncDeviceKey[0] != '\0') {
-    uint8_t manifestKey[32];
-    cauce::sha256(reinterpret_cast<const uint8_t*>(config.syncDeviceKey),
-                  std::strlen(config.syncDeviceKey), manifestKey);
-    g_otaManager->setManifestKey(manifestKey);
+  {
+    CAUCE_SETUP_STEP("wifi_controller");
+    g_netController = new cauce::hal::Esp32WifiController();
+    g_networkManager = new cauce::app::NetworkManager(
+        *g_netController, g_clock, *g_logger, config, config.nodeId);
   }
 
+  {
+    CAUCE_SETUP_STEP("ota_manager");
+    g_otaCatalog = new cauce::app::Esp32ManifestSource();
+    g_otaCatalog->configure(config.otaManifestUrl, config.nodeId);
+    g_otaReader = new cauce::app::Esp32FirmwareReader();
+    g_otaInstaller = new cauce::app::Esp32FirmwareInstaller();
+    g_otaManager = new cauce::app::OtaManager(*g_otaCatalog, *g_otaReader,
+                                              *g_otaInstaller, g_clock,
+                                              *g_logger);
+    g_otaManager->setFirmwareVersion(cauce::Versions::kFirmware);
+    g_otaManager->setSafetyHooks(&freeHeapBytes, nullptr);
+    g_otaManager->setRebootHook(&espRestartNow);
+    if (config.syncDeviceKey[0] != '\0') {
+      uint8_t manifestKey[32];
+      cauce::sha256(reinterpret_cast<const uint8_t*>(config.syncDeviceKey),
+                    std::strlen(config.syncDeviceKey), manifestKey);
+      g_otaManager->setManifestKey(manifestKey);
+    } else {
+      // Said once, loudly, at boot. The manager will refuse every update with
+      // OTA_NO_MANIFEST_KEY, and an operator who sees that in the field should be able to
+      // find out here why, rather than discovering it as a node that never updates.
+      g_logger->event(cauce::LogLevel::Warn,
+                      "OTA_UNSIGNED_NO_DEVICE_KEY updates will be refused");
+    }
+  }
+
+  esp_task_wdt_reset();
   g_logger->eventf(cauce::LogLevel::Info, "BOOT_COMPLETE",
                    "firmware=%s node=%s api=80", cauce::Versions::kFirmware,
                    config.nodeId);

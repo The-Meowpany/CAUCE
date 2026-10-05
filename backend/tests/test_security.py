@@ -301,6 +301,81 @@ def test_the_events_page_escapes_the_values_it_reflects(client):
     assert "&quot;" not in response.text.split("<main")[0], "an attribute was broken out of"
 
 
+def _sync_quality(client, quality, sequence=1):
+    return client.post("/v1/sync", json=sync_payload([
+        dict(_series("CAUCE-001", BASE_TS, 1)[0], quality=quality, sequence=sequence),
+    ], node_id="CAUCE-001"))
+
+
+def test_sync_refuses_a_quality_the_firmware_cannot_produce(client):
+    """The input half of the `quality` XSS.
+
+    `quality` was checked for presence and nothing else, and it reaches an HTML class
+    attribute. A node could sync `x" onmouseover="alert(1)` and the central returned
+    `<td class="q-x" onmouseover="alert(1)">`, which fires without a click.
+    """
+    for hostile in ('x" onmouseover="alert(1)', '"><script>alert(1)</script>',
+                    "x'><img src=x onerror=alert(1)>", "valid", "Valid", "", " "):
+        response = _sync_quality(client, hostile)
+        assert response.status_code == 422, (hostile, response.status_code)
+        assert response.json()["detail"] == "invalid_quality"
+
+
+def test_sync_accepts_every_quality_the_firmware_emits(client):
+    """Pinned against the firmware enum rather than against my memory of it.
+
+    `cauce::core::qualityName` in firmware/lib/cauce_core/src/Types.cpp returns eight
+    values. An earlier version of the server-side list had four of them, which would have
+    refused honest readings from a node that sends ESTIMATED or UNKNOWN. This test is what
+    catches that class of mistake, and it names the firmware function it mirrors.
+    """
+    from cauce_server.api import FIRMWARE_QUALITIES
+
+    assert FIRMWARE_QUALITIES == frozenset({
+        "VALID", "CALIBRATED", "UNCALIBRATED", "ESTIMATED",
+        "SUSPECT", "INVALID", "MISSING", "UNKNOWN",
+    })
+    for quality in sorted(FIRMWARE_QUALITIES):
+        assert _sync_quality(client, quality).status_code == 200, quality
+
+
+def test_a_stored_quality_cannot_break_out_of_the_class_attribute(client):
+    """The output half, seeded past the ingest check because the sink must stand alone.
+
+    Coverage and analytics filter on a subset of qualities, so a hostile value lands only
+    in the quality-breakdown tables and the node-list line - which is where it was found.
+    """
+    _seed(client)
+    hostile = 'x" onmouseover="alert(1)'
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO measurements(node_id, sequence, sensor_id,"
+            " timestamp_utc_ms, variable, value, unit, quality, reason_bits,"
+            " time_uncertain) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("CAUCE-001", 800, "BME280-1", BASE_TS, "air_temperature", 21.0, "C",
+             hostile, 0, 0),
+        )
+    for route in ("/nodes/CAUCE-001", "/nodes/CAUCE-001/report", "/"):
+        page = client.get(route)
+        assert page.status_code == 200, (route, page.status_code)
+        assert 'class="q-x" onmouseover=' not in page.text, route
+        assert "<script>alert(1)</script>" not in page.text, route
+
+
+def test_the_quality_class_attribute_cannot_be_broken_out_of(client):
+    """The specific shape of the bug: a quote in a class value, not a tag.
+
+    Asserted on the quote alone. The `=` inside `onmouseover=` survives as inert text and
+    that is correct - without a quote to close the attribute it cannot become an attribute,
+    so asserting on it would be asserting something other than the property that matters.
+    """
+    from cauce_server.dashboard import _form_value
+
+    escaped = _form_value('x" onmouseover="alert(1)')
+    assert '"' not in escaped, "a raw quote would close the attribute"
+    assert escaped.count("&quot;") == 2, "both quotes should be entity-encoded"
+    assert not any(char in escaped for char in "<>"), "angle brackets survive too"
+
 def test_json_for_script_escapes_what_a_json_string_does_not():
     """Unit level, so the reason the helper exists is stated where it is implemented."""
     import json

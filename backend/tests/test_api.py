@@ -10,7 +10,7 @@ os.environ["CAUCE_DB_PATH"] = "./data/test_backend.sqlite"
 from cauce_server import db  # noqa: E402
 from cauce_server.config import settings  # noqa: E402
 from cauce_server.main import app  # noqa: E402
-from conftest import ADMIN_HEADERS
+from conftest import ADMIN_HEADERS, NO_AUTH
 
 
 def _json_dumps(obj) -> str:
@@ -978,12 +978,111 @@ def test_ota_manifest_signed_per_node(client, monkeypatch, tmp_path):
     assert r.status_code == 200
     m = client.get("/v1/ota/manifest", params={"node_id": "CAUCE-001"}).json()
     assert m["version"] == "1.2.3" and m["total_size"] == 12345
-    expected = hmac.new(b"0123456789abcdef", b"1.2.3|http://x/fw.bin|12345",
-                        hashlib.sha256).hexdigest()
+    # Key is SHA-256(device_key) as raw bytes and the canonical string carries the image
+    # hash, because the firmware checks exactly that. The previous pairing - ASCII key,
+    # version|url|size - produced a signature no node could ever accept.
+    expected = hmac.new(
+        hashlib.sha256(b"0123456789abcdef").digest(),
+        f"1.2.3|{'ab' * 32}|http://x/fw.bin|12345".encode(),
+        hashlib.sha256).hexdigest()
     assert m["hmac"] == expected
     anon = client.get("/v1/ota/manifest").json()
     assert anon["hmac"] is None
 
+
+def test_ota_manifest_honours_the_admin_token(client, monkeypatch, tmp_path):
+    """The endpoint took no `authorization` at all for its whole life.
+
+    That made it the one admin surface where an operator who had set CAUCE_API_TOKEN still
+    published the exact version, URL, size and per-node HMAC of the next firmware to anyone
+    who asked, because nothing on this handler consulted the configured token.
+    """
+    from cauce_server.config import settings
+
+    rel = {"version": "9.9.9", "sha256": "cd" * 32,
+           "url": "http://x/fw.bin", "total_size": 4242}
+    path = tmp_path / "releases.json"
+    path.write_text(json.dumps(rel), encoding="utf-8")
+    monkeypatch.setattr(settings, "ota_releases_path", str(path))
+    monkeypatch.setattr(settings, "api_token", "operator-token")
+
+    # Authenticated: served. The header is sent explicitly rather than relying on the
+    # fixture's credential, so this test states the whole exchange instead of depending on
+    # a token that conftest happens to use.
+    ok = client.get("/v1/ota/manifest",
+                    headers={"Authorization": "Bearer operator-token"})
+    assert ok.status_code == 200
+    assert ok.json()["version"] == "9.9.9"
+
+    # Unauthenticated with a token configured: refused. NO_AUTH is a real empty credential,
+    # not the omission of the header, so this is what an anonymous caller does.
+    anonymous = client.get("/v1/ota/manifest", headers=NO_AUTH)
+    assert anonymous.status_code == 401
+    assert "9.9.9" not in anonymous.text
+
+    # A wrong token is refused as well, not treated as absent.
+    wrong = client.get("/v1/ota/manifest",
+                       headers={"Authorization": "Bearer not-the-token"})
+    assert wrong.status_code == 401
+    assert "9.9.9" not in wrong.text
+
+
+def test_ota_manifest_stays_open_when_no_token_is_configured(client, monkeypatch, tmp_path):
+    """The deliberate asymmetry, pinned: reads stay open on a trusted LAN, and setting the
+    token is what closes them. Without this test someone "fixes" the endpoint by failing
+    closed unconditionally and breaks every unconfigured install's node updates."""
+    from cauce_server.config import settings
+
+    rel = {"version": "1.0.0", "sha256": "ef" * 32,
+           "url": "http://x/fw.bin", "total_size": 10}
+    path = tmp_path / "releases.json"
+    path.write_text(json.dumps(rel), encoding="utf-8")
+    monkeypatch.setattr(settings, "ota_releases_path", str(path))
+    monkeypatch.setattr(settings, "api_token", "")
+
+    assert client.get("/v1/ota/manifest", headers=NO_AUTH).status_code == 200
+
+def test_the_manifest_signature_matches_the_firmware_known_answer(client, monkeypatch,
+                                                                   tmp_path):
+    """The shared vector, pinned on both sides.
+
+    firmware/test/test_ota.cpp::test_manifest_signature_matches_the_central computes the
+    same bytes with the same inputs. If either side changes its key derivation or its
+    canonical string, one of the two tests fails - which is the only way to catch it, since
+    a mismatch fails by refusing the update and is invisible from a desk.
+    """
+    from cauce_server.config import settings
+
+    rel = {"version": "1.2.3", "sha256": "ab" * 32,
+           "url": "http://central/v1/fw.bin", "total_size": 12345}
+    path = tmp_path / "releases.json"
+    path.write_text(json.dumps(rel), encoding="utf-8")
+    monkeypatch.setattr(settings, "ota_releases_path", str(path))
+    client.post("/v1/provision",
+                json={"node_id": "CAUCE-001", "device_key": "0123456789abcdef"})
+
+    got = client.get("/v1/ota/manifest", params={"node_id": "CAUCE-001"}).json()["hmac"]
+    assert got == "424f819f01f1b31837e7318f7d9c944e971c8c42178dbaa615d97a0ef87e3721"
+
+
+def test_the_signature_commits_to_the_image_hash(client, monkeypatch, tmp_path):
+    """Signing version, URL and size alone would let a rewritten sha256 field ride along
+    under a signature that still verifies. The canonical string carries the hash."""
+    from cauce_server.config import settings
+
+    client.post("/v1/provision",
+                json={"node_id": "CAUCE-001", "device_key": "0123456789abcdef"})
+
+    def signature_for(digest):
+        rel = {"version": "1.0.0", "sha256": digest, "url": "http://x/f.bin",
+               "total_size": 100}
+        path = tmp_path / f"r-{digest[:8]}.json"
+        path.write_text(json.dumps(rel), encoding="utf-8")
+        monkeypatch.setattr(settings, "ota_releases_path", str(path))
+        return client.get("/v1/ota/manifest",
+                          params={"node_id": "CAUCE-001"}).json()["hmac"]
+
+    assert signature_for("aa" * 32) != signature_for("bb" * 32)
 
 def test_ota_manifest_unconfigured_404(client, monkeypatch):
     from cauce_server.config import settings

@@ -153,7 +153,29 @@ void OtaManager::runCheck() {
     return;
   }
 
-  if (hasManifestKey_) {
+  // The manifest signature is what makes an update trustworthy: it is the only thing
+  // standing between a node and whoever answers its update poll. It used to be verified
+  // only when a key happened to be configured, so a node with OTA enabled and no device key
+  // accepted and ran any manifest it was handed, with no warning. That is the gap
+  // docs/en/SECURITY.md described as "with a manifest key configured" - true, and the
+  // condition was the whole protection.
+  //
+  // Now the key is required. A node that cannot verify a signature does not update, which
+  // is a behaviour change for anyone running OTA without a device key: they get
+  // OTA_NO_MANIFEST_KEY and a node that stays on its current firmware. That is the intended
+  // trade - refusing to update is recoverable, having silently accepted every manifest is
+  // not.
+  if (!hasManifestKey_) {
+    scheduleFailure(OtaState::CheckFailed, "OTA_NO_MANIFEST_KEY", LogLevel::Error);
+    return;
+  }
+
+  {
+    // Must stay byte-identical to backend/cauce_server/api.py::ota_manifest: key is
+    // SHA-256(device_key) as 32 raw bytes, message is version|sha256|url|totalSize. The two
+    // disagreed once already - different key derivation AND a different canonical string -
+    // and no node could ever accept a manifest, which is invisible from a desk because it
+    // fails by refusing.
     char canonical[256];
     std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", release.version,
                   release.sha256Hex, release.url,

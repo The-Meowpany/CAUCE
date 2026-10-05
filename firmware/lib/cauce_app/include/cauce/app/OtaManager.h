@@ -47,6 +47,11 @@ class OtaManager {
   void setMinFreeHeapBytes(uint32_t minBytes);
   void setMinBatteryV(float minVolts);
   void setManifestKey(const uint8_t key[32]);
+  // Symmetric with setManifestKey, and it exists because the manager now refuses to update
+  // without a key. A test that wants to exercise the download path needs a key; a test that
+  // wants to prove the refusal needs to be able to take it away again, and there was no way
+  // to do that before.
+  void clearManifestKey() { hasManifestKey_ = false; }
   void setRebootHook(RebootFn reboot);
   void setInterval(uint32_t checkIntervalS);
   void setMaxStallTicks(uint32_t ticks);

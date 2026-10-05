@@ -19,7 +19,7 @@ the central server). Followed in order, no steps skipped.
 git clone <repo> && cd CAUCE
 pip install platformio==6.1.19
 cd firmware
-pio test -e native        # expect 315 succeeded
+pio test -e native        # expect 317 succeeded
 pio run -e esp32dev       # expect SUCCESS
 ```
 
@@ -28,7 +28,7 @@ Backend:
 ```powershell
 cd backend
 pip install --require-hashes -r requirements.lock
-python -m pytest tests -q # expect 387 passed
+python -m pytest tests -q # expect 395 passed
 ```
 
 Node↔server integration:

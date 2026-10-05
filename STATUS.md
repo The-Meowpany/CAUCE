@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (315 firmware + 387 backend tests, E2E green)
+## Implemented and verified (317 firmware + 395 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -71,6 +71,9 @@ not. It overrides any aspirational claim elsewhere.
 | **SX1276 driver register map corrected** (LoRa map, not the FSK/OAK one): the FIFO base-address writes were using the FSK/OOK register numbers 0x80/0x81/0x82 with the write flag stripped, and in the LoRa map 0x01 is RegOpMode. The line meant to park the RX base at the bottom of the FIFO therefore wrote zero to RegOpMode and cleared LongRangeMode, so the radio never left FSK and could not transmit a LoRa frame. RSSI was read from 0x1C, which is RegHopChannel in this map, so `lastRssiDbm()` reported a plausible number that changed whenever the chip hopped. `test_begin_actually_sets_the_lora_bit` had been failing and unregistered, and two earlier theories about the same failure had been wrong | 35 host tests in `test_sx1276.cpp`, up from 32. The previously failing test is now registered and passes, and two were added: RSSI includes the signed wideband term, and the RSSI read does not touch the hop channel. Mode assertions now compare the mode field rather than the whole byte, because the correct written value carries LongRangeMode. **Still host-only: this driver has not been on hardware** |
 | **Dependency lock with hashes**: `backend/requirements.lock` pins all 30 packages in the central's closure, each with a SHA-256 for CPython 3.12 on win_amd64 and manylinux2014_x86_64. CI installs with `--require-hashes`, so the tree behind a build is nameable and a range bump cannot change it silently. `requirements.txt` stays as the statement of intent | 5 backend tests in `test_requirements_lock.py`: every direct requirement is pinned, every pinned version satisfies its range, every pin carries a hash, the lock covers more than the direct list, and no hash is a placeholder. The drift check was verified to fail when `requirements.txt` is bumped without regenerating |
 | **Stored XSS through the `variable` and `sensor_id` fields** (found while checking CodeQL alert #3, which was itself a false positive): those fields were stored verbatim, and the dashboard pasted `json.dumps(series)` inside a `<script>` element. An HTML parser looks for the literal `</script>` regardless of JSON quoting, so a node could sync a variable called `</script><script>alert(1)</script>` and the central's own node page would render it as markup — stored XSS against whoever opened the dashboard. Only reproduced on a node whose variables were all unrecognised, because a node with a known variable charts the preferred set and the unknown name never reaches the script block. That is why the existing suite missed it: every test of this route used a normally seeded node | Fixed at both ends. **Input**: `NAME_PATTERN` restricts `variable` and `sensor_id` to `[A-Za-z0-9_.-]{1,64}`, the same shape as `site_id`, with 422 `invalid_variable`. A character class and not an allowlist, because the protocol is meant to grow new variables. **Output**: `dashboard._json_for_script` escapes `<`, `>`, `&`, U+2028 and U+2029, and every `json.dumps` result that reaches a page goes through it, so the sink is safe regardless of what any writer does. Both halves were verified to be load-bearing: against pristine HEAD the payload reflects raw into `/nodes/{id}`; with only the input fix it never reaches the database; with only the output fix it is escaped in the charted series | 6 backend tests: ingest refuses markup in `variable` and `sensor_id`, accepts the shapes the firmware sends, a value seeded straight into the database cannot break out of a script block, and two unit tests on the escaper including the invisible JavaScript line terminators |
+| **OTA manifest signature, end to end for the first time**: the central keyed the HMAC with the ASCII `device_key` and signed `version\|url\|total_size`; the firmware keyed it with `SHA-256(device_key)` as 32 raw bytes and signed `version\|sha256\|url\|total_size`. Two independent mismatches, so **no node could ever accept a manifest**. It failed by refusing, which looks identical to a node not being offered one, and both suites were self-consistent so neither could see it. The central now derives and canonicalises exactly as the firmware does, and the signature is required rather than skipped when no key is configured | A cross-language known-answer vector (`424f819f…`) pinned on both sides: `test_the_manifest_signature_matches_the_firmware_known_answer` and `test_manifest_signature_matches_the_central`. Plus a test that the signature changes when the image hash changes, and one that an unsigned node refuses to update |
+| **Stored XSS through `quality`**: the field was checked for presence and nothing else, and it reached an HTML class attribute - `class="q-{quality}"` in the node page and the report. A node could sync `x" onmouseover="alert(1)` and the central returned `<td class="q-x" onmouseover="alert(1)">`, which fires without a click. Reproduced against HEAD before fixing | Fixed at both ends. **Input**: `FIRMWARE_QUALITIES` restricts it to the eight values `cauce::core::qualityName` can emit, 422 `invalid_quality`. Deliberately a different set from `coverage.USABLE_QUALITIES`, which answers a different question: `INVALID` and `MISSING` are legitimate values that set excludes. **Output**: all five HTML sinks escape it, the same treatment `variable` and `unit` already had two lines above. 4 tests |
+| **Setup is instrumented and fed, and the watchdog hypothesis was wrong**: the board rebooted every ~9 s with `rst:0x8 (TG1WDT_SYS_RESET)` and the log ended at `CONFIG_LOADED`, never `BOOT_COMPLETE`. This file previously blamed `esp_task_wdt_add(NULL)` for subscribing the idle task. It does not: on the Arduino core `setup()` and `loop()` both run on loopTask, so NULL is loopTask - and `loop()` feeds the watchdog on its first statement, so a hang in `loop()` cannot explain it either. **Nothing in `setup()` ever fed it**, while `setup()` does a flash mount, a store open, sensor bring-up, a web server and the OTA bookkeeping in one pass. Each step now announces itself, feeds the watchdog on entry and exit, and reports its own duration, so a slow step is named in the log instead of inferred. A node with no device key also says so at boot | 317 firmware tests; ESP32 and bench builds SUCCESS. **The fix itself is unverified on a board** - see the hardware-only list |
 | **Central admin API fails closed on writes**: with `CAUCE_API_TOKEN` unset, every mutation answers `503 admin_api_not_configured` instead of being allowed. Reads stay open on purpose, so the dashboard still works on a trusted LAN, and setting the token closes reads too. Previously `require_bearer_token` returned early when no token was configured, which meant anyone who could reach the port could mint an API token or rewrite calibration | 3 backend tests: a write with no token is 503 with the machine code, a read with no token is 200, and an unauthenticated write with a token is 401. The whole suite now authenticates the way a configured deployment does, through `backend/tests/conftest.py` |
 | **SBOM describes the service, not the build machine**: the component list is the transitive closure of what `requirements.txt` actually requests, following only unconditional requirements plus the extras that file asks for. It listed all 229 distributions installed on whichever machine ran it, including unrelated tools | 18 backend tests in `test_sbom.py`, up from 14. New: the SBOM is a strict subset of the interpreter, an unrequested extra is not followed, a requested one is, and a direct dependency that is not installed is reported instead of silently dropped. A test that wrote its output into `sbom/` and left a tracked artefact behind now writes to `tmp_path` |
 | **Cross-suite isolation registry** for the single Unity binary: a suite declares the data directory it uses and the process state it mutates, the run prints everything every suite declared, and two suites claiming one directory fail the run at exit. This is detection, not prevention: it catches a shared directory that someone declares, not one they forget to. The three file-scope mutable statics in the suite declare themselves; the directory half has no callers, because no suite shares a filesystem today and a claim would be a false positive rather than a finding | 6 tests: the clash is recorded with the exact message, distinct directories stay clean, a suite re-claiming its own directory is recorded once rather than twice, a missing directory is reported as `"(null)"` instead of crashing the run, a declared mutation is recorded verbatim, and the report prints a live clash. The end-of-run gate was verified to fail the run when a clash is present |
@@ -116,9 +119,15 @@ not. It overrides any aspirational claim elsewhere.
   `set_sync_interval`, `request_resync`, `set_led_mode`) do now act, persist
   across a reboot and report the value applied rather than the value
   requested.
-- Firmware **image signing**. A node accepts and runs any image that satisfies
-  the manifest. That is the largest remaining gap in the security posture and
-  `docs/en/RUNBOOK.md` says so plainly rather than leaving it implied.
+- Firmware **image signing**. A node verifies the manifest signature before it
+  downloads anything, and the signature commits to the image hash. It is now
+  *mandatory*: a node with no signing key refuses every update with
+  `OTA_NO_MANIFEST_KEY` instead of accepting whatever manifest it is handed.
+  What is still missing is a key hierarchy - the manifest key is derived from the
+  node's own `sync_device_key`, so the same secret that authenticates batches also
+  authorises firmware. Separating them, and mapping an Ed25519 public key to a
+  certificate, is the remaining work. `docs/en/RUNBOOK.md` says so plainly rather
+  than leaving it implied.
 - ESP-NOW / mDNS peer-to-peer. `Replication` and `IPeerLink` exist and are
   tested; the radio and discovery do not. This is a Phase 0 decision, not an
   oversight.
@@ -139,15 +148,21 @@ bounds implied sample count as well as span.
 ### D1 - capability scopes on every endpoint (DONE)
 
 `security.require_scope` resolves the caller from `api_tokens` and enforces
-`read`/`write`/`admin` plus optional site scoping, but **no endpoint calls it**.
-Every one still calls `require_bearer_token`, which only compares against the
-shared admin token and accepts a `scope` argument it cannot enforce. So the
-per-principal authorization that ships is currently inert: a `read`-only token
-can still delete a node's data. The work is mechanical but it is the difference
-between the feature existing and being real.
+`read`/`write`/`admin` plus optional site scoping. This section used to say no
+endpoint called it and that the feature was therefore inert. That was wrong and
+contradicted the table above in the same file: there are 22 `require_scope` call
+sites and the remaining 19 direct `require_bearer_token` calls are on read paths
+and CSV exports, where a token check with no scope to enforce is the correct
+instrument.
 
-Also in scope: `/v1/ota/manifest` currently has **no authentication at all** and
-returns the release descriptor to anyone who asks.
+The one endpoint that did ignore the configured token was `/v1/ota/manifest`: its
+handler took no `authorization` at all, so it published the exact version, URL,
+size and per-node HMAC of the next firmware to anyone who asked even on a locked
+down central. Fixed, with tests for the authenticated, anonymous, wrong-token and
+no-token-configured cases.
+
+Writes now fail closed when no admin token is configured, rather than being
+allowed.
 
 ### D3 - sub-hourly aggregates (DONE)
 
@@ -370,7 +385,7 @@ rst:0x8 (TG1WDT_SYS_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
 The upload succeeded, the hash verified, LittleFS mounted, and the config loaded
 with defaults. Then the task watchdog fires before `loop()` ever logs anything.
 
-**What this is worth.** 274 firmware tests pass, the ESP32 cross-build is clean, and
+**What this is worth.** 317 firmware tests pass, the ESP32 cross-build is clean, and
 the node cannot boot. Every test in this repository runs on the host, and the host
 build defines `CAUCE_HOST_SIMULATION` and links none of the ESP32 code. So "the
 suite is green" said nothing about this, and it never could have. This is the
@@ -406,7 +421,7 @@ be closed from a desk, and `docs/en/BENCH_PLAN.md` is the procedure.
 | 4 | MED | `LogStorageRepository` open() O(bytes) - **CK01 checkpoint implemented** (fast-path O(segments) + fallback scan; flush every 64 appends) | Storage budget >512 KiB | Done |
 | 5 | MED | Backend `_RATE` in-memory; `sync_batches` unbounded; `/v1/nodes` unpaged | Central growth | Done: SQLite-backed rate limit, retention cap 5000, pagination `limit`/`offset` plus opaque cursors |
 | 6 | LOW | `Logger::eventf` fixed buffers (silent truncation) - **increased to 512 B** | Long messages | Done |
-| 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Partially done: the declaration registry and the end-of-run gate are implemented and tested (see the table above), but adoption is zero. No suite declares a directory or a mutation, so the gate has nothing to catch until suites opt in |
+| 7 | LOW | Unity single binary, cross-suite isolation via dedicated data dirs | - | Partially done: the declaration registry and the end-of-run gate are implemented and tested. **Mutations are adopted** - the three file-scope mutable statics in the suite declare themselves. The directory half still has no callers, because no suite shares a filesystem: each one that writes files builds its own in-memory or temporary store, so a claim would be a false positive rather than a finding. An earlier version of this row said adoption was zero, which was already wrong |
 | 8 | LOW | `Esp32LittleFs::listFiles` core-version sensitivity (`entry.name()` v2 vs v3) | arduino-esp32 upgrade | Done: portable shim (`String(entry.name())`, skip dirs and dot entries); ESP32 compiles |
 | 9 | LOW | Long-window analytics over raw rows | Windows > 90 days on a node | Done: `granularity=auto` reads `agg_hourly` past 7 days and coverage gap detection is already a SQL window function (`LAG`) capped at 20 gaps, so no Python row loop remains |
 
@@ -480,9 +495,9 @@ every 64 appends and after rotation/retention/integrityCheck.
 ```powershell
 pip install platformio==6.1.19
 winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
-cd firmware && pio test -e native      # expect: 315 succeeded
+cd firmware && pio test -e native      # expect: 317 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
-python -m pytest tests -q              # expect: 387 passed, 1 skipped
+python -m pytest tests -q              # expect: 395 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

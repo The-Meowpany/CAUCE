@@ -110,9 +110,19 @@ struct OtaRig {
   Logger logger{sink2};
   OtaManager manager;
 
+  // A signing key is set by default because the manager now refuses to update without one,
+  // and most of these tests are about the download path rather than about the gate. The
+  // tests that are about the gate set or clear it explicitly.
+  static const uint8_t* defaultManifestKey() {
+    static const uint8_t key[32] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                                    17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32};
+    return key;
+  }
+
   OtaRig()
       : manager(catalog, reader, installer, otaClock, logger) {
     manager.setFirmwareVersion("1.0.0");
+    manager.setManifestKey(defaultManifestKey());
     sink2.lines.clear();
   }
 
@@ -130,6 +140,28 @@ std::string makeFirmware(int seed, size_t size) {
   return fw;
 }
 
+// Signs a release the way the central does: HMAC-SHA256 keyed with the 32-byte manifest
+// key, over "version|sha256|url|totalSize". One implementation, so a fixture and the
+// cross-language vector cannot drift apart by being written twice.
+void signRelease(OtaRelease& r) {
+   static const uint8_t* key = OtaRig::defaultManifestKey();
+   char canonical[256];
+   std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", r.version,
+                 r.sha256Hex, r.url, static_cast<unsigned>(r.totalSize));
+   uint8_t mac[32];
+   cauce::hmacSha256(key, 32, reinterpret_cast<const uint8_t*>(canonical),
+                     std::strlen(canonical), mac);
+   static const char* hex = "0123456789abcdef";
+   for (int i = 0; i < 32; ++i) {
+      r.manifestHmacHex[i * 2] = hex[(mac[i] >> 4) & 0xF];
+      r.manifestHmacHex[i * 2 + 1] = hex[mac[i] & 0xF];
+   }
+   r.manifestHmacHex[64] = '\0';
+}
+// Produces a complete, correctly signed release. It used to clear the signature instead,
+// which was harmless while the manager only verified when a key happened to be configured
+// and became a gate failure once it did not. A fixture whose name is "fill" should hand
+// back something the manager accepts; the tests that want a bad signature overwrite it.
 void fillRelease(OtaRelease& r, const std::string& fw) {
   copyString(r.version, sizeof(r.version), "1.1.0");
   r.manifestHmacHex[0] = '\0';
@@ -141,9 +173,10 @@ void fillRelease(OtaRelease& r, const std::string& fw) {
     r.sha256Hex[i * 2 + 1] = hex[digest[i] & 0xF];
   }
   r.sha256Hex[64] = '\0';
-  copyString(r.url, sizeof(r.url), "mem://fw.bin");
-  r.totalSize = static_cast<uint32_t>(fw.size());
-}
+   copyString(r.url, sizeof(r.url), "mem://fw.bin");
+   r.totalSize = static_cast<uint32_t>(fw.size());
+   signRelease(r);
+   }
 
 
 void drainOta(OtaManager& mgr, hal::ManualClock& clk) {
@@ -210,6 +243,11 @@ void test_hash_mismatch_aborts_and_marks_verify_failed() {
   copyString(rig.catalog.release.sha256Hex,
              sizeof(rig.catalog.release.sha256Hex),
              "0000000000000000000000000000000000000000000000000000000000000000");
+  // Re-signed after the mutation. The point of this test is a hash mismatch discovered
+  // after the download, so the manifest gate has to let it through - which means the
+  // signature must cover the wrong hash, not the original one. Without the re-sign this
+  // fails at the gate and never reaches the check it exists to exercise.
+  signRelease(rig.catalog.release);
   rig.catalog.hasRelease = true;
   rig.reader.payload = fw;
 
@@ -240,6 +278,9 @@ void test_same_version_stays_up_to_date() {
   fillRelease(rig.catalog.release, fw);
   copyString(rig.catalog.release.version, sizeof(rig.catalog.release.version),
              "1.0.0");
+  // Re-signed after changing the version, or the gate rejects it and this stops being a
+  // test about "already on this version" and becomes a test about a bad signature.
+  signRelease(rig.catalog.release);
   rig.catalog.hasRelease = true;
 
   rig.manager.tick();
@@ -355,6 +396,84 @@ void test_manifest_signature_gate() {
   TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
 }
 
+// The shared cross-language vector. backend/tests/test_api.py::
+// test_the_manifest_signature_matches_the_firmware_known_answer asserts the same hex from
+// the same inputs on the Python side.
+//
+// It exists because the two implementations disagreed twice over - the firmware keyed the
+// HMAC with SHA-256(device_key) while the central used the ASCII key, and the firmware
+// signed version|sha256|url|totalSize while the central signed version|url|totalSize - so
+// no node could ever accept a manifest. Nothing in either suite could see it, because the
+// existing test built its own signature with its own key and was self-consistent, and the
+// real failure mode is refusing an update, which looks like a node that is simply not
+// being offered one.
+void test_manifest_signature_matches_the_central() {
+   OtaRig rig;
+   const std::string fw = makeFirmware(21, 900);
+   rig.manager.setFirmwareVersion("1.0.0");
+   const uint8_t key[32] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+                            17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32};
+   rig.manager.setManifestKey(key);
+
+   // device_key "0123456789abcdef" -> SHA-256 as 32 raw bytes is the manifest key.
+   // The firmware derives the manifest key as SHA-256(device_key) over 32 raw bytes; the
+   // central must do the same or the HMACs are computed under different keys.
+   uint8_t derived[32];
+   sha256(reinterpret_cast<const uint8_t*>("0123456789abcdef"), 16, derived);
+
+   // Release fields the central used for the shared vector.
+   OtaRelease release{};
+   copyString(release.version, sizeof(release.version), "1.2.3");
+   // Built rather than typed: a hand-counted run of "ab" is 31 pairs often enough to
+   // matter, and the failure mode is a silent cross-language disagreement.
+   for (int i = 0; i < 32; ++i) {
+      release.sha256Hex[i * 2] = 'a';
+      release.sha256Hex[i * 2 + 1] = 'b';
+   }
+   release.sha256Hex[64] = '\0';
+   copyString(release.url, sizeof(release.url), "http://central/v1/fw.bin");
+   release.totalSize = 12345;
+
+   char canonical[256];
+   std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", release.version,
+                 release.sha256Hex, release.url,
+                 static_cast<unsigned>(release.totalSize));
+   uint8_t mac[32];
+   cauce::hmacSha256(derived, sizeof(derived),
+                     reinterpret_cast<const uint8_t*>(canonical),
+                     std::strlen(canonical), mac);
+   static const char* hexDigits = "0123456789abcdef";
+   char sig[65];
+   for (int i = 0; i < 32; ++i) {
+      sig[i * 2] = hexDigits[(mac[i] >> 4) & 0xF];
+      sig[i * 2 + 1] = hexDigits[mac[i] & 0xF];
+   }
+   sig[64] = 0;
+   TEST_ASSERT_EQUAL_STRING(
+      "424f819f01f1b31837e7318f7d9c944e971c8c42178dbaa615d97a0ef87e3721", sig);
+}
+
+// A node that cannot verify a signature must not update. This used to be the other way
+// round: the signature was only checked when a key happened to be configured, so OTA with
+// no device key accepted every manifest it was offered.
+void test_a_node_without_a_manifest_key_refuses_to_update() {
+   OtaRig rig;
+   const std::string fw = makeFirmware(21, 900);
+   // Explicitly unsigned: that is the state under test.
+   rig.manager.clearManifestKey();
+   fillRelease(rig.catalog.release, fw);
+   copyString(rig.catalog.release.manifestHmacHex,
+              sizeof(rig.catalog.release.manifestHmacHex), "");
+   rig.catalog.hasRelease = true;
+   rig.reader.payload = fw;
+   otaClock.advanceMs(21600001);
+   rig.manager.tick();
+
+   TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+   TEST_ASSERT_EQUAL(0, rig.reader.openCalls);
+   TEST_ASSERT_TRUE_MESSAGE(rig.logContains("OTA_NO_MANIFEST_KEY"),
+                            "a node with no manifest key must say why it refused");
+}
 void test_manifest_json_full_parse();
 void test_manifest_json_missing_sha_rejected();
 void test_manifest_json_truncated_rejected();
@@ -432,6 +551,8 @@ void registerOtaTests() {
   RUN_TEST(test_safety_gate_blocks_before_download);
   RUN_TEST(test_low_battery_blocks_update);
   RUN_TEST(test_manifest_signature_gate);
+  RUN_TEST(test_manifest_signature_matches_the_central);
+  RUN_TEST(test_a_node_without_a_manifest_key_refuses_to_update);
   RUN_TEST(test_manifest_json_full_parse);
   RUN_TEST(test_manifest_json_missing_sha_rejected);
   RUN_TEST(test_manifest_json_truncated_rejected);
