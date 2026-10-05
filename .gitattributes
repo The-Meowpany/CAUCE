@@ -12,8 +12,18 @@
 *.cmd text eol=crlf
 
 # Generated and vendored artefacts: not ours to reformat.
-backend/sbom/*.json -diff linguist-generated=true
-firmware/test/point_vectors.inc -diff linguist-generated=true
+# `-diff` alone was the bug. It stops git showing a textual diff, but the file was still
+# classified as *text*, so `core.autocrlf=true` checked out CRLF and the working copy stopped
+# matching the index. Every clone then had a dirty `backend/sbom/central.cdx.json`, which
+# fails the release gate's first check - so a fresh clone of a released tag could not pass its
+# own gate. Found by cloning v0.1.0 and running the gate in it, which is the only way to see
+# it: the tree this was written in is on Windows, where autocrlf is already doing what the
+# attribute asked for.
+#
+# `-text` is the actual fix. It says the content is not line-ending-normalised, so git leaves
+# the bytes alone in both directions.
+backend/sbom/*.json -text -diff linguist-generated=true
+firmware/test/point_vectors.inc -text -diff linguist-generated=true
 
 # Binary. Listed explicitly because text=auto guesses from content, and a wrong guess
 # corrupts the file in the index.

@@ -34,12 +34,30 @@ function Fail($text) {
 
 Step "the tree is clean"
 $dirty = git status --porcelain
-if ([string]::IsNullOrWhiteSpace(($dirty -join ""))) {
-    Ok "no uncommitted changes"
-} else {
-    $dirty | ForEach-Object { Write-Host "  $_" }
-    Fail "uncommitted changes"
-}
+    if ([string]::IsNullOrWhiteSpace(($dirty -join ""))) {
+        Ok "no uncommitted changes"
+    } else {
+        $dirty | ForEach-Object { Write-Host "  $_" }
+        Fail "uncommitted changes"
+
+        # When the dirt is only line endings, say so. A clean tree reporting itself dirty is
+        # the signature of an attribute that asks for normalisation the checkout does not
+        # perform, and the plain "uncommitted changes" sends somebody looking for a change
+        # they never made. This exact confusion is why `-diff` without `-text` sat unnoticed
+        # in `.gitattributes` until a fresh clone of v0.1.0 failed this very check.
+        $eolOnly = @()
+        foreach ($path in ($dirty | ForEach-Object { $_.Substring(3) })) {
+            $numstat = git diff --numstat -- $path 2>$null
+            if ($numstat -and $numstat -match '^(\d+)\s+(\d+)\s' -and $matches[1] -eq "0" -and $matches[2] -eq "0") {
+                $eolOnly += $path
+            }
+        }
+        if ($eolOnly.Count -eq $dirty.Count -and $eolOnly.Count -gt 0) {
+            Write-Host "        note: every modified path differs only in line endings:"
+            $eolOnly | ForEach-Object { Write-Host "          $_" }
+            Write-Host "        a .gitattributes entry is missing '-text' for these"
+        }
+    }
 
 Step "version and tag"
 $version = (git describe --tags --abbrev=0 2>$null)
