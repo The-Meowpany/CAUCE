@@ -187,7 +187,7 @@ history, set the retention window above your analysis period and take
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 463 tests
+pytest tests -q                      # 469 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -293,6 +293,34 @@ SQLite.
 Everything except the radio driver is therefore ordinary tested logic. What
 remains for M2 is an SX1276 driver, a process to run this on hardware, and a
 link budget.
+
+### It learns each node's trailer length, and why that matters
+
+A frame's signature is a trailer whose length depends on the node's algorithm: 32
+bytes for HMAC, 64 for Ed25519. The gateway has to know which before it can find
+where the payload ends.
+
+It does this two ways, and both matter:
+
+- **`load_algorithms_from_database()`** reads every provisioned node's algorithm
+  out of the central's own database. There is a reason this exists rather than
+  configuration: `set_node_algorithm` was called from nowhere in the tree, so on a
+  real deployment no node's algorithm was set and **every Ed25519 frame was
+  dropped** — assumed 32-byte trailer, the last 32 bytes of a 64-byte signature
+  read as framing, `frames_rejected` climbing while `measurements_forwarded` stayed
+  at zero. That reads as a dead radio.
+- **It always tries both lengths.** So a node provisioned after the gateway started
+  works without a restart. Guessing is asymmetric: a wrong length costs one
+  rejected frame, whereas trying only the right one drops a node permanently.
+
+The frame decoder carries the length that worked rather than re-deriving it from a
+lookup table, which is the actual fix — discarding a length that was just determined
+by trying, and consulting a dict that did not have the node, is what produced the
+silence.
+
+A gateway with no database available returns zero known nodes instead of raising:
+the refresh is a cache, and taking down a radio that is otherwise serving frames is
+worse than not knowing an algorithm.
 
 **The loop mirrors the node's**, because the two have to agree:
 

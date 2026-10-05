@@ -52,23 +52,22 @@ def _site_of(node_id: str) -> str | None:
     return rows[0]["site_id"] if rows else None
 
 
-def _retire_active(conn, node_id: str, reason: str, now_ms: int) -> None:
+def _retire_active(conn, node_id: str) -> None:
     """Marks a node's current certificates retired.
 
     Retirement, not deletion, for the same reason node revocation is not deletion: the
     history of what was trusted is the audit trail. A row deleted on rotation cannot answer
     which key a node was using when a measurement arrived.
+
+    Takes only what it uses. An earlier version also accepted a reason and a timestamp and
+    discarded them with `_ = reason, now_ms`, which is a signature promising a caller that
+    the retirement is recorded somewhere it is not.
     """
-    # One statement, not two. An earlier version had a second `AND status<>'retired'`
-    # variant, which was a no-op on a column already constrained to those two values - and
-    # a second write to the same table is exactly the kind of thing that looks like it is
-    # enforcing something it is not.
     conn.execute(
         "UPDATE certificates SET status='retired'"
         " WHERE node_id=? AND status='active'",
         (node_id,),
     )
-    _ = reason, now_ms
 
 
 @router.post("/nodes/{node_id}/certificate")
@@ -130,9 +129,8 @@ def issue_certificate(
     except certificates.CertificateError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    now_ms = int(time.time() * 1000)
     with transaction() as conn:
-        _retire_active(conn, node_id, "superseded", now_ms)
+        _retire_active(conn, node_id)
         conn.execute(
             """INSERT INTO certificates(serial, node_id, site_id, public_key,
                                         issued_utc_ms, not_after_utc_ms, body, status)

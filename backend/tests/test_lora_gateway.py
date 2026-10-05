@@ -440,6 +440,127 @@ def test_reprovisioning_switches_the_algorithm(client):
     assert client.post("/v1/sync", json=relay_body(
         ed25519_frames_for(records(2)), record_count=2)).status_code == 200
 
+# --- the gateway learning algorithms on its own --------------------------
+
+def test_an_ed25519_node_is_not_silently_dropped_when_nobody_configured_the_gateway(client):
+    """The failure this whole section exists for, reproduced before it is fixed.
+
+    `set_node_algorithm` was called from nowhere in the tree, so on a real deployment every
+    node's algorithm was unset. The gateway then assumed a 32-byte trailer, read the last 32
+    bytes of a 64-byte signature as framing, and `decode_frame` failed - so every Ed25519
+    frame was counted as rejected and no measurement ever arrived.
+
+    That is a bad shape of failure: `frames_rejected` climbs, `measurements_forwarded` stays
+    at zero, and there is no line anywhere saying a configuration call was missed. It reads
+    as a dead radio. So the gateway looks the algorithm up itself.
+    """
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+
+    assert gateway.known_node_count() == 0
+    acks = [gateway.on_frame(frame) for frame in ed25519_frames_for(records(3))]
+
+    assert acks[-1] is not None, "the batch never closed"
+    assert decode_ack(acks[-1]) == 3
+    assert [r["sequence"] for r in query(
+        "SELECT sequence FROM measurements ORDER BY sequence")] == [1, 2, 3]
+    assert gateway.stats.frames_rejected == 0
+
+
+def test_load_algorithms_from_database_reads_every_provisioned_node(client):
+    provision(client, node_id="CAUCE-001", key=DEVICE_KEY)
+    provision(client, node_id="CAUCE-002", key=ED25519_PUBLIC, algorithm=ED25519)
+    # A node that synced without being provisioned has no key, so there is no algorithm to
+    # record. It must not appear, or the gateway would carry a name for a node it cannot
+    # authenticate.
+    client.post("/v1/sync", json={"protocol_version": 1, "node_id": "CAUCE-003",
+                                  "measurements": []})
+
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    assert gateway.load_algorithms_from_database() == 2
+    assert gateway.known_node_count() == 2
+
+
+def test_a_mixed_fleet_works_from_the_database_alone(client):
+    """HMAC and Ed25519 in one gateway, neither explicitly configured."""
+    provision(client, node_id="CAUCE-001", key=DEVICE_KEY)
+    provision(client, node_id="CAUCE-002", key=ED25519_PUBLIC, algorithm=ED25519)
+
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    gateway.load_algorithms_from_database()
+
+    hmac_acks = [gateway.on_frame(f) for f in signed_frames_for(
+        records(2, node_id="CAUCE-001"), batch_id=100)]
+    ed_acks = [gateway.on_frame(f) for f in ed25519_frames_for(
+        records(2, node_id="CAUCE-002"), batch_id=200)]
+
+    assert hmac_acks[-1] is not None and ed_acks[-1] is not None
+    rows = {r["node_id"]: r["n"] for r in query(
+        "SELECT node_id, COUNT(*) AS n FROM measurements GROUP BY node_id")}
+    assert rows == {"CAUCE-001": 2, "CAUCE-002": 2}
+
+
+def test_an_unknown_node_still_gets_its_length_by_trying_both(client):
+    """The self-healing half, for a node provisioned after the gateway started.
+
+    Refreshing the cache fixes the nodes that existed when it refreshed. This covers the one
+    that arrived afterwards, which is the common case on a pilot as nodes get installed.
+
+    Guessing is asymmetric, which is why it is acceptable: a wrong length costs one rejected
+    frame, whereas trying only the right one would drop the node permanently.
+    """
+    provision(client, node_id="CAUCE-001", key=ED25519_PUBLIC, algorithm=ED25519)
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    gateway.load_algorithms_from_database()
+
+    # A second node appears in the database without the gateway being told.
+    provision(client, node_id="CAUCE-NEW", key=ED25519_PUBLIC, algorithm=ED25519)
+    assert gateway.known_node_count() == 1
+
+    frames = ed25519_frames_for(records(2, node_id="CAUCE-NEW"), batch_id=300)
+    acks = [gateway.on_frame(frame) for frame in frames]
+    assert acks[-1] is not None
+    assert [r["node_id"] for r in query("SELECT node_id FROM measurements")] == [
+        "CAUCE-NEW", "CAUCE-NEW"]
+
+
+def test_the_refresh_does_not_shrink_what_the_gateway_knows(client):
+    """A refresh is additive. An explicit `set_node_algorithm` must survive one.
+
+    Otherwise a refresh could undo a manual override for a node whose row has since been
+    deleted, and the gateway would quietly regress to guessing.
+    """
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    gateway.set_node_algorithm("CAUCE-GHOST", ED25519)
+    gateway.load_algorithms_from_database()
+    assert gateway.known_node_count() == 1
+
+
+def test_a_gateway_with_no_database_still_serves_what_it_was_told(client):
+    """No database in this process must not raise.
+
+    The refresh is a best-effort cache. Raising here would take down a radio that is
+    otherwise serving frames, which is a worse outcome than not knowing an algorithm.
+    """
+    class BrokenQuery:
+        def __call__(self, *args, **kwargs):
+            raise RuntimeError("no database")
+
+    gateway = LoRaGateway("/v1/sync", LoopbackTransport(client))
+    gateway.set_node_algorithm("CAUCE-001", ED25519)
+    # Point the module's query at something that fails.
+    import cauce_server.lora_gateway as gw_module
+    original = gw_module.query
+    try:
+        gw_module.query = BrokenQuery()
+        assert gateway.load_algorithms_from_database() == 0
+    finally:
+        gw_module.query = original
+    # Still functional for the node it knows about.
+    provision(client, key=ED25519_PUBLIC, algorithm=ED25519)
+    acks = [gateway.on_frame(f) for f in ed25519_frames_for(records(1))]
+    assert acks[-1] is not None
+
 # --- the frame format the replay harness depends on ---------------------
 
 def test_the_replay_harness_matches_the_firmware_layout(client):

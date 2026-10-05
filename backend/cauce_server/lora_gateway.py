@@ -33,6 +33,7 @@ import base64
 import json
 from dataclasses import dataclass
 
+from .db import query
 from .lora_frames import (
     SIGNATURE_BYTES,
     DecodeError,
@@ -41,6 +42,7 @@ from .lora_frames import (
     encode_ack,
     split_signed_frame,
 )
+from .signing import ED25519
 
 MAX_PENDING_BATCHES = 4
 MAX_FRAMES_PER_BATCH = 32
@@ -122,12 +124,23 @@ class LoRaGateway:
             return None
         return self._algorithms.get(node_id)
 
-    def _node_of(self, frame: bytes) -> str | None:
-        """The node id a frame claims, read with a candidate trailer length.
+    def _node_and_algorithm_of(
+            self, frame: bytes) -> tuple[str | None, str | None]:
+        """The node id a frame claims, and the trailer length that actually decoded it.
 
-        Only ever used to look up that node's algorithm, so a wrong guess costs a
-        rejected frame rather than a misattributed batch: the central re-reads
-        every record and refuses a foreign one.
+        Both are returned together, and that is the fix. They used to be two steps: find the
+        node by trying candidate trailer lengths, then look its algorithm up in a dict. The
+        lookup is what failed - a node absent from the dict yields `None`, and `None` means
+        "32-byte trailer", so a 64-byte Ed25519 frame got the last 32 bytes of its signature
+        treated as framing and was rejected. Having discovered the right length by trying it,
+        throwing that knowledge away and consulting a dictionary is the bug.
+
+        So the length that decoded the frame is carried forward. The configured algorithm
+        still wins when it is present, because it is cheaper than trying, and it is the
+        authority the central will verify against.
+
+        A wrong guess costs a rejected frame rather than a misattributed batch: the central
+        re-reads every record and refuses a foreign one.
         """
         for algorithm in self._candidate_algorithms():
             try:
@@ -136,8 +149,49 @@ class LoRaGateway:
                 continue
             records = header["records"]
             if records:
-                return records[0].node_id
-        return None
+                return records[0].node_id, algorithm
+        return None, None
+
+    def load_algorithms_from_database(self) -> int:
+        """Reads every provisioned node's algorithm out of the central's own database.
+
+        Returns how many nodes are now known.
+
+        Why this exists rather than relying on `set_node_algorithm`: it was called from
+        nowhere in the tree. Not from a runner, because the gateway has no runnable entry
+        point at all - not from `main.py`, not from a tool. So on a real deployment every
+        node's algorithm was unset, and the observed result is that an Ed25519 node's frames
+        are silently dropped: 64 bytes minus a 32-byte assumed trailer leaves a body whose
+        last 32 bytes of payload are read as the trailer, `decode_frame` fails, and all three
+        frames are counted as rejected. `frames_rejected` climbs and `measurements_forwarded`
+        stays at zero, which looks like a dead radio rather than a missing configuration call.
+
+        A gateway that forgets to be told something drops measurements and reports nothing
+        about why. So the default is now to look it up, and `set_node_algorithm` stays for
+        a node provisioned after the gateway started.
+
+        The lookup is a cache refresh, not authority: the central re-reads the same column
+        and refuses anything whose signature does not verify, so a stale or wrong entry here
+        can only cause a frame to be forwarded with the wrong length and rejected there.
+        """
+        try:
+            rows = query(
+                "SELECT node_id, device_key_algorithm FROM nodes"
+                " WHERE device_key IS NOT NULL",
+            )
+        except Exception:
+            # No database in this process. A gateway running beside no central still works
+            # for whatever it was explicitly configured for; it just does not know about
+            # anything else. Swallowed deliberately - this is a best-effort cache, and
+            # raising here would take down a radio that is otherwise serving frames.
+            return 0
+        for row in rows:
+            self._algorithms[row["node_id"]] = row["device_key_algorithm"]
+        return len(rows)
+
+    def known_node_count(self) -> int:
+        """How many node algorithms this gateway currently knows."""
+        return len(self._algorithms)
 
     def _candidate_algorithms(self) -> list[str | None]:
         """Trailer lengths worth trying, configured ones plus the default.
@@ -146,10 +200,16 @@ class LoRaGateway:
         cannot assume one length. It never *verifies* anything with them; it only
         needs to find where the framing ends.
         """
-        seen = list(self._algorithms.values())
-        if None not in seen:
-            seen.append(None)
-        return seen
+        # Both trailer lengths are always tried, not just the configured ones, because the
+        # value of guessing is asymmetric: trying a wrong length costs one rejected frame,
+        # while trying only the right one means a node whose algorithm is unknown is dropped
+        # forever. The database refresh above makes the common case correct, and this makes
+        # the uncommon case self-healing rather than permanent.
+        candidates: list[str | None] = [None, ED25519]
+        for algorithm in self._algorithms.values():
+            if algorithm not in candidates:
+                candidates.append(algorithm)
+        return candidates
 
     # -- receive side -------------------------------------------------
 
@@ -161,7 +221,11 @@ class LoRaGateway:
         raised: a radio delivers noise routinely, and a gateway that raised on
         every bad CRC would restart on every storm.
         """
-        algorithm = self._algorithm_for(self._node_of(frame))
+        node_id, algorithm = self._node_and_algorithm_of(frame)
+        # A configured algorithm beats the one that happened to decode. Same answer when
+        # they agree, and when they do not it is the configured one the central will verify
+        # against - so guessing is only ever a fallback, never an override.
+        algorithm = self._algorithm_for(node_id) or algorithm
         body = frame_body(frame, algorithm)
         try:
             header = decode_frame(body)

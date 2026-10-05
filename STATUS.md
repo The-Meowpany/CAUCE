@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (319 firmware + 463 backend tests, E2E green)
+## Implemented and verified (319 firmware + 469 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
@@ -35,6 +35,7 @@ not. It overrides any aspirational claim elsewhere.
 | **Calibration uncertainty**: absolute uncertainty plus its kind, scaling with `|scale|`, `null` kept distinct from zero, surviving partial updates, exported to CSV | 8 backend tests |
 | **Per-principal authorization**: `api_tokens` with read/write/admin scopes and an optional site, digests stored, constant-time comparison; the shared admin token still works untouched | 10 backend tests |
 | **Daily aggregates**: `agg_daily` maintained by trigger from `agg_hourly`, `granularity=daily`, and `auto` switching to it past 120 days | 14 backend tests |
+| **The gateway was dropping every Ed25519 frame and reporting nothing**: `set_node_algorithm` was called from nowhere in the tree - not from a runner, because the gateway has no runnable entry point, not from `main.py`, not from a tool. So on a real deployment no node's algorithm was ever set, the gateway assumed a 32-byte trailer, read the last 32 bytes of a 64-byte signature as framing, and rejected every frame. Reproduced: `frames_rejected=3`, `measurements_forwarded=0`, and no diagnostic anywhere. It reads as a dead radio, not a missing configuration call | Fixed. The trailer length that actually decoded the frame is now carried forward, instead of being discarded and re-looked-up in a dictionary that did not have the node - that discard-and-lookup was the bug, because `None` means "32-byte trailer". The gateway also reads algorithms from the central's own database, and always tries both lengths, so a node provisioned after startup is self-healing rather than permanently dropped. Guessing is asymmetric: a wrong length costs one rejected frame, while trying only the right one drops a node forever. A missing database degrades to zero known nodes rather than raising, since taking down a serving radio is worse than not knowing an algorithm. 6 tests |
 | **Gateway forwarding loop**: frames to reassembly to `POST /v1/sync` to acknowledgement, driven against the real app and verified by reading rows back out of SQLite; noise counted, failures never acknowledged | 11 backend tests |
 | **Acknowledgement pinned cross-language**: the exact bytes the gateway builds are asserted by the firmware parser and vice versa, so the two cannot drift apart while each still passes its own tests | 1 firmware + 1 backend test |
 | **Identifier validation**: `site_id` restricted to `[A-Za-z0-9_-]` and 64 chars at every write endpoint, closing a stored-markup vector that the JSON API used to echo back; `nosniff` on every non-HTML response | 10 backend tests |
@@ -524,6 +525,6 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT   # or any MinGW-w64 = GCC 9
 cd firmware && pio test -e native      # expect: 319 succeeded
 pio run -e esp32dev                    # expect: SUCCESS
 cd ..\backend && pip install --require-hashes -r requirements.lock
-python -m pytest tests -q              # expect: 463 passed, 1 skipped
+python -m pytest tests -q              # expect: 469 passed, 1 skipped
 ..\scripts\run-e2e.ps1                 # expect: E2E PASSED
 ```

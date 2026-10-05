@@ -199,7 +199,7 @@ convertir los registros almacenados en porcentaje.
 ```bash
 cd backend
 pip install -r requirements.txt
-pytest tests -q                      # 463 tests
+pytest tests -q                      # 469 tests
 uvicorn cauce_server.main:app --port 8000
 ```
 
@@ -293,6 +293,36 @@ exactamente como los construye el firmware y después lee las filas de SQLite.
 Todo excepto el driver de radio es, por tanto, lógica normal y testeada. Lo que
 falta para M2 es un driver SX1276, un proceso que corra esto en hardware, y un
 link budget.
+
+### Aprende la longitud del trailer de cada nodo, y por qué importa
+
+La firma de un frame es un trailer cuya longitud depende del algoritmo del nodo:
+32 bytes para HMAC, 64 para Ed25519. El gateway tiene que saberlo antes de poder
+encontrar dónde acaba el payload.
+
+Lo hace de dos formas, y ambas importan:
+
+- **`load_algorithms_from_database()`** lee el algoritmo de cada nodo
+  aprovisionado de la propia base de datos del central. Esto existe en vez de ser
+  configuración porque `set_node_algorithm` no se llamaba desde ningún sitio del
+  árbol, así que en un despliegue real el algoritmo de ningún nodo estaba
+  definido y **todos los frames Ed25519 se descartaban**: se asumía un trailer de
+  32 bytes, los últimos 32 bytes de una firma de 64 se leían como framing,
+  `frames_rejected` subiendo mientras `measurements_forwarded` se quedaba en cero.
+  Eso parece una radio muerta.
+- **Siempre prueba las dos longitudes.** Así un nodo aprovisionado después de que
+  arrancara el gateway funciona sin reiniciar. Adivinar es asimétrico: una
+  longitud equivocada cuesta un frame rechazado, mientras que probar solo la
+  correcta descarta al nodo para siempre.
+
+El decodificador arrastra la longitud que funcionó en vez de recalcularla desde
+una tabla de búsqueda, que es la corrección de verdad: descartar una longitud que
+se acaba de determinar probando, y consultar un dict que no tenía al nodo, es lo
+que produjo el silencio.
+
+Un gateway sin base de datos disponible devuelve cero nodos conocidos en vez de
+lanzar una excepción: el refresco es una caché, y tirar abajo una radio que sí
+está sirviendo frames es peor que no conocer un algoritmo.
 
 **El bucle refleja el del nodo**, porque los dos tienen que coincidir:
 
