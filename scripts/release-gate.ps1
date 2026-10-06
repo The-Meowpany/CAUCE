@@ -19,7 +19,11 @@ param(
     # Building the image needs podman and a podman VM, which is minutes of work on a machine
     # that has neither. On by default when podman is absent the check reports SKIP rather than
     # a failure, so an offline or container-less machine can still run the gate.
-    [switch]$SkipImage
+    [switch]$SkipImage,
+    # The flash-artifact check needs esptool, which runs in a container. Same reasoning as
+    # -SkipImage: on by default when the runtime is there, and a skip rather than a failure
+    # when it is not.
+    [switch]$SkipFirmwareImage
 )
 
 $ErrorActionPreference = "Continue"
@@ -141,6 +145,27 @@ if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-h
 Step "full verification (firmware, ESP32 build, backend, E2E)"
 & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1
 if ($LASTEXITCODE -eq 0) { Ok "verify-all.ps1" } else { Fail "verify-all.ps1" }
+
+Step "the ESP32 flash artifacts are valid, and the image fits its slot"
+# Not execution. esptool's image_info parses the bootloader and application headers and
+# refuses a malformed one; the partition parser checks there are two application slots, that
+# they do not overlap, that everything is sector-aligned, and that the image fits. Those are
+# the failures a board hits first, and they are catchable offline.
+if ($SkipFirmwareImage) {
+    $notes.Add("-SkipFirmwareImage given, so the flash artifacts were not checked")
+} else {
+    $fwLines = & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-firmware-image.ps1 2>&1
+    $fwExit = $LASTEXITCODE
+    $fwLines | ForEach-Object { Write-Host "  $_" }
+    $fwText = $fwLines -join "`n"
+    if ($fwExit -ne 0) {
+        Fail "verify-firmware-image.ps1; the artifacts would not flash"
+    } elseif ($fwText -match "FIRMWARE IMAGE VERIFICATION: SKIP") {
+        $notes.Add("the flash artifacts were not checked: no podman for esptool")
+    } elseif ($fwText -match "FIRMWARE IMAGE VERIFICATION: PASS") {
+        Ok "the bootloader and application parse, and the image fits an application slot"
+    }
+}
 
 Step "the backend image builds, serves and is reproducible"
 # Podman, rootless, no daemon and no elevation, so this can live in the gate rather than in a

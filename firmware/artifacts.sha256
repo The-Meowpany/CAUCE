@@ -1,0 +1,8 @@
+# SHA-256 of the ESP32 flash artifacts, for comparing two builds.
+# Regenerate with: scripts\verify-firmware-image.ps1
+# Not a signature: it says which bytes were produced, not who produced them.
+# Environment: esp32dev
+3d234a7471f67b013686dabd4dee7c1fa915c9928463616a94bc9297acf1abf8  bootloader.bin
+1ae446228d79cf83a4b83de41c33d1e01dc21a3557149d7da90fbcbfc303311d  partitions.bin
+2219dbdc4016a7b1fe335a9f188bc47b97882deb8395744165eed95cd3ce5ef4  firmware.bin
+
