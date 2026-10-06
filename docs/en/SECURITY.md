@@ -208,9 +208,17 @@ credential is an application-level header, so the node proves its identity over 
 channel whose peer it identified by DNS name. Server-to-client authentication and
 channel binding still require the firmware to hold a certificate rather than a seed.
 
-Not a firmware feature yet. The central side is complete and tested; no node
-implementation of this exchange exists, which is why the flash artifact checks and the
-bench self-test still report no board.
+Both halves exist. The central side is `node_auth.py`; the device side is
+`NodeAuthenticator` in `cauce_app`, which fetches the challenge, signs `sign_this` with
+the node's Ed25519 seed and emits the four headers. Neither has met the other on real
+hardware: the exchange compiles for `esp32dev` and passes 20 host tests, and the flash
+artifact checks and the bench self-test still report no board.
+
+The one thing the device side deliberately does **not** do is rebuild `sign_this` from the
+nonce and the expiry. The central returns the exact string it will verify against, and
+storing it verbatim means the encoding has one owner instead of two that can drift. Getting
+that wrong produces an invalid-signature error at the central that points at the key rather
+than at the formatting, which is why the encoding is pinned by a test on each side.
 
 Issuing refuses a validity above 366 days rather than clamping it, and refuses a public key
 that is not a curve point. The second check is not a length check: `from_public_bytes`

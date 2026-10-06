@@ -239,9 +239,19 @@ canal cuyo contraparte identificó por nombre DNS. La autenticación servidor-a-
 el channel binding siguen necesitando que el firmware guarde un certificado en vez de una
 semilla.
 
-No es todavía una función del firmware. El lado del central está completo y probado; no
-existe ninguna implementación del nodo de este intercambio, que es lo que hace que las
-comprobaciones de artefactos flash y el self-test de banco sigan diciendo que no hay placa.
+Ambas mitades existen. El lado del central es `node_auth.py`; el del dispositivo es
+`NodeAuthenticator` en `cauce_app`, que pide el challenge, firma `sign_this` con la
+semilla Ed25519 del nodo y emite las cuatro cabeceras. Ninguna se ha encontrado con la
+otra en hardware real: el intercambio compila para `esp32dev` y pasa 20 tests de host, y
+las comprobaciones de artefactos flash y el self-test de banco siguen diciendo que no hay
+placa.
+
+Lo que el lado del dispositivo deliberadamente **no** hace es reconstruir `sign_this` a
+partir del nonce y la caducidad. El central devuelve exactamente la cadena que va a
+verificar, y guardarla literal significa que la codificación tiene un solo dueño en vez de
+dos que pueden divergir. Equivocarse en eso produce un error de firma inválida en el
+central que señala a la clave en vez de al formato, y por eso la codificación está fijada
+por un test en cada lado.
 
 ## Pendiente (fases posteriores / hardware)
 
