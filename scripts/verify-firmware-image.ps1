@@ -43,6 +43,10 @@ $ErrorActionPreference = "Continue"
 $repo = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $repo "firmware\.pio\build\$Environment"
 $failed = $false
+# Reported at the end alongside PASS/FAIL. The hash comparison produces one of these
+# legitimately when the build path differs from the recorded one, and a note that is never
+# printed is indistinguishable from a note that was never made.
+$notes = New-Object System.Collections.ArrayList
 
 function Step($text) { Write-Host ""; Write-Host "=== $text" }
 function Ok($text) { Write-Host "  ok    $text" }
@@ -194,25 +198,86 @@ try {
         $lines += "# Regenerate with: scripts\verify-firmware-image.ps1"
         $lines += "# Not a signature: it says which bytes were produced, not who produced them."
         $lines += "# Environment: $Environment"
+        # WHY THE FILE IS NOT OVERWRITTEN
+        #
+        # `firmware.bin` embeds two hashes of its own build: `app_elf_sha256` in the
+        # esp_app_desc_t at 0xB0, and the SHA-256 image digest appended at the tail. The
+        # linker takes the ELF hash over a file whose debug sections carry absolute source
+        # paths, so those two fields depend on WHERE the tree was checked out. Two clones of
+        # the same commit, built at different paths, differ in exactly 65 bytes of
+        # 1,115,984 - those 64 and one length byte - and in nothing else.
+        #
+        # Overwriting the committed file here therefore made a fresh clone's first gate run
+        # dirty the tree, so the *second* run failed on "uncommitted changes" for a reason
+        # that had nothing to do with the code. The file is a record of one build at one path,
+        # not a property of the commit, so it is compared and reported, never rewritten. The
+        # bootloader and partition images are path-independent and do match, which is worth
+        # stating rather than leaving implied.
+        $outFile = Join-Path $repo "firmware\artifacts.sha256"
+        $existing = @{}
+        if (Test-Path -LiteralPath $outFile) {
+            foreach ($line in [System.IO.File]::ReadAllLines($outFile)) {
+                if ($line -match '^([0-9a-f]{64})\s+(\S+)$') { $existing[$Matches[2]] = $Matches[1] }
+            }
+        }
+        $built = @{}
         foreach ($artifact in @("bootloader.bin", "partitions.bin", "firmware.bin")) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $build $artifact)).Hash.ToLower()
+            $built[$artifact] = $hash
             $lines += "$hash  $artifact"
+            if ($existing.ContainsKey($artifact)) {
+                if ($existing[$artifact] -eq $hash) {
+                    Ok "$artifact matches the hash recorded in the repository"
+                } elseif ($artifact -eq "firmware.bin") {
+                    $notes.Add("firmware.bin differs from the recorded hash; expected when the " +
+                               "build path differs, since the image embeds its own ELF hash")
+                    Write-Host "        expected: $artifact carries a build-path-dependent digest"
+                } else {
+                    Fail "$artifact differs from the recorded hash, and this artifact is path-independent"
+                }
+            }
         }
         $lines += ""
-        $outFile = Join-Path $repo "firmware\artifacts.sha256"
-        [System.IO.File]::WriteAllLines($outFile, $lines, (New-Object System.Text.UTF8Encoding($false)))
-        Ok "wrote firmware\artifacts.sha256"
+        $lines += "# This file is a record of one build at one path. firmware.bin embeds the ELF"
+        $lines += "# hash of a file whose debug sections carry absolute paths, so a build in a"
+        $lines += "# different directory legitimately produces different bytes here. It is"
+        $lines += "# compared, never overwritten: rewriting it made a fresh clone's next gate"
+        $lines += "# run fail as uncommitted changes."
+        $outText = ($lines -join "`n") + "`n"
+        if (Test-Path -LiteralPath $outFile) {
+            # Only when a hash actually differs. Comparing whole files also reports a
+            # difference whenever this script's comment text changes, which is not the
+            # interesting fact - the hashes are the claim.
+            $mismatch = @("bootloader.bin", "partitions.bin", "firmware.bin") |
+                Where-Object { $existing.ContainsKey($_) -and $existing[$_] -ne $built[$_] }
+            if ($mismatch.Count -gt 0) {
+                $notes.Add("built hashes differ from the recorded ones for $($mismatch -join ', '); " +
+                           "artifacts.sha256 was left as committed rather than rewritten")
+                Write-Host "  note  artifacts.sha256 left as committed (the build is at a different path)"
+            }
+        } else {
+            [System.IO.File]::WriteAllText($outFile, $outText, (New-Object System.Text.UTF8Encoding($false)))
+            Ok "recorded firmware\artifacts.sha256"
+        }
     }
 
     Write-Host ""
     if ($failed) {
-        Write-Host "FIRMWARE IMAGE VERIFICATION: FAIL"
+Write-Host "FIRMWARE IMAGE VERIFICATION: FAIL"
+    if ($notes.Count -gt 0) {
         Write-Host ""
-        Write-Host "These are the checks a board would hit first. They are NOT execution:"
+        foreach ($n in $notes) { Write-Host "  note  $n" }
+    }
+    Write-Host ""
+    Write-Host "These are the checks a board would hit first. They are NOT execution:"
         Write-Host "nothing here ran the firmware, and no ESP32 emulator exists in QEMU."
         exit 1
     }
     Write-Host "FIRMWARE IMAGE VERIFICATION: PASS"
+    if ($notes.Count -gt 0) {
+        Write-Host ""
+        foreach ($n in $notes) { Write-Host "  note  $n" }
+    }
     Write-Host ""
     Write-Host "The bootloader, partition table and application all parse as valid ESP32"
     Write-Host "artifacts, the table has two application slots, and the slot is larger than"
