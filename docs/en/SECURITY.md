@@ -151,6 +151,67 @@ With `CAUCE_CA_KEY` unset every endpoint answers `503
 certificate_authority_not_configured`. The alternative — issuing documents signed by
 nothing — would produce certificates that look authoritative and verify against no key.
 
+### A node proves possession instead of holding a secret
+
+For a node provisioned with an Ed25519 key, `/v1/sync` can authenticate the node by
+**certificate** rather than by shared secret. The HMAC scheme is symmetric: any holder
+of `nodes.device_key` can authenticate *as* that node, and the central stores a secret
+that both authenticates and forges.
+
+The exchange is two requests:
+
+```
+POST /v1/sync/challenge   {"node_id": "CAUCE-001"}
+-> {"nonce": "...", "expires_utc_ms": ..., "sign_this": "cauce-sync-challenge\n..."}
+
+POST /v1/sync
+   X-Cause-Node:             CAUCE-001
+   X-Cause-Certificate:      <base64 of the certificate JSON>
+   X-Cause-Nonce:            <the nonce>
+   X-Cause-Nonce-Signature:  <base64 of Ed25519 over sign_this>
+```
+
+The node signs `sign_this`, which the challenge endpoint returns verbatim so the
+firmware does not have to reimplement the encoding. The central then checks, in this
+order:
+
+1. **the nonce** — single use, 60 seconds, bound to the node it was issued to;
+2. **the CA's signature** over the certificate, and that the certificate is unexpired;
+3. **the certificate's subject** — that it names *this* node;
+4. **that the certificate's key is the one registered**, so a key rotation actually
+   closes the window rather than leaving old certificates working;
+5. **the challenge signature**, against the node's public key.
+
+#### Two things that are deliberate
+
+**A presented certificate cannot fall back to the HMAC path.** Presenting *any*
+certificate header commits the request to certificate authentication, and a certificate
+with no nonce is refused rather than quietly treated as an HMAC request. A fallback
+would leave the weaker scheme permanently available and make the stronger one
+decorative: an attacker holding one node's HMAC key would present it and skip the
+certificate entirely. `test_a_bad_certificate_cannot_fall_back_to_the_hmac_secret`
+sends exactly that request.
+
+**A rejected attempt still consumes the nonce.** An attacker cannot make a node burn
+unlimited nonces, and a captured request cannot be replayed — and since neither the
+certificate nor the signature changes between attempts, single-use *is* the replay
+defence. The cost is that a node with a misconfigured certificate fetches another.
+
+The HMAC path is unchanged, because every node provisioned before certificates existed
+has an HMAC key and must keep working. The two coexist; the choice is made by what the
+request presents, not by a flag the caller sets.
+
+#### What this is not
+
+Not mutual TLS. Caddy terminates TLS with one server certificate and the node's
+credential is an application-level header, so the node proves its identity over a
+channel whose peer it identified by DNS name. Server-to-client authentication and
+channel binding still require the firmware to hold a certificate rather than a seed.
+
+Not a firmware feature yet. The central side is complete and tested; no node
+implementation of this exchange exists, which is why the flash artifact checks and the
+bench self-test still report no board.
+
 Issuing refuses a validity above 366 days rather than clamping it, and refuses a public key
 that is not a curve point. The second check is not a length check: `from_public_bytes`
 accepts all 32 bytes and defers the failure to verification time, so about half of all

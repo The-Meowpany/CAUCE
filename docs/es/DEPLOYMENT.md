@@ -71,7 +71,7 @@ Backend:
 ```powershell
 cd backend
 pip install --require-hashes -r requirements.lock
-python -m pytest tests -q # esperado 501 passed
+python -m pytest tests -q # esperado 540 passed
 ```
 
 Integración nodo↔servidor:

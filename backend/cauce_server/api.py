@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from . import revocation
+from . import node_auth, revocation
 from .alerts import evaluate_heat_rules
 from .analytics import summary_stats
 from .calibration import (
@@ -240,13 +240,125 @@ def get_node_revocation(
     }
 
 
+@router.post("/sync/challenge")
+def issue_sync_challenge(
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Issues a single-use nonce for certificate authentication.
+
+    Unauthenticated by design, because a node cannot authenticate until it has a challenge.
+    The cost of that is an open endpoint, and it is bounded three ways: the store caps how
+    many outstanding challenges exist and evicts the oldest rather than refusing, the nonce
+    lives 60 seconds, and answering one requires the node's private key, which nobody gets
+    from this endpoint.
+
+    A challenge is issued for a node that exists and is not retired. Refusing here rather
+    than at answer time would turn this into a way to enumerate provisioned nodes, and it is
+    rate limited like everything else under `/v1`.
+    """
+    _check_rate(request)
+    node_id = require_node_id((payload or {}).get("node_id"))
+
+    if not settings.ca_private_key:
+        raise HTTPException(status_code=503,
+                            detail="certificate_authority_not_configured")
+
+    rows = query(
+        "SELECT device_key, device_key_algorithm, revoked_at_utc_ms FROM nodes"
+        " WHERE node_id=?",
+        (node_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="node_not_found")
+    if rows[0]["revoked_at_utc_ms"] is not None:
+        raise HTTPException(status_code=403, detail="node_retired")
+    if rows[0]["device_key_algorithm"] != ED25519:
+        # Only a node with a public key can answer a challenge. Saying so is more useful than
+        # handing out a nonce that could never succeed, and the node's own algorithm is not a
+        # secret.
+        raise HTTPException(status_code=409,
+                            detail="node_key_algorithm_cannot_answer_a_challenge")
+    if not rows[0]["device_key"]:
+        raise HTTPException(status_code=409, detail="node_not_provisioned")
+
+    challenge = node_auth.CHALLENGES.issue(node_id)
+    return {
+        "node_id": node_id,
+        "nonce": challenge.nonce,
+        "expires_utc_ms": challenge.expires_utc_ms,
+        # The exact bytes to sign, so the firmware does not have to reimplement the encoding.
+        # The encoding is pinned by `test_the_canonical_challenge_is_stable`, and publishing
+        # it is not a secret: the node could compute it from the three fields above.
+        "sign_this": node_auth.canonical_challenge(challenge, node_id).decode("utf-8"),
+        "algorithm": ED25519,
+        "note": (
+            "single use; a rejected attempt still consumes the nonce, so fetch another"
+        ),
+    }
+
+
+def _authenticate_by_certificate(node_id_claim, certificate_b64, nonce,
+                                 nonce_signature, registered_device_key) -> None:
+    """Authenticates a node by certificate, or raises 401.
+
+    The nonce is consumed by `verify_node_certificate_auth` before the certificate is
+    examined, which is what makes a failed attempt non-retryable: a caller cannot make a node
+    burn unlimited nonces, and a captured request cannot be replayed. That is why a rejected
+    attempt still costs the caller a challenge, and it is a deliberate trade - a legitimate
+    node whose certificate is misconfigured has to fetch another.
+    """
+    import base64 as _b64
+    import json as _json
+    import logging
+
+    from . import certificates as certificates_mod
+    from .node_auth import AuthError, verify_node_certificate_auth
+
+    if not settings.ca_private_key:
+        raise HTTPException(status_code=503,
+                            detail="certificate_authority_not_configured")
+    if not certificate_b64 or not nonce or not nonce_signature:
+        logging.warning("sync: certificate auth with incomplete headers")
+        raise HTTPException(status_code=401,
+                            detail="certificate_authentication_incomplete")
+
+    try:
+        certificate = _json.loads(_b64.b64decode(certificate_b64, validate=True))
+    except Exception:
+        logging.warning("sync: certificate was not decodable")
+        raise HTTPException(status_code=401, detail="invalid_certificate") from None
+
+    authority = certificates_mod.CertificateAuthority(settings.ca_private_key)
+    try:
+        verify_node_certificate_auth(
+            certificate=certificate,
+            signature_b64=nonce_signature,
+            nonce=nonce,
+            node_id=node_id_claim,
+            ca_public_key_hex=authority.public_key_hex,
+            registered_public_key_hex=registered_device_key,
+        )
+    except AuthError as exc:
+        # The reason goes to the log; the caller gets one opaque code. Returning the specific
+        # reason would help an attacker distinguish an expired certificate from a wrong key,
+        # and it tells a legitimate operator nothing they cannot read in the central's log.
+        logging.warning(f"sync: certificate auth failed for {node_id_claim}: {exc}")
+        raise HTTPException(status_code=401,
+                            detail="certificate_authentication_failed") from None
+
+
 @router.post("/sync")
 async def sync_batch(
     request: Request,
     authorization: str | None = Header(default=None),
-    x_cauce_node: str | None = Header(default=None),
+x_cauce_node: str | None = Header(default=None),
     x_cauce_signature: str | None = Header(default=None),
-) -> dict:
+    x_cauce_certificate: str | None = Header(default=None),
+    x_cauce_nonce: str | None = Header(default=None),
+    x_cauce_nonce_signature: str | None = Header(default=None),
+    ) -> dict:
     import json as _json
 
     _check_rate(request)
@@ -269,23 +381,38 @@ async def sync_batch(
         logging.info(f"sync: node_id={node_id_claim}, device_key present={bool(device_key)}")
 
     if device_key and not isinstance(payload.get("frames"), list):
-        # Provisioned node, direct Wi-Fi path: HMAC over the raw body is
-        # mandatory, and the identity header must match the payload's node_id.
+        # Provisioned node, direct Wi-Fi path.
         #
-        # A relayed narrowband batch is the exception: it carries no body
-        # signature because the relay does not hold the key. Its frames are
-        # signed by the node and verified one by one in
-        # `_expand_signed_frames`, which is where that authentication happens.
-        expected_sig = hmac.new(device_key.encode(), raw_body,
-                                hashlib.sha256).hexdigest()
-        provided_sig = x_cauce_signature.strip().lower() if x_cauce_signature else ""
-        header_ok = bool(x_cauce_node) and x_cauce_node == node_id_claim
-        if not header_ok or not provided_sig or not hmac.compare_digest(
-            provided_sig, expected_sig
-        ):
-            import logging
-            logging.warning(f"sync: invalid signature for {node_id_claim}")
-            raise HTTPException(status_code=401, detail="invalid_signature")
+        # Two schemes, and which one applies is decided by what the request presents rather
+        # than by a flag the caller sets. A node holding a certificate proves possession of its
+        # private key; a node holding only an HMAC key keeps the HMAC path, because every node
+        # provisioned before certificates existed has one and must keep working.
+        #
+        # Certificate authentication does NOT fall back to HMAC. A fallback would leave the
+        # weaker scheme permanently available and make the stronger one decorative: an
+        # attacker holding one node's HMAC key would present it and skip the certificate
+        # entirely. So presenting a certificate means the certificate must work.
+        presented_certificate = bool(x_cauce_certificate)
+        if presented_certificate:
+            _authenticate_by_certificate(
+                node_id_claim, x_cauce_certificate, x_cauce_nonce,
+                x_cauce_nonce_signature, device_key,
+            )
+        else:
+            # HMAC over the raw body, and the identity header must match the payload's
+            # node_id. A relayed narrowband batch is the exception: it carries no body
+            # signature because the relay does not hold the key. Its frames are signed by the
+            # node and verified one by one in `_expand_signed_frames`.
+            expected_sig = hmac.new(device_key.encode(), raw_body,
+                                    hashlib.sha256).hexdigest()
+            provided_sig = x_cauce_signature.strip().lower() if x_cauce_signature else ""
+            header_ok = bool(x_cauce_node) and x_cauce_node == node_id_claim
+            if not header_ok or not provided_sig or not hmac.compare_digest(
+                provided_sig, expected_sig
+            ):
+                import logging
+                logging.warning(f"sync: invalid signature for {node_id_claim}")
+                raise HTTPException(status_code=401, detail="invalid_signature")
     elif settings.sync_require_auth:
         raise HTTPException(status_code=503, detail="sync_not_provisioned")
     else:

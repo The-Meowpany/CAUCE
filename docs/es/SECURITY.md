@@ -180,6 +180,69 @@ ve la firma y no le afecta; un atacante capaz de medir el tiempo de firma en loc
 con alta resolución sí podría. Donde el propio dispositivo deba considerarse hostil,
 usar una biblioteca de tiempo constante.
 
+
+### Un nodo demuestra posesión en vez de guardar un secreto
+
+Para un nodo aprovisionado con una clave Ed25519, `/v1/sync` puede autenticarlo por
+**certificado** en lugar de por secreto compartido. El esquema HMAC es simétrico:
+cualquiera que tenga `nodes.device_key` puede autenticarse *como* ese nodo, y el central
+guarda un secreto que sirve tanto para autenticar como para falsificar.
+
+El intercambio son dos peticiones:
+
+```
+POST /v1/sync/challenge   {"node_id": "CAUCE-001"}
+-> {"nonce": "...", "expires_utc_ms": ..., "sign_this": "cauce-sync-challenge\n..."}
+
+POST /v1/sync
+   X-Cause-Node:             CAUCE-001
+   X-Cause-Certificate:      <base64 del JSON del certificado>
+   X-Cause-Nonce:            <el nonce>
+   X-Cause-Nonce-Signature:  <base64 de Ed25519 sobre sign_this>
+```
+
+El nodo firma `sign_this`, que el endpoint de challenge devuelve literalmente para que
+el firmware no tenga que reimplementar la codificación. El central comprueba después, en
+este orden:
+
+1. **el nonce** — de un solo uso, 60 segundos, ligado al nodo al que se emitió;
+2. **la firma de la CA** sobre el certificado, y que el certificado no esté caducado;
+3. **el sujeto del certificado** — que nombre a *este* nodo;
+4. **que la clave del certificado sea la registrada**, para que una rotación cierre de
+   verdad la ventana en vez de dejar funcionando certificados antiguos;
+5. **la firma del challenge**, contra la clave pública del nodo.
+
+#### Dos decisiones deliberadas
+
+**Un certificado presentado no puede recurrir al camino HMAC.** Presentar *cualquier*
+cabecera de certificado compromete la petición con la autenticación por certificado, y un
+certificado sin nonce se rechaza en vez de tratarse en silencio como una petición HMAC.
+Un recurso de repliegue dejaría el esquema débil disponible para siempre y haría decorativo
+al fuerte: un atacante con la clave HMAC de un nodo la presentaría y se saltaría el
+certificado entero. `test_a_bad_certificate_cannot_fall_back_to_the_hmac_secret` envía
+exactamente esa petición.
+
+**Un intento rechazado también consume el nonce.** Un atacante no puede hacer que un nodo
+gaste nonces sin límite, y una petición capturada no se puede repetir — y como ni el
+certificado ni la firma cambian entre intentos, de un solo uso *es* la defensa contra
+repetición. El coste es que un nodo con el certificado mal configurado pide otro.
+
+El camino HMAC no cambia, porque todos los nodos aprovisionados antes de que existieran los
+certificados tienen una clave HMAC y deben seguir funcionando. Los dos coexisten; la
+elección la hace lo que la petición presenta, no un flag que el llamador fija.
+
+#### Lo que esto no es
+
+No es TLS mutuo. Caddy termina TLS con un único certificado de servidor y la credencial
+del nodo es una cabecera de aplicación, así que el nodo demuestra su identidad sobre un
+canal cuyo contraparte identificó por nombre DNS. La autenticación servidor-a-cliente y
+el channel binding siguen necesitando que el firmware guarde un certificado en vez de una
+semilla.
+
+No es todavía una función del firmware. El lado del central está completo y probado; no
+existe ninguna implementación del nodo de este intercambio, que es lo que hace que las
+comprobaciones de artefactos flash y el self-test de banco sigan diciendo que no hay placa.
+
 ## Pendiente (fases posteriores / hardware)
 
 - Integración de radio Wi-Fi: las credenciales entran por la UI local, y
