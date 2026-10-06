@@ -216,9 +216,21 @@ artifact checks and the bench self-test still report no board.
 
 The one thing the device side deliberately does **not** do is rebuild `sign_this` from the
 nonce and the expiry. The central returns the exact string it will verify against, and
-storing it verbatim means the encoding has one owner instead of two that can drift. Getting
-that wrong produces an invalid-signature error at the central that points at the key rather
-than at the formatting, which is why the encoding is pinned by a test on each side.
+storing it verbatim means the encoding has one owner instead of two that can drift.
+
+Getting that wrong produces an invalid-signature error at the central that points at the *key*
+rather than at the formatting, which is why the encoding is pinned on both sides — but note
+what each pin actually checks. `jsonStringField` refuses any escape it cannot decode
+faithfully, `\uXXXX` included, because decoding `\u0041` to `A` would have the node sign bytes
+the central never wrote. The escapes `json.dumps` does emit — `\n`, `\t`, `\r`, `\"`, `\\` —
+are decoded, since the canonical string's three newlines arrive as three `\n` pairs and a
+parser that refused them could never read a real challenge.
+
+Both sides pin the *serialised* form, not just the string being signed:
+`test_node_auth_wire.cpp` carries the literal `json.dumps` output, and the backend's
+`test_the_serialised_form_is_still_what_dumps_produces` asserts against `json.dumps` live
+rather than against a copy of its output, so a change to spacing or escaping fails with the
+cause named.
 
 Issuing refuses a validity above 366 days rather than clamping it, and refuses a public key
 that is not a curve point. The second check is not a length check: `from_public_bytes`

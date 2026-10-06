@@ -116,6 +116,31 @@ std::string decodeBase64(const char* text) {
 
 // --- the canonical encoding -------------------------------------------
 
+// This is the shape `json.dumps` actually puts on the wire for the canonical string: three
+  // backslash-n pairs and no 0x0A byte anywhere. The parser used to refuse every escape on the
+  // grounds that the central emits none, which this test contradicts. On real hardware that
+  // would have been one NoChallenge per sync, forever.
+  void test_the_parser_reads_the_escapes_python_actually_emits() {
+    const char* wire =
+        "{\"node_id\":\"CAUCE-001\",\"nonce\":\"NOnCE\","
+        "\"expires_utc_ms\":1787356860000,"
+        "\"sign_this\":\"cauce-sync-challenge\\nCAUCE-001\\nNOnCE\\n1787356860000\"}";
+    char out[256];
+    TEST_ASSERT_TRUE(
+        NodeAuthenticator::jsonStringField(wire, "sign_this", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING(
+        "cauce-sync-challenge\nCAUCE-001\nNOnCE\n1787356860000", out);
+  }
+
+  // The opposite must still be refused. Decoding `\u0041` into `A` and signing the result would
+  // mean the node signs a string the central never wrote.
+  void test_the_parser_refuses_an_escape_it_cannot_honestly_decode() {
+    const char* wire = "{\"sign_this\":\"cauce\\u0058challenge\"}";
+    char out[256];
+    TEST_ASSERT_FALSE(
+        NodeAuthenticator::jsonStringField(wire, "sign_this", out, sizeof(out)));
+    TEST_ASSERT_EQUAL_STRING("", out);
+  }
 void test_the_canonical_challenge_matches_the_backends_format() {
   char out[256];
   const size_t n = NodeAuthenticator::canonicalChallengeBytes(
@@ -224,11 +249,18 @@ void test_a_missing_or_wrongly_typed_field_is_not_found() {
 }
 
 void test_a_json_escape_is_refused_rather_than_decoded() {
-  // The central emits none, so an escaped value is a different server or an attack. Either
-  // way it must not become a string that verifies.
+  // This test asserted that `\"` is refused, which was true only because every escape was
+  // refused. `\"` is legitimate JSON that `json.dumps` emits for any value containing a
+  // quote, so refusing it made the parser wrong in the other direction: correct on the
+  // canonical string, broken on a nonce or node id that happens to contain a quote.
+  //
+  // What must still be refused is an escape with no honest single-character reading, and
+  // `\u0041` is the case that matters: decoded to `A`, the node would sign a string the
+  // central never wrote.
   char out[64];
-  TEST_ASSERT_FALSE(NodeAuthenticator::jsonStringField(
+  TEST_ASSERT_TRUE(NodeAuthenticator::jsonStringField(
       R"({"nonce":"ab\"cd"})", "nonce", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ab\"cd", out);
 }
 
 void test_a_numeric_field_refuses_hex_and_signs() {
@@ -398,6 +430,8 @@ void registerNodeAuthTests() {
   RUN_TEST(test_json_field_spacing_and_order_do_not_matter);
   RUN_TEST(test_a_missing_or_wrongly_typed_field_is_not_found);
   RUN_TEST(test_a_json_escape_is_refused_rather_than_decoded);
+  RUN_TEST(test_the_parser_reads_the_escapes_python_actually_emits);
+  RUN_TEST(test_the_parser_refuses_an_escape_it_cannot_honestly_decode);
   RUN_TEST(test_a_numeric_field_refuses_hex_and_signs);
   RUN_TEST(test_a_large_expiry_does_not_overflow);
   RUN_TEST(test_a_configured_node_produces_the_four_headers);

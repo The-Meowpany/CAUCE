@@ -143,8 +143,49 @@ if ($dockerfile -match 'requirements\.lock' -and $dockerfile -match '--require-h
 }
 
 Step "full verification (firmware, ESP32 build, backend, E2E)"
-& powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1
-if ($LASTEXITCODE -eq 0) { Ok "verify-all.ps1" } else { Fail "verify-all.ps1" }
+  $verifyAllLines = & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1 2>&1
+  $verifyAllExit = $LASTEXITCODE
+  $verifyAllLines | ForEach-Object { Write-Host "  $_" }
+  if ($verifyAllExit -eq 0) {
+    Ok "verify-all.ps1"
+    # The counts verify-all.ps1 prints are the numbers the README, STATUS and thesis quote.
+    # They were prose nobody checked, which is how 325 survived a move to 345 and then 349:
+    # every test passed and the totals were wrong. Read them back out of the output and compare.
+    #
+    # Both numbers are checked as a pair against one documented sentence, because the two
+    # halves are written as one claim ("349 firmware + 541 backend"). Checking each number
+    # against a pattern containing only its own label is how the first version of this check
+    # came to demand a README line reading "541 firmware", which no line ever said.
+    $verifyAllText = $verifyAllLines -join "`n"
+    $fwMatch = [regex]::Match($verifyAllText, 'firmware (\d+) tests')
+    $beMatch = [regex]::Match($verifyAllText, 'backend (\d+) tests')
+    if (-not $fwMatch.Success -or -not $beMatch.Success) {
+      Fail ("verify-all.ps1 did not report both test counts, so the documentation cannot be " +
+            "checked against what ran")
+    } else {
+      $fw = [int]$fwMatch.Groups[1].Value
+      $be = [int]$beMatch.Groups[1].Value
+      # One pattern, both numbers, exactly as the docs phrase it: the count comes first, as in
+      # "349 firmware + 541 backend". Getting that order backwards produces a pattern that
+      # matches nothing and reports every document as stale - a check that fails loudly is
+      # better than one that fails silently, but it is still a check that does not work.
+      $docsQuote = "$fw firmware \+ $be backend"
+      $stale = @()
+      foreach ($doc in @('README.md', 'README.es.md', 'STATUS.md', 'TESIS_CAUCE_ALEXANDRA.md')) {
+        if (-not (Select-String -Path $doc -Pattern $docsQuote -Quiet -ErrorAction SilentlyContinue)) {
+          $stale += $doc
+        }
+      }
+      if ($stale.Count -eq 0) {
+        Ok "every documented total matches the $fw firmware and $be backend tests that just ran"
+      } else {
+        Fail ("the suite ran $fw firmware and $be backend tests, but these documents still " +
+              "quote a different pair: $($stale -join ', ')")
+      }
+    }
+  } else {
+    Fail "verify-all.ps1"
+  }
 
 Step "the ESP32 flash artifacts are valid, and the image fits its slot"
 # Not execution. esptool's image_info parses the bootloader and application headers and

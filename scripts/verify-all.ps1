@@ -11,7 +11,7 @@ $T = @{
         step3 = '== 3/4 BACKEND: pytest =='
         step4 = '== 4/4 INTEGRACION E2E nodo->servidor =='
         fail  = 'RESULTADO: FALLAS DETECTADAS'
-        ok    = 'RESULTADO: TODO OK (firmware 345 tests + ESP32 build + backend 540 tests + E2E)'
+        ok    = 'RESULTADO: TODO OK (ESP32 build + E2E)'
     }
     en = @{
         step1 = '== 1/4 FIRMWARE: native tests =='
@@ -19,7 +19,7 @@ $T = @{
         step3 = '== 3/4 BACKEND: pytest =='
         step4 = '== 4/4 E2E INTEGRATION node->server =='
         fail  = 'RESULT: FAILURES DETECTED'
-        ok    = 'RESULT: ALL OK (firmware 345 tests + ESP32 build + backend 540 tests + E2E)'
+        ok    = 'RESULT: ALL OK (ESP32 build + E2E)'
     }
 }[$Lang]
 
@@ -61,8 +61,22 @@ if ($mingwBin) {
 }
 
 Write-Host $T.step1 -ForegroundColor Cyan
-pio test -e native --project-dir (Join-Path $root "firmware")
+# The counts are captured, not just printed. The success line below used to hardcode them,
+# which meant the number in the README and the number of tests that ran were two unrelated
+# claims, and only the first was ever wrong quietly. Deriving the text from what actually
+# ran means the figure in the release gate's output is the figure in the log.
+$fwOut = pio test -e native --project-dir (Join-Path $root "firmware") 2>&1
+$fwOut | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { $fail = $true }
+$fwCount = 0
+$fwSummary = ($fwOut | Select-String -Pattern '(\d+) test cases?: (\d+) succeeded' | Select-Object -Last 1)
+if ($fwSummary) {
+    $fwCount = [int]$fwSummary.Matches[0].Groups[1].Value
+} elseif ($LASTEXITCODE -eq 0) {
+    # A green run with no parseable count means the summary line changed shape. Saying so is
+    # better than printing a total invented by this script.
+    Write-Host "  note: could not read the firmware test count from the summary line" -ForegroundColor Yellow
+}
 
 Write-Host $T.step2 -ForegroundColor Cyan
 pio run -e esp32dev --project-dir (Join-Path $root "firmware")
@@ -70,9 +84,18 @@ if ($LASTEXITCODE -ne 0) { $fail = $true }
 
 Write-Host $T.step3 -ForegroundColor Cyan
 Push-Location (Join-Path $root "backend")
-python -m pytest tests -q
-if ($LASTEXITCODE -ne 0) { $fail = $true }
+$beOut = python -m pytest tests -q 2>&1
+$beOut | ForEach-Object { Write-Host $_ }
+$beExit = $LASTEXITCODE
 Pop-Location
+if ($beExit -ne 0) { $fail = $true }
+$beCount = 0
+$beSummary = ($beOut | Select-String -Pattern '(\d+) passed' | Select-Object -Last 1)
+if ($beSummary) {
+    $beCount = [int]$beSummary.Matches[0].Groups[1].Value
+} elseif ($beExit -eq 0) {
+    Write-Host "  note: could not read the backend test count from the summary line" -ForegroundColor Yellow
+}
 
 Write-Host $T.step4 -ForegroundColor Cyan
 powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "run-e2e.ps1")
@@ -83,3 +106,8 @@ if ($fail) {
     exit 1
 }
 Write-Host $T.ok -ForegroundColor Green
+# Counted above from the runners' own summaries. If a count could not be read the line says
+# `unknown` rather than a number this script made up.
+$fwText = if ($fwCount -gt 0) { "$fwCount tests" } else { 'count unknown' }
+$beText = if ($beCount -gt 0) { "$beCount tests" } else { 'count unknown' }
+Write-Host ("  firmware {0}; backend {1}" -f $fwText, $beText) -ForegroundColor Green

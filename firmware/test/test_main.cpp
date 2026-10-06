@@ -21,6 +21,7 @@ void registerEd25519GroupTests();
 void registerOtaTests();
 void registerOtaRollbackTests();
 void registerNodeAuthTests();
+void registerNodeAuthWireTests();
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -55,6 +56,7 @@ int main() {
   registerOtaTests();
   registerOtaRollbackTests();
   registerNodeAuthTests();
+  registerNodeAuthWireTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();

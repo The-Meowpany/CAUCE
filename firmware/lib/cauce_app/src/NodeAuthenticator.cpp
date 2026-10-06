@@ -125,16 +125,48 @@ bool NodeAuthenticator::jsonStringField(const char* json, const char* key, char*
     }
     ++colon;
     size_t written = 0;
+    // Decoded escapes. An earlier version refused every `\`, justified by a comment saying
+    // the central emits none. It does: `json.dumps` writes the canonical string's three
+    // newlines as three backslash-n pairs, and a strict refusal meant a node could never
+    // read a real challenge. Only the escapes Python's `json.dumps` produces by default are
+    // accepted, and `\u` is not one of them - see below.
+    bool truncated = false;
+    char decoded = '\0';
     while (*colon && *colon != '"') {
-      // An escape is refused rather than decoded. The central emits none, so a value
-      // containing one is either a different server or an attack, and neither should be
-      // silently reinterpreted into a string that verifies.
-      if (*colon == '\\') return false;
-      if (written + 1 >= capacity) {
-        out[0] = '\0';
-        return false;
+      if (*colon == '\\') {
+        decoded = '\0';
+        switch (colon[1]) {
+          case 'n': decoded = '\n'; break;
+          case 't': decoded = '\t'; break;
+          case 'r': decoded = '\r'; break;
+          case '"': decoded = '"'; break;
+          case '\\': decoded = '\\'; break;
+          // `\b`, `\f`, `\/`, and every `\uXXXX` are refused rather than guessed at. A
+          // surrogate pair or a `\u0041` decoded to `A` would mean this module signs a
+          // string the central never wrote, and it fails at the central as an invalid
+          // signature, which points at the key instead of at the decoding. Refusing here
+          // fails as NoChallenge, which points at the right place.
+          //
+          // `out` is cleared on this path as on every other failure. A caller that ignores the
+          // false and reads the buffer would otherwise sign whatever prefix was decoded before
+          // the escape appeared - here `cauce` out of `cauce\Xchallenge`.
+          default:
+            out[0] = '\0';
+            return false;
+        }
+        colon += 2;
+      } else {
+        decoded = *colon++;
       }
-      out[written++] = *colon++;
+      if (written + 1 >= capacity) {
+        truncated = true;
+        break;
+      }
+      out[written++] = decoded;
+    }
+    if (truncated) {
+      out[0] = '\0';
+      return false;
     }
     if (*colon != '"') return false;
     out[written] = '\0';

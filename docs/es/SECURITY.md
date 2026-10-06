@@ -249,9 +249,22 @@ placa.
 Lo que el lado del dispositivo deliberadamente **no** hace es reconstruir `sign_this` a
 partir del nonce y la caducidad. El central devuelve exactamente la cadena que va a
 verificar, y guardarla literal significa que la codificación tiene un solo dueño en vez de
-dos que pueden divergir. Equivocarse en eso produce un error de firma inválida en el
-central que señala a la clave en vez de al formato, y por eso la codificación está fijada
-por un test en cada lado.
+dos que pueden divergir.
+
+Equivocarse en eso produce un error de firma inválida en el central que señala a la clave
+en vez de al formato, y por eso la codificación está fijada en ambos lados — pero conviene
+mirar qué comprueba cada fijación. `jsonStringField` rechaza cualquier escape que no pueda
+decodificar fielmente, `\uXXXX` incluido, porque decodificar `\u0041` como `A` haría que el
+nodo firmara bytes que el central nunca escribió. Los escapes que `json.dumps` sí emite —
+`\n`, `\t`, `\r`, `\"`, `\\` — se decodifican, ya que los tres saltos de línea del formato
+canónico llegan como tres pares `\n`, y un parser que los rechazara nunca podría leer un
+challenge real.
+
+Ambos lados fijan la forma *serializada*, no solo la cadena que se firma:
+`test_node_auth_wire.cpp` lleva la salida literal de `json.dumps`, y el test del backend
+`test_the_serialised_form_is_still_what_dumps_produces` comprueba contra `json.dumps` en
+vivo y no contra una copia de su salida, de modo que un cambio de espaciado o escapado
+falla nombrando la causa.
 
 ## Pendiente (fases posteriores / hardware)
 

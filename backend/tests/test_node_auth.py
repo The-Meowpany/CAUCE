@@ -17,6 +17,7 @@ that request is real; the node is simply no longer the one it claims to be.
 from __future__ import annotations
 
 import base64
+import json
 import os
 
 import pytest
@@ -29,6 +30,7 @@ from cauce_server.certificates import CertificateAuthority  # noqa: E402
 from cauce_server.node_auth import (  # noqa: E402
     MAX_PENDING_CHALLENGES,
     AuthError,
+    Challenge,
     ChallengeStore,
     canonical_challenge,
     verify_node_certificate_auth,
@@ -336,3 +338,31 @@ def test_the_store_defaults_to_the_clock(ca):
         issue(ca, now_ms=None), base64.b64encode(signature).decode("ascii"),
         challenge.nonce, "CAUCE-001", ca.public_key_hex, public, store=store,
     )
+
+
+def test_the_serialised_form_is_still_what_dumps_produces():
+    """Pin the bytes a node has to read, not just the string being signed.
+
+    `sign_this` reaches firmware through `json.dumps`, which escapes the three newlines as
+    three ``\\n`` pairs and puts a space after each colon. A firmware parser has to cope with
+    that, and it did not for two rounds: the parser refused every escape because a comment
+    asserted the central emitted none, which was only ever checked against hand-written
+    fixtures written to match the parser.
+
+    This test asserts against ``json.dumps`` itself rather than a copy of its output, so if a
+    future change to the endpoint alters spacing or escaping, this fails and names the cause.
+    The firmware side pins the same bytes in ``test_node_auth_wire.cpp``.
+    """
+    challenge = Challenge(
+        node_id="CAUCE-001", nonce="NOnCE", expires_utc_ms=1_787_356_860_000,
+    )
+    body = {"node_id": challenge.node_id, "nonce": challenge.nonce,
+            "expires_utc_ms": challenge.expires_utc_ms,
+            "sign_this": canonical_challenge(challenge, "CAUCE-001").decode("utf-8")}
+    wire = json.dumps(body)
+    assert '"sign_this": "cauce-sync-challenge\\nCAUCE-001\\nNOnCE\\n1787356860000"' in wire, (
+        "the wire form changed; firmware's jsonStringField is pinned to these bytes"
+    )
+    assert "\\u" not in wire, "a \\u escape would need firmware to decode unicode"
+    # Exactly three escapes: the newlines in the canonical string and nothing else.
+    assert wire.count("\\n") == 3, wire

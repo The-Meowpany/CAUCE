@@ -129,8 +129,10 @@ class NodeAuthenticator {
   // ArduinoJson is available on the target and is the right tool for real documents. It is
   // not available to the host suite, and pulling a parser into a core module to read three
   // flat string fields would be worse than the `strstr` scan that `LoRaSyncTransport`
-  // already uses for the same reason. This handles only `"key": "value"` with no escapes,
-  // which is what the central emits and what a malformed answer fails on.
+  // already uses for the same reason. This reads `"key": "value"` and decodes exactly the
+  // escapes `json.dumps` emits by default - `\n`, `\t`, `\r`, `\"`, `\\`. Anything else,
+  // `\uXXXX` included, is refused: a value this module cannot decode faithfully must not
+  // become a string the node then signs.
   static bool jsonStringField(const char* json, const char* key, char* out,
                               size_t capacity);
 
