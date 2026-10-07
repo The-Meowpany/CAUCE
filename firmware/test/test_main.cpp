@@ -28,6 +28,7 @@ namespace cauce { namespace hal { void registerEsp32PeerLinkTests(); } }
 namespace cauce { void registerNodeCredentialTests(); }
 namespace cauce { void registerManifestKeyTests(); }
 namespace cauce { void registerStorageContainsTests(); }
+namespace cauce { namespace app { void registerPeerExchangeTests(); } }
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -71,6 +72,7 @@ int main() {
   cauce::registerNodeCredentialTests();
   cauce::registerManifestKeyTests();
   cauce::registerStorageContainsTests();
+  cauce::app::registerPeerExchangeTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();
