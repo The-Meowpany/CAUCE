@@ -5,13 +5,37 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 
 namespace cauce::hal {
+
+namespace {
+
+// The five lines `IHeaderSink` exists to avoid dragging `Arduino.h` into `cauce_hal` for.
+// `HTTPClient::addHeader` wants `String`s; the sink interface wants `const char*` because the
+// host suite implements it with a `std::vector` and has no Arduino.
+class HttpClientSink final : public IHeaderSink {
+ public:
+  explicit HttpClientSink(HTTPClient& client) : client_(client) {}
+  void addHeader(const char* name, const char* value) override {
+    client_.addHeader(String(name), String(value));
+  }
+
+ private:
+  HTTPClient& client_;
+};
+
+}  // namespace
 
 void Esp32HttpSyncTransport::configure(const char* serverUrl,
                                        const char* bearerToken) {
   url_ = String(serverUrl);
   token_ = String(bearerToken);
+}
+
+bool Esp32HttpSyncTransport::setNodeId(const char* nodeId) {
+  nodeId_ = (nodeId != nullptr && nodeId[0] != '\0') ? String(nodeId) : String();
+  return nodeId_.length() > 0;
 }
 
 ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
@@ -23,6 +47,18 @@ ISyncTransport::Result Esp32HttpSyncTransport::postBatch(
   http.addHeader("Content-Type", "application/json");
   if (token_.length() > 0) {
     http.addHeader("Authorization", "Bearer " + token_);
+  }
+
+  // Certificate auth, when something is there to do it.
+  //
+  // The return value is deliberately ignored. `addAuthHeaders` emits nothing on any failure,
+  // and that is what makes this safe: the central commits to certificate authentication the
+  // instant it sees `X-Cauce-Certificate` and will not fall back to the shared secret, so a
+  // partial header set would earn a rejection where HMAC would have worked. Declining is the
+  // normal path when the central is unreachable, and the node still syncs.
+  if (auth_ != nullptr && nodeId_.length() > 0) {
+    HttpClientSink sink(http);
+    (void)auth_->addAuthHeaders(url_.c_str(), nodeId_.c_str(), timeoutMs, sink);
   }
   if (signatureHex && signatureHex[0]) {
     http.addHeader("X-CAUCE-Signature", String(signatureHex));

@@ -22,6 +22,7 @@ void registerOtaTests();
 void registerOtaRollbackTests();
 void registerNodeAuthTests();
 void registerNodeAuthWireTests();
+namespace cauce { namespace app { void registerSyncTransportAuthTests(); } }
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -57,6 +58,7 @@ int main() {
   registerOtaRollbackTests();
   registerNodeAuthTests();
   registerNodeAuthWireTests();
+  cauce::app::registerSyncTransportAuthTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();

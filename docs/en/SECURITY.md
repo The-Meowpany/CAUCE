@@ -208,11 +208,26 @@ credential is an application-level header, so the node proves its identity over 
 channel whose peer it identified by DNS name. Server-to-client authentication and
 channel binding still require the firmware to hold a certificate rather than a seed.
 
-Both halves exist. The central side is `node_auth.py`; the device side is
-`NodeAuthenticator` in `cauce_app`, which fetches the challenge, signs `sign_this` with
-the node's Ed25519 seed and emits the four headers. Neither has met the other on real
-hardware: the exchange compiles for `esp32dev` and passes 20 host tests, and the flash
-artifact checks and the bench self-test still report no board.
+Both halves exist and are joined. The central side is `node_auth.py`. The device side is
+`NodeAuthenticator` in `cauce_app` — it fetches the challenge, signs `sign_this` with the
+node's Ed25519 seed and produces the four headers — and `NodeCertificateAuth`, which implements
+`hal::IAuthHeaderSource` so that `Esp32HttpSyncTransport` can call it from inside a POST.
+
+Neither has met the other on real hardware: the exchange compiles for `esp32dev`, passes 28 host
+tests, and the flash artifact checks and the bench self-test still report no board.
+
+Two properties of that join are worth stating because both are easy to get wrong:
+
+**Failure emits nothing.** The central commits to certificate authentication the moment it sees
+`X-Cauce-Certificate` and will not fall back to the shared secret, so a partial header set
+earns a rejection where HMAC would have worked. `addAuthHeaders` returns false and emits zero
+headers on any failure, and the transport ignores the return value — which is what makes
+falling back to HMAC a downgrade in *strength* rather than a path to guaranteed rejection.
+
+**The dependency points one way.** `cauce_hal` owns `IAuthHeaderSource` and the four header
+names, because it is what puts them on the wire. The credential lives in `cauce_app`, which
+already depends on `cauce_hal`. The first attempt gave `cauce_hal` an authenticator directly
+and closed a cycle, and the ESP32 build failed on it.
 
 The one thing the device side deliberately does **not** do is rebuild `sign_this` from the
 nonce and the expiry. The central returns the exact string it will verify against, and

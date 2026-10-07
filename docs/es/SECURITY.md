@@ -239,12 +239,29 @@ canal cuyo contraparte identificó por nombre DNS. La autenticación servidor-a-
 el channel binding siguen necesitando que el firmware guarde un certificado en vez de una
 semilla.
 
-Ambas mitades existen. El lado del central es `node_auth.py`; el del dispositivo es
-`NodeAuthenticator` en `cauce_app`, que pide el challenge, firma `sign_this` con la
-semilla Ed25519 del nodo y emite las cuatro cabeceras. Ninguna se ha encontrado con la
-otra en hardware real: el intercambio compila para `esp32dev` y pasa 20 tests de host, y
-las comprobaciones de artefactos flash y el self-test de banco siguen diciendo que no hay
-placa.
+Ambas mitades existen y están unidas. El lado del central es `node_auth.py`. El del
+dispositivo es `NodeAuthenticator` en `cauce_app` — pide el challenge, firma `sign_this` con
+la semilla Ed25519 del nodo y produce las cuatro cabeceras — más `NodeCertificateAuth`, que
+implementa `hal::IAuthHeaderSource` para que `Esp32HttpSyncTransport` pueda llamarlo desde
+dentro de un POST.
+
+Ninguna se ha encontrado con la otra en hardware real: el intercambio compila para
+`esp32dev`, pasa 28 tests de host, y las comprobaciones de artefactos flash y el self-test de
+banco siguen diciendo que no hay placa.
+
+Dos propiedades de esa unión merecen citarse porque las dos son fáciles de hacer mal:
+
+**El fallo no emite nada.** El central se compromete con autenticación por certificado en
+cuanto ve `X-Cauce-Certificate` y no vuelve al secreto compartido, así que un conjunto
+parcial de cabeceras se llevaría un rechazo donde HMAC habría funcionado. `addAuthHeaders`
+devuelve false y no emite ninguna cabecera ante cualquier fallo, y el transporte ignora el
+valor de retorno — que es lo que hace que caer a HMAC sea una caída de *fuerza* y no un camino
+a un rechazo garantizado.
+
+**La dependencia va en un solo sentido.** `cauce_hal` es dueño de `IAuthHeaderSource` y de los
+nombres de las cuatro cabeceras, porque es lo que las pone en el cable. La credencial vive en
+`cauce_app`, que ya depende de `cauce_hal`. El primer intento dio un autenticador directamente
+a `cauce_hal`, cerró un ciclo, y el build ESP32 falló por eso.
 
 Lo que el lado del dispositivo deliberadamente **no** hace es reconstruir `sign_this` a
 partir del nonce y la caducidad. El central devuelve exactamente la cadena que va a
