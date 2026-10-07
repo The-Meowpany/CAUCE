@@ -341,6 +341,38 @@ foreach ($dir in @("docs/en", "docs/es")) {
     }
 }
 
+Step "the documented coverage window matches the code"
+
+# A constant quoted in prose is a claim, and this project has now had two documented numbers
+# turn out to be wrong: the `require_scope` counts in STATUS.md's D1 section, and the coverage
+# window cap - where STATUS said 400 days and the code said 730, because 400 appeared in a
+# docstring as an *example* of a window that is too wide and was read as the limit. Both times
+# the number had been read rather than measured.
+#
+# Read the constant out of the source and the figure out of the document, then compare. A
+# changed limit now fails the gate instead of leaving a stale number in a file people read.
+$coverageSource = "backend\cauce_server\coverage.py"
+if (-not (Test-Path $coverageSource)) {
+    Fail "$coverageSource is missing, so the documented window cap cannot be checked"
+} else {
+    $constMatch = [regex]::Match(
+        (Get-Content $coverageSource -Raw), 'MAX_WINDOW_MS\s*=\s*(\d+)\s*\*\s*86400_000')
+    if (-not $constMatch.Success) {
+        Fail "could not read MAX_WINDOW_MS from $coverageSource; this check needs updating"
+    } else {
+        $days = [int]$constMatch.Groups[1].Value
+        if (Select-String -Path STATUS.md -Pattern "caps a window at \*\*$days days\*\*" -Quiet) {
+            Ok "STATUS.md quotes the real window cap ($days days)"
+        } else {
+            $quoted = [regex]::Matches(
+                (Get-Content STATUS.md -Raw), 'caps a window at \*\*(\d+) days\*\*')
+            $actual = if ($quoted.Count) { $quoted[0].Groups[1].Value } else { "nothing" }
+            Fail ("the coverage window is $days days (MAX_WINDOW_MS in coverage.py) but " +
+                  "STATUS.md says $actual; the documented number was read, not measured")
+        }
+    }
+}
+
 Step "the firmware signs with both algorithms"
 # Checked in pieces rather than by grepping for one string, because the natural
 # spelling varies: a header may hold the enum and the source may only spell it

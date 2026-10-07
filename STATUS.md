@@ -108,9 +108,18 @@ not. It overrides any aspirational claim elsewhere.
   the kind it came from, and it scales with the correction, so a report can
   separate measurement from method. There is still no metrological traceability:
   the reference is another node, and the chain ends at a sensor datasheet.
-- Coverage accounting caps a query at 400 days. The gap list is pageable
-  (`gap_offset`, `gap_limit`, 200 per page), so a long window is bounded per
-  response and complete across pages.
+- Coverage accounting caps a window at **730 days** (`MAX_WINDOW_MS` in `coverage.py`), and
+  separately at `MAX_BUCKETS` samples implied by the window and the expected interval. The
+  bucket cap is the one that does the work: two years of hourly data is 17,520 buckets and
+  cheap, and two years of per-second data is refused with an error that names the aggregates
+  to read instead. The gap list is pageable (`gap_offset`, `gap_limit`, 200 per page), so a
+  long window is bounded per response and complete across pages.
+  **This entry said 400 days for a while, and it was wrong in a way worth recording:** 400
+  appears in a docstring as an example of a window that is too wide, and I read the example as
+  the limit. It is the second time a documented number in this file was wrong - after D1's
+  `require_scope` counts - and both times the number had been read rather than measured. The
+  release gate now compares the documented cap against the constant, so a changed limit cannot
+  leave a stale figure behind.
 - TLS ships ACME by default (`CAUCE_TLS_MODE` empty). A public deployment
   still needs a real DNS name pointing at the host.
 - Deep sleep is wired but **disabled by default**: turning it on requires
