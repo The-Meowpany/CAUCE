@@ -25,6 +25,8 @@
 #include "cauce/app/CommandExecutor.h"
 #include "cauce/core/NodeActuator.h"
 #include "cauce/app/Esp32ApiServer.h"
+#include "cauce/app/Esp32ChallengeSource.h"
+#include "cauce/app/NodeCertificateAuth.h"
 #include "cauce/app/Esp32CaptivePortal.h"
 #include "cauce/app/Esp32Ota.h"
 #include "cauce/app/Esp32OtaControl.h"
@@ -66,6 +68,12 @@ static cauce::app::ApiRouter* g_apiRouter = nullptr;
 static WebServer* g_webServer = nullptr;
 static cauce::app::Esp32ApiServer* g_apiServer = nullptr;
 static cauce::hal::Esp32HttpSyncTransport* g_syncTransport = nullptr;
+// Certificate authentication. The authenticator owns the credential; the bridge is what the
+// transport can call, and the challenge source is the only thing that speaks HTTP to the
+// central for it.
+static cauce::app::NodeAuthenticator* g_nodeAuth = nullptr;
+static cauce::app::NodeCertificateAuth* g_certAuth = nullptr;
+static cauce::app::Esp32ChallengeSource* g_challengeSource = nullptr;
 static cauce::app::SyncManager* g_syncManager = nullptr;
 static cauce::app::Esp32CaptivePortal* g_portal = nullptr;
 static cauce::hal::Esp32WifiController* g_netController = nullptr;
@@ -366,6 +374,41 @@ void setup() {
     g_syncManager->configureEndpoint(config.syncServerUrl, "");
     g_syncManager->setDeviceSecret(config.syncDeviceKey);
     g_syncManager->loadState();
+
+    // Certificate authentication, when a seed *and* a certificate are both present.
+    //
+    // Both are required and the test is deliberately conjunctive. A seed alone cannot be used -
+    // presenting a certificate header commits the central to certificate auth, and there is no
+    // certificate to present - so a half-provisioned node is reported and left on HMAC rather
+    // than half-migrated. The reverse (a certificate with no seed) is the same situation.
+    //
+    // A node with neither keeps the shared secret and is unaffected. That is the migration
+    // path: re-provision with a seed and a certificate, and the next sync upgrades itself.
+    const bool hasSeed = config.syncAuthSeedHex[0] != '\0';
+    const bool hasCert = config.syncCertificate[0] != '\0';
+    if (hasSeed != hasCert) {
+      g_logger->event(cauce::LogLevel::Warn,
+                      "NODE_AUTH_HALF_CONFIGURED falling back to the shared secret");
+    } else if (hasSeed && hasCert) {
+      uint8_t seed[32];
+      if (!cauce::decodeSeedHex(config.syncAuthSeedHex, seed, sizeof(seed))) {
+        // Unreachable: the parser refuses a malformed seed, so a config that loaded cannot
+        // hold one. Checked anyway because the failure mode if it were wrong is a node that
+        // signs with a key nobody knows, which fails as an invalid signature.
+        g_logger->event(cauce::LogLevel::Error,
+                        "NODE_AUTH_SEED_UNREADABLE falling back to the shared secret");
+      } else {
+        g_nodeAuth = new cauce::app::NodeAuthenticator();
+        g_nodeAuth->setCredential(seed, config.syncCertificate);
+        g_challengeSource = new cauce::app::Esp32ChallengeSource();
+        g_certAuth = new cauce::app::NodeCertificateAuth();
+        g_certAuth->setAuthenticator(g_nodeAuth);
+        g_certAuth->setChallengeSource(g_challengeSource);
+        g_syncTransport->setAuthHeaderSource(g_certAuth);
+        g_syncTransport->setNodeId(config.nodeId);
+        g_logger->event(cauce::LogLevel::Info, "NODE_AUTH_CERTIFICATE enabled");
+      }
+    }
   }
 
   // Downlink. The central keeps offering a command until it sees its receipt,
@@ -410,9 +453,26 @@ void setup() {
 // ignoring the result. The wrapper says the return value is deliberately discarded.
 g_otaManager->setFeedHook(&feedOtaWatchdog);
     if (config.syncDeviceKey[0] != '\0') {
+      // `otaManifestKey` when configured, `syncDeviceKey` otherwise.
+      //
+      // The fallback is what the previous version did unconditionally, and it is the coupling
+      // this field exists to remove: the secret that authorises a firmware image was the same
+      // secret every measurement arrived under. It is kept, because a node provisioned before
+      // this existed has nothing else, and failing closed here would strand every deployed node
+      // on its next update - trading a real exposure for a guaranteed outage.
+      //
+      // Reported once, loudly, because a deployment that has been authorising firmware with
+      // its data secret is exactly the one that needs to hear about it.
+      const char* manifestSecret =
+          config.otaManifestKey[0] != '\0' ? config.otaManifestKey : config.syncDeviceKey;
+      if (config.otaManifestKey[0] == '\0') {
+        g_logger->event(cauce::LogLevel::Warn,
+                        "OTA_KEY_SHARED_WITH_DATA_SECRET set ota_manifest_key to separate "
+                        "the update channel");
+      }
       uint8_t manifestKey[32];
-      cauce::sha256(reinterpret_cast<const uint8_t*>(config.syncDeviceKey),
-                    std::strlen(config.syncDeviceKey), manifestKey);
+      cauce::sha256(reinterpret_cast<const uint8_t*>(manifestSecret),
+                    std::strlen(manifestSecret), manifestKey);
       g_otaManager->setManifestKey(manifestKey);
     } else {
       // Said once, loudly, at boot. The manager will refuse every update with

@@ -239,6 +239,37 @@ canal cuyo contraparte identificó por nombre DNS. La autenticación servidor-a-
 el channel binding siguen necesitando que el firmware guarde un certificado en vez de una
 semilla.
 
+`NodeConfig` ya lleva la credencial — `sync_auth_seed`, 64 caracteres hexadecimales, y
+`sync_certificate`, guardada literal como JSON — y `main.cpp` la decodifica, construye el
+autenticador con `Esp32ChallengeSource` y entrega `NodeCertificateAuth` al transporte. La
+semilla se valida **al parsear**, y deliberadamente fuera de la tolerancia permisiva de
+`malformed > 3` del parser: una semilla de 62 caracteres es un error de aprovisionamiento, y
+aceptarla deja un nodo que arranca, aparenta estar bien configurado y falla toda autenticación
+como firma inválida — lo que señala al certificado y no a la línea de configuración que está
+mal. Un nodo con semilla pero sin certificado, o al revés, se informa una vez al arrancar y se
+deja en HMAC, porque no presentar certificado compromete al central con autenticación por
+certificado y no cae a nada.
+
+## Las actualizaciones de firmware las autoriza un secreto distinto del de los datos
+
+La firma del manifiesto se derivaba antes de `nodes.device_key`. Para un nodo HMAC esa clave es
+simétrica, así que autentica *como* ese nodo además de autenticarlo — y mientras también
+autorizaba firmware, comprometer el canal de datos comprometía el de actualización. Un nodo que
+hubiera robado una clave de dispositivo podía por tanto autorizar firmware.
+
+`nodes.manifest_key` es ahora una columna aparte con su propio campo de algoritmo, que se fija al
+aprovisionar y se valida con el mismo mínimo que la clave de datos; el firmware ganó
+`ota_manifest_key` en `NodeConfig` y lo prefiere. La derivación no cambia, así que separar un
+nodo es matter de poner una columna, sin cambios en el lado que verifica.
+
+**El fallback es deliberado y ruidoso.** Un nodo aprovisionado antes de que existiera la columna
+no tiene clave de actualización separada y sigue recibiendo una firma válida de su clave de
+datos, con un aviso en ambos lados. Fallar cerrado dejaría sin servicio a todos los nodos
+desplegados en su próxima actualización, lo que cambia una exposición real por una caída
+garantizada. Reprovisionar la clave de datos ya no borra la separación en silencio — que habría
+sido la peor versión de esta función: la columna existe, el operador la puso, y una rotación
+rutinaria quitó la protección que había añadido.
+
 Ambas mitades existen y están unidas. El lado del central es `node_auth.py`. El del
 dispositivo es `NodeAuthenticator` en `cauce_app` — pide el challenge, firma `sign_this` con
 la semilla Ed25519 del nodo y produce las cuatro cabeceras — más `NodeCertificateAuth`, que

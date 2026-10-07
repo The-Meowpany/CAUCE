@@ -9,6 +9,39 @@
 namespace cauce {
 namespace {
 
+// 32 bytes of seed as hex, plus the terminator.
+constexpr size_t kEd25519SeedHexChars = 64;
+
+// One hex digit as a value, or -1. Accepts either case: an operator typing a
+// seed by hand will not remember which case the generator printed.
+int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+  if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+  return -1;
+}
+
+// Copies `value` only when it is exactly `expectedLength` hex characters.
+//
+// Refusing a wrong-length or non-hex seed is the point. A 63-character seed is a
+// provisioning typo, and a copy-paste that mangles one character produces a seed
+// that is *valid* and belongs to nobody: the node would boot, sign challenges with a
+// key the central does not know, and fail as an invalid signature - which points at
+// the certificate rather than at the config line that is wrong.
+bool copyIfHexOfLength(const char* value, size_t expectedLength, char* out,
+                       size_t capacity) {
+  if (value == nullptr || out == nullptr) return false;
+  if (std::strlen(value) != expectedLength) return false;
+  for (size_t i = 0; i < expectedLength; ++i) {
+    const char c = value[i];
+    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                     (c >= 'A' && c <= 'F');
+    if (!hex) return false;
+  }
+  copyString(out, capacity, value);
+  return true;
+}
+
 struct Cursor {
   char* pos;
   size_t remaining;
@@ -109,6 +142,9 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("ntp_server=%s\n", config.ntpServer);
   c.write("sync_server_url=%s\n", config.syncServerUrl);
   c.write("sync_device_key=%s\n", config.syncDeviceKey);
+  c.write("sync_auth_seed=%s\n", config.syncAuthSeedHex);
+  c.write("sync_certificate=%s\n", config.syncCertificate);
+  c.write("ota_manifest_key=%s\n", config.otaManifestKey);
   c.write("ota_manifest_url=%s\n", config.otaManifestUrl);
   c.write("lora_enabled=%d\n", config.loraEnabled ? 1 : 0);
   c.write("lora_sync_interval_s=%lu\n",
@@ -131,11 +167,36 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   return true;
 }
 
+bool decodeSeedHex(const char* hex, uint8_t* out, size_t capacity) {
+  if (hex == nullptr || out == nullptr || capacity < kEd25519SeedHexChars / 2) return false;
+  if (std::strlen(hex) != kEd25519SeedHexChars) return false;
+
+  uint8_t decoded[kEd25519SeedHexChars / 2];
+  for (size_t i = 0; i < kEd25519SeedHexChars; i += 2) {
+    const int hi = hexNibble(hex[i]);
+    const int lo = hexNibble(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      // Nothing written. A caller that ignored the false would otherwise be
+      // authenticating with whatever was in the buffer, which on a first call
+      // is uninitialised stack.
+      return false;
+    }
+    decoded[i / 2] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  for (size_t i = 0; i < sizeof(decoded); ++i) {
+    out[i] = decoded[i];
+  }
+  return true;
+}
+
 bool parseConfig(const char* text, NodeConfig& out) {
   if (!text) return false;
   NodeConfig cfg{};
   bool sawAnyKey = false;
   int malformed = 0;
+  // A wrong credential fails the whole parse. See the assignment below for why this is not
+  // the shared `malformed` counter.
+  bool badCredentialLine = false;
 
   const char* cursor = text;
   while (*cursor != '\0') {
@@ -201,10 +262,33 @@ bool parseConfig(const char* text, NodeConfig& out) {
         copyString(cfg.ntpServer, sizeof(cfg.ntpServer), valueText);
       } else if (std::strcmp(key, "sync_server_url") == 0) {
         copyString(cfg.syncServerUrl, sizeof(cfg.syncServerUrl), valueText);
+      } else if (std::strcmp(key, "ota_manifest_key") == 0) {
+        // Not length-validated the way the Ed25519 seed is: an opaque shared secret rather
+        // than a fixed-width seed, with its length the operator's choice. The central
+        // enforces its own minimum when provisioning.
+        copyString(cfg.otaManifestKey, sizeof(cfg.otaManifestKey), valueText);
       } else if (std::strcmp(key, "ota_manifest_url") == 0) {
         copyString(cfg.otaManifestUrl, sizeof(cfg.otaManifestUrl), valueText);
       } else if (std::strcmp(key, "sync_device_key") == 0) {
         copyString(cfg.syncDeviceKey, sizeof(cfg.syncDeviceKey), valueText);
+      } else if (std::strcmp(key, "sync_auth_seed") == 0) {
+        // The hex is validated, not just copied. A 63-character seed is a
+        // provisioning typo, and accepting it here means the node boots,
+        // authenticator reports NotConfigured, and the operator sees a node
+        // that syncs with a fallback while its config file looks correct.
+        if (valueText[0] != '\0' &&
+            !copyIfHexOfLength(valueText, kEd25519SeedHexChars,
+                               cfg.syncAuthSeedHex, sizeof(cfg.syncAuthSeedHex))) {
+          // Its own flag rather than the shared `malformed` counter. That counter is
+          // deliberately forgiving - up to three bad lines still load, because a config
+          // written by a newer firmware should not brick an older one - and a bad
+          // credential is the one line that must *not* be forgiven. It leaves a node that
+          // boots looking correctly configured and fails every authentication as an invalid
+          // signature, which points at the certificate instead of at the config line.
+          badCredentialLine = true;
+        }
+      } else if (std::strcmp(key, "sync_certificate") == 0) {
+        copyString(cfg.syncCertificate, sizeof(cfg.syncCertificate), valueText);
       } else if (std::strcmp(key, "lora_enabled") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.loraEnabled = intValue != 0;
@@ -252,7 +336,7 @@ bool parseConfig(const char* text, NodeConfig& out) {
     if (linePtr != line) delete[] linePtr;
     cursor = eol ? eol + 1 : cursor + lineLen;
   }
-  if (!sawAnyKey || malformed > 3) return false;
+  if (!sawAnyKey || malformed > 3 || badCredentialLine) return false;
   out = cfg;
   return true;
 }

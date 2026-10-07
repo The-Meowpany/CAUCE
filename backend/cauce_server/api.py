@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import re
 import time
 from typing import Annotated
@@ -166,15 +167,44 @@ def provision_node(
     elif not isinstance(device_key, str) or len(device_key) < 16:
         raise HTTPException(status_code=422, detail="weak_device_key")
 
+    # The firmware-update key, optional and separate.
+    #
+    # Optional because a node provisioned before this existed has none, and requiring it would
+    # strand every deployed node at once. Absent means the manifest endpoint falls back to the
+    # data secret and logs that it did - which is the migration being visible rather than
+    # silent. Set it and the update channel is separated; nothing else about the node changes.
+    #
+    # Validated to the same standard as the data key, because the whole point is that this
+    # secret is as carefully chosen as that one. A short manifest key would be a weaker
+    # credential for the more dangerous capability.
+    manifest_key = payload.get("manifest_key")
+    if manifest_key is not None:
+        if not isinstance(manifest_key, str) or len(manifest_key) < 16:
+            raise HTTPException(status_code=422, detail="weak_manifest_key")
+        if manifest_key == device_key:
+            # Accepted, but only because refusing would break every node that was provisioned
+            # this way. Said once, loudly, because "separate" is the recommendation and this
+            # is the opposite of it.
+            logging.warning(
+                "provision: %s was given a manifest key equal to its device key; the "
+                "update channel is not separated from the data channel", node_id
+            )
+    manifest_algorithm = DEFAULT_ALGORITHM
+
     with transaction() as conn:
         conn.execute(
             """INSERT INTO nodes(node_id, device_key, device_key_algorithm,
+                                  manifest_key, manifest_key_algorithm,
                                   first_seen_utc_ms, last_seen_utc_ms)
-               VALUES(?,?,?,?,?)
+               VALUES(?,?,?,?,?,?,?)
                ON CONFLICT(node_id) DO UPDATE SET
                    device_key=excluded.device_key,
-                   device_key_algorithm=excluded.device_key_algorithm""",
-            (node_id, device_key, algorithm.name, int(time.time() * 1000),
+                   device_key_algorithm=excluded.device_key_algorithm,
+                   manifest_key=COALESCE(excluded.manifest_key, nodes.manifest_key),
+                   manifest_key_algorithm=COALESCE(
+                       excluded.manifest_key_algorithm, nodes.manifest_key_algorithm)""",
+            (node_id, device_key, algorithm.name,
+             manifest_key, manifest_algorithm, int(time.time() * 1000),
              int(time.time() * 1000)),
         )
 
@@ -311,7 +341,6 @@ def _authenticate_by_certificate(node_id_claim, certificate_b64, nonce,
     """
     import base64 as _b64
     import json as _json
-    import logging
 
     from . import certificates as certificates_mod
     from .node_auth import AuthError, verify_node_certificate_auth
@@ -377,7 +406,6 @@ x_cauce_node: str | None = Header(default=None),
                       (node_id_claim,))
         if rows_ and rows_[0]["device_key"]:
             device_key = rows_[0]["device_key"]
-        import logging
         logging.info(f"sync: node_id={node_id_claim}, device_key present={bool(device_key)}")
 
     if device_key and not isinstance(payload.get("frames"), list):
@@ -410,7 +438,6 @@ x_cauce_node: str | None = Header(default=None),
             if not header_ok or not provided_sig or not hmac.compare_digest(
                 provided_sig, expected_sig
             ):
-                import logging
                 logging.warning(f"sync: invalid signature for {node_id_claim}")
                 raise HTTPException(status_code=401, detail="invalid_signature")
     elif settings.sync_require_auth:
@@ -665,7 +692,9 @@ def ota_manifest(
         raise HTTPException(status_code=503, detail="ota_manifest_invalid")
     signature = None
     if node_id:
-        rows = query("SELECT device_key FROM nodes WHERE node_id=?", (node_id,))
+        rows = query(
+            "SELECT device_key, manifest_key FROM nodes WHERE node_id=?", (node_id,)
+        )
         if rows and rows[0]["device_key"]:
             # The canonical string and the key derivation must be byte-identical to
             # OtaManager::runCheck in the firmware, or the node rejects every manifest.
@@ -683,8 +712,22 @@ def ota_manifest(
             # alone would let a rewritten `sha256` field ride along under a signature that
             # still verifies.
             canonical = f"{version}|{sha256}|{url}|{total_size}"
-            manifest_key = hashlib.sha256(
-                rows[0]["device_key"].encode("utf-8")).digest()
+            # `manifest_key` when the node has one, `device_key` otherwise.
+            #
+            # The fallback is the whole reason the column exists: the two were once the same
+            # secret, so the credential that could authorise a firmware image was the
+            # credential data arrived under. It is logged rather than silent, because a
+            # deployment that has been silently signing firmware with its data secret is
+            # exactly the deployment that needs to hear about it. And the derivation is
+            # identical either way, so a node can be migrated by setting the column without
+            # touching the firmware that verifies the signature.
+            key_material = rows[0]["manifest_key"] or rows[0]["device_key"]
+            if not rows[0]["manifest_key"]:
+                logging.warning(
+                    "ota: signing %s with its shared data secret; set manifest_key to "
+                    "separate the update channel from the data channel", node_id
+                )
+            manifest_key = hashlib.sha256(key_material.encode("utf-8")).digest()
             signature = hmac.new(manifest_key, canonical.encode("utf-8"),
                                  hashlib.sha256).hexdigest()
     return {"version": version, "sha256": sha256, "url": url,

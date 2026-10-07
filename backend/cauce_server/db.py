@@ -364,6 +364,24 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE nodes ADD COLUMN revoked_at_utc_ms INTEGER")
     if "revoked_reason" not in cols:
         conn.execute("ALTER TABLE nodes ADD COLUMN revoked_reason TEXT")
+    if "manifest_key" not in cols:
+        # The key that authorises firmware updates, kept separate from the one that
+        # authenticates data.
+        #
+        # They were the same secret, which meant the credential that could authorise a firmware
+        # image was the credential every measurement arrived under. A node compromised - or an
+        # operator holding one device key, which is symmetric and therefore authenticates *as*
+        # that node - could sign a firmware image and the node would accept it. Compromise of
+        # the update channel should not follow from compromise of the data channel.
+        #
+        # NULL means "fall back to device_key", which is what every node provisioned before
+        # this column existed does. The fallback is reported, not silent: see the manifest
+        # endpoint, which logs when it signs with a shared secret.
+        conn.execute("ALTER TABLE nodes ADD COLUMN manifest_key TEXT")
+    if "manifest_key_algorithm" not in cols:
+        # Same reasoning as `device_key_algorithm`: stored rather than sent, so a request
+        # cannot relabel itself into whichever check is cheaper to pass.
+        conn.execute("ALTER TABLE nodes ADD COLUMN manifest_key_algorithm TEXT")
     # Certificates issued by the CA. The full body is stored as canonical JSON so the
     # signature can be re-checked later without reconstructing anything, and so the
     # certificate a node holds can be shown to an operator exactly as it was issued.

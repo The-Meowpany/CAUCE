@@ -1,4 +1,4 @@
-﻿# CAUCE Security — current posture
+# CAUCE Security — current posture
 
 What we actually do today, and what we openly don't.
 
@@ -207,6 +207,35 @@ Not mutual TLS. Caddy terminates TLS with one server certificate and the node's
 credential is an application-level header, so the node proves its identity over a
 channel whose peer it identified by DNS name. Server-to-client authentication and
 channel binding still require the firmware to hold a certificate rather than a seed.
+
+`NodeConfig` now carries the credential — `sync_auth_seed`, 64 hex characters, and
+`sync_certificate`, stored verbatim as JSON — and `main.cpp` decodes it, builds the authenticator
+with `Esp32ChallengeSource`, and hands `NodeCertificateAuth` to the transport. The seed is
+validated **at parse time**, and deliberately outside the parser's forgiving `malformed > 3`
+tolerance: a 62-character seed is a provisioning typo, and accepting it leaves a node that boots,
+looks correctly configured, and fails every authentication as an invalid signature — which points
+at the certificate rather than at the config line that is wrong. A node with a seed but no
+certificate, or the reverse, is reported once at boot and left on HMAC, because presenting no
+certificate commits the central to certificate authentication and falls back to nothing.
+
+## Firmware updates are authorised by a different secret than data is
+
+The manifest signature used to be derived from `nodes.device_key`. For an HMAC node that key is
+symmetric, so it authenticates *as* that node as well as for it — and while it also authorised
+firmware, compromising the data channel compromised the update channel. A node that had stolen
+one device key could therefore authorise firmware.
+
+`nodes.manifest_key` is now a separate column with its own algorithm field, set at provisioning
+and validated to the same minimum as the data key; the firmware gained `ota_manifest_key` in
+`NodeConfig` and prefers it. The derivation is unchanged, so separating a node is a matter of
+setting a column, with no change on the verifying side.
+
+**The fallback is deliberate and loud.** A node provisioned before the column existed has no
+separate update key and still receives a valid signature from its data key, with a warning on both
+sides. Failing closed would strand every deployed node on its next update, which trades a real
+exposure for a guaranteed outage. Re-provisioning the data key no longer silently wipes the
+separation — which would have been the worst version of this feature: the column exists, the
+operator set it, and a routine rotation removed the protection they had added.
 
 Both halves exist and are joined. The central side is `node_auth.py`. The device side is
 `NodeAuthenticator` in `cauce_app` — it fetches the challenge, signs `sign_this` with the

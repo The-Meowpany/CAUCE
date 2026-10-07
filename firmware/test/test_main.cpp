@@ -25,6 +25,8 @@ void registerNodeAuthWireTests();
 namespace cauce { namespace app { void registerSyncTransportAuthTests(); } }
 namespace cauce { void registerBootDiagnosticsTests(); }
 namespace cauce { namespace hal { void registerEsp32PeerLinkTests(); } }
+namespace cauce { void registerNodeCredentialTests(); }
+namespace cauce { void registerManifestKeyTests(); }
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -65,6 +67,8 @@ int main() {
   cauce::app::registerSyncTransportAuthTests();
   cauce::registerBootDiagnosticsTests();
   cauce::hal::registerEsp32PeerLinkTests();
+  cauce::registerNodeCredentialTests();
+  cauce::registerManifestKeyTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();
