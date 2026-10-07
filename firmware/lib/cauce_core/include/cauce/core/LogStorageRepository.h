@@ -31,6 +31,11 @@ class LogStorageRepository final : public IStorageRepository {
   size_t queryAfterSequence(uint32_t afterSeqExclusive, Measurement* out,
                             size_t capacity, QueryStats& stats) override;
   bool latest(Measurement& out) override;
+  // Newest-segment-first, with the caller's per-peer watermark as a short-circuit. `false` on a
+  // read failure rather than a guess: answering "not present" would make a merge store a
+  // duplicate of a record already held.
+  bool containsRecord(const char* nodeId, uint32_t sequence,
+                      uint32_t afterSequenceHint) override;
   uint32_t lastSequence() const override { return lastSequence_; }
   uint32_t totalRecords() const override { return totalRecords_; }
   uint32_t corruptedFrames() const override { return corruptedFrames_; }

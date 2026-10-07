@@ -222,6 +222,53 @@ size_t LogStorageRepository::query(uint64_t fromUtcMs, uint64_t toUtcMs,
   return stats.returned;
 }
 
+bool LogStorageRepository::containsRecord(const char* nodeId, uint32_t sequence,
+                                          uint32_t afterSequenceHint) {
+  if (nodeId == nullptr || nodeId[0] == '\0') return false;
+  // The watermark short-circuit. This is what makes the check affordable: the caller knows the
+  // highest sequence it merged from this peer, so anything at or below it cannot be new and
+  // costs nothing to answer. Without a per-peer watermark the scan below is O(store), which is
+  // the shape `Replication.h` warns against - and the reason this method takes a hint at all.
+  if (sequence <= afterSequenceHint) return false;
+
+  if (!opened_) open();
+
+  // Newest segment first. Oldest-first would scan the whole store before reaching the record
+  // most likely to be near the end, and a peer's recent records are exactly the ones a merge is
+  // most often asked about.
+  uint8_t buffer[kFrameSize];
+  for (int segIndex = static_cast<int>(segments_.size()) - 1; segIndex >= 0; --segIndex) {
+    const SegmentInfo& seg = segments_[static_cast<size_t>(segIndex)];
+    // Newest frame first *within* the segment too, and this is the bug the host suite caught:
+    // scanning a segment forwards from offset 0 reads the oldest frames first, so the
+    // "sequences are monotonic, stop once we are past the target" exit fires on sequence 1 and
+    // reports every later record as absent. The exit is only sound when the traversal is
+    // descending, which is why both directions are descending here.
+    size_t frames = seg.bytes / kFrameSize;
+    for (size_t back = frames; back > 0; --back) {
+      const size_t offset = (back - 1) * kFrameSize;
+      if (!fs_.readRange(seg.path, offset, buffer, kFrameSize)) {
+        // A read failure is not "not present". Answering false here would make the merge store
+        // a duplicate of a record that is already held, which is exactly the divergence the
+        // duplicate path exists to avoid.
+        return false;
+      }
+      Measurement decoded{};
+      if (decodeFrame(buffer, kFrameSize, decoded) != DecodeStatus::Ok) {
+        // Corrupt frame: keep going rather than stopping. The answer "not present" on a
+        // corrupt store is a guess, and a guess here becomes a duplicate row.
+        continue;
+      }
+      if (std::strcmp(decoded.nodeId, nodeId) != 0) continue;
+      if (decoded.sequence == sequence) return true;
+      // Same node, past the wanted sequence. Sequences are monotonic per node and this
+      // traversal is descending, so everything earlier in the scan is older still.
+      if (decoded.sequence < sequence) return false;
+    }
+  }
+  return false;
+}
+
 size_t LogStorageRepository::queryAfterSequence(uint32_t afterSeqExclusive,
                                                 Measurement* out, size_t capacity,
                                                 QueryStats& stats) {

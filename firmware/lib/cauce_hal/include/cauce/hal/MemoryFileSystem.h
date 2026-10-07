@@ -17,6 +17,7 @@ class MemoryFileSystem final : public IFileSystem {
   }
 
   bool appendBytes(const char* path, const uint8_t* data, size_t length) override {
+    if (failWrites_) return false;
     std::string key = normalize(path);
     ensureParent(key);
     auto it = files_.find(key);
@@ -27,13 +28,28 @@ class MemoryFileSystem final : public IFileSystem {
 
   bool readRange(const char* path, size_t offset, uint8_t* buffer,
                  size_t length) override {
+    // A test seam, and one that exists because a storage bug class is untestable without it:
+    // flash that stops answering mid-scan. Every storage method here has a branch for a read
+    // failure, and until this existed none of those branches had a test that could reach them.
+    if (failReads_) return false;
     auto it = files_.find(normalize(path));
     if (it == files_.end() || offset + length > it->second.size()) return false;
     std::memcpy(buffer, it->second.data() + offset, length);
     return true;
   }
 
+  // Makes every subsequent `readRange` fail, as a failing flash chip would.
+  //
+  // `writesStillSucceed` because the interesting case is a store that cannot be *read* while
+  // still being writable: a node appending happily onto records it can no longer verify is a
+  // real failure mode, and a seam that failed both would not produce it.
+  void failReads(bool shouldFail, bool writesStillSucceed = true) {
+    failReads_ = shouldFail;
+    failWrites_ = shouldFail && !writesStillSucceed;
+  }
+
   bool writeWholeFile(const char* path, const uint8_t* data, size_t length) override {
+    if (failWrites_) return false;
     std::string key = normalize(path);
     ensureParent(key);
     files_[key] = std::vector<uint8_t>(data, data + length);
@@ -60,6 +76,10 @@ class MemoryFileSystem final : public IFileSystem {
     }
     return count;
   }
+
+  // Test seams. See `failReads`.
+  bool failReads_{false};
+  bool failWrites_{false};
 
  private:
   static std::string normalize(const char* path) {

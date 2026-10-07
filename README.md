@@ -26,7 +26,7 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 408 host tests (Unity)
+pio test -e native          # 420 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
@@ -156,7 +156,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-408 firmware + 575 backend tests + ESP32 build + E2E = **983 automated
+420 firmware + 575 backend tests + ESP32 build + E2E = **995 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).
