@@ -166,12 +166,28 @@ not. It overrides any aspirational claim elsewhere.
   payload is 250 bytes and a record costs 59, so one frame carries **three** records
   - one node's minute of data at the default sampling interval. That is a link for a
   few nodes on one site, not a mesh.
-  **What is missing is the loop.** There is no `PeerExchange`: nothing polls
+  **What is missing is the loop, and it is not a small one.** There is no `PeerExchange`: nothing polls
   discovery, nothing drains a received frame into the merge, and `main.cpp`
   constructs no peer radio. The driver and the frame are now reachable from
   `main.cpp` by anyone who wants them - a real difference from a component nobody can
   call - but it is not a working peer link, and calling it one would be the false
   positive this file keeps recording.
+
+  Three specific things are missing, which is why it was not written as a twenty-line loop over
+  the pieces that already exist:
+
+  1. **A per-`(node_id, sequence)` presence check in the storage index.** `mergeRecords` takes
+     an `apply` callback whose entire job is to answer "does the replica already hold this?", and
+     `LogStorageRepository` can answer it only for the *local* node, via `lastSequence()`. The
+     alternative is a full scan per received record - thousands of records for every frame on a
+     512 KB store - and the merge's own docstring says why that shape is wrong: a shadow set
+     drifts from real storage and then reports merges as duplicates that were never stored.
+  2. **The variable conversion is lossy.** `ReplicatedRecord.variable` is a 24-character string
+     and `Measurement.variable` is a `Variable` enum, so a peer's record needs `parseVariable` and
+     an unrecognised name becomes `Unknown`. Acceptable, and worth saying out loud rather than
+     discovering it as a peer record that stored successfully and was then never queried.
+  3. **No per-peer watermark.** Reconnecting to a peer means knowing how far this node got with
+     *that* peer, which is per-peer state nothing currently stores.
 - A **signed downlink that has never been observed arriving**. The command path exists
   end to end and is host-tested; the bench now reaches the batch-building and
   credential-loading stages of the same path on real hardware, but no command has been
