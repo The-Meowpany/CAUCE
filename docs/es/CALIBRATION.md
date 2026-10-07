@@ -90,7 +90,7 @@ qué escala, offset, método y fecha. Cuando no se aplicó, la clave
 | Resolución | 0.01 °C / 0.01 %RH |
 | Exactitud del sensor | ±0.5 °C / ±3 %RH |
 | Exactitud del sistema | **Sin medir todavía** — la caja, el autocalentamiento y la exposición cuentan y ninguno está caracterizado |
-| Incertidumbre de calibración | **No existe todavía** — no hay proceso formal |
+| Incertidumbre de calibración | **Registrada, no trazable.** Los registros llevan una incertidumbre absoluta *y* su origen (\sensor_datasheet\, \co_location_spread\, …), y escala con la corrección aplicada. El proceso formal es \CALIBRATION_PROCEDURE.md\. Lo que falta es la trazabilidad metrológica: la referencia es otro nodo, y la cadena termina en la ficha de un sensor |
 
 Regla del proyecto: cualquier afirmación científica que necesite
 validación externa queda marcada como **pendiente**. No presentamos

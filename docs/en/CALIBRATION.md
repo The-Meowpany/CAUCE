@@ -88,7 +88,7 @@ the `calibrated` key is absent rather than identical to the raw value.
 | Resolution | 0.01 °C / 0.01 %RH |
 | Sensor accuracy | ±0.5 °C / ±3 %RH |
 | System accuracy | **Not measured yet** — enclosure, self-heating and exposure all count and none are characterized |
-| Calibration uncertainty | **Does not exist yet** — there is no formal process |
+| Calibration uncertainty | **Recorded, not traceable.** Records carry an absolute uncertainty *and* the kind it came from (`sensor_datasheet`, `co_location_spread`, …), and it scales with the applied correction. The formal process is `CALIBRATION_PROCEDURE.md`. What is still missing is metrological traceability: the reference is another node, and the chain ends at a sensor datasheet |
 
 Project rule: any scientific claim that needs outside validation stays
 marked **pending**. We don't present wishes as results. A calibration

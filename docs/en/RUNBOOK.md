@@ -174,11 +174,15 @@ The answer is bounded and the bounds are known:
 - **Ed25519 nodes.** The central stores only a public key, so reading the central's
   database does **not** let an attacker sign. Reading a node's flash **does**,
   because the seed is on the device.
-- **Both.** Firmware signing does not exist. A node will accept and run any image
-  that satisfies the manifest, so an attacker who can serve the manifest can run
-  their own code on the node.
+- **Both.** Firmware signing is mandatory and the update key is separate. A node with no
+  manifest key refuses **every** update with `OTA_NO_MANIFEST_KEY` rather than accepting what
+  it is handed, and the key that authorises firmware is `manifest_key`, not the data secret
+  (falling back to the data secret only for nodes provisioned before the split, which logs a
+  warning at issuance and on the node at boot). An attacker who can serve the manifest still
+  needs that key; someone who has read one node's flash gets its data identity but not its
+  update key, which is the whole reason the two were separated.
 
-Those three sentences are the actual security posture. Anything more precise than
+Those three paragraphs are the actual security posture. Anything more precise than
 them is not implemented.
 
 ---

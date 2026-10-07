@@ -184,12 +184,13 @@ Sin empezar, y es la fase que más se olvida hasta que urge.
 - [ ] **Test de fábrica.** Un comando que demuestre que una unidad funciona antes de
       salir: lectura de sensor, escritura en almacenamiento,join Wi-Fi, sync
       firmado, downlink firmado.
-- [ ] **Manifiesto de aprovisionamiento.** id de dispositivo, semilla, algoritmo y
-      sitio registrados una vez, en un archivo que se pueda releer en soporte.
-- [ ] **Revocación y rotación.** El central necesita poder retirar un dispositivo
-      comprometido. No existe todavía.
-
----
+- [x] **Manifiesto de aprovisionamiento.** id de dispositivo, semilla, clave de manifiesto,
+      algoritmo y sitio registrados una vez, en un archivo que se pueda releer en soporte.
+- [x] **Revocación y rotación.** `POST /v1/nodes/{id}/revoke` retira una
+      identidad y toda ruta autenticada llama antes a `require_not_retired`. La jubilación
+      no es borrado: las mediciones que aportó el nodo se quedan, porque un
+      dispositivo comprometido no convierte retroactivamente en falsas sus datos;
+      lo que se retira es el derecho a aportar más.
 
 ## Fase 5 — Ingeniería de release
 

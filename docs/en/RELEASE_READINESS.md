@@ -126,13 +126,22 @@ suite that leaks state will eventually pass for the wrong reason.
 
 ### 2.2 ESP-NOW / mDNS peer-to-peer — **decide before Phase 0 closes**
 
-`Replication.h` and `IPeerLink.h` exist and are tested; the transport does not.
+`Replication.h`, `IPeerLink.h` and the storage primitive the merge needs all exist and are
+tested. The ESP-NOW driver compiles for `esp32dev` and the on-air frame format is host-tested
+including every single-bit flip. **The exchange loop does not exist**: nothing polls discovery,
+nothing drains a frame into the merge, and `main.cpp` constructs no peer radio. mDNS is not
+compiled; discovery answers an announcement broadcast.
 
-- [ ] Ship it: `IPeerDiscovery` over mDNS, `IPeerRadio` over ESP-NOW, and the
-      exchange loop wired into `main.cpp`.
-- [ ] Or defer it. Deferring is defensible — the thesis itself argues a mesh is not
-      required — but then it must be deferred *explicitly*, not left as an
-      interface with no implementation.
+- [x] The driver and the frame format.
+- [x] `IStorageRepository::containsRecord`, so the merge can answer "already held?" for a
+      record from another node - the primitive that was missing and had been written down as a
+      blocker twice instead of being built.
+- [ ] The exchange loop in `main.cpp`, plus persisting the per-peer watermark that
+      `containsRecord`'s `afterSequenceHint` parameter expects to be given.
+- [ ] mDNS, if discovery is to span subnets rather than one radio channel.
+- [ ] Or defer the whole thing explicitly. Deferring is defensible - the thesis itself argues
+      a mesh is not required - but "deferred" has to be a decision, not a file that looks
+      finished.
 
 ### 2.3 Deep sleep enabled by default
 
@@ -173,10 +182,12 @@ Not started, and it is the phase most likely to be forgotten until it is urgent.
       node must be re-provisioned and the old identity revoked at the central.
 - [ ] **Factory test.** One command that proves a unit works before it ships:
       sensor read, storage write, Wi-Fi join, signed sync, signed downlink.
-- [ ] **Provisioning manifest.** Device id, seed, algorithm and site recorded once,
+- [x] Provisioning manifest. Device id, seed, algorithm, manifest key and site recorded once,
       in a file that can be re-read during support.
-- [ ] **Revocation and rotation.** The central needs a way to retire a compromised
-      device. It does not exist yet.
+- [x] Revocation and rotation. `POST /v1/nodes/{id}/revoke` retires an identity, and every
+      authenticated path calls `require_not_retired` first. Retirement is not deletion: the
+      measurements a node contributed stay, because a compromised device does not
+      retroactively make them false, and what is withdrawn is the right to contribute more.
 
 ---
 
