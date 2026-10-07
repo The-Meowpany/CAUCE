@@ -46,6 +46,10 @@ from pathlib import Path
 
 SEED_BYTES = 32
 PUBLIC_KEY_BYTES = 32
+# The firmware-update secret. Separate from the device key by design: while they were
+# the same value, a node holding one credential could sign firmware and forge its own
+# measurements, and compromising either compromised both.
+MANIFEST_KEY_BYTES = 32
 MIN_MANIFEST_PERMISSIONS = 0o600
 
 
@@ -72,7 +76,11 @@ def generate_identity(node_id: str) -> dict:
     if len(public) != PUBLIC_KEY_BYTES:
         raise SystemExit(f"unexpected public key length {len(public)}")
     return {"node_id": node_id, "algorithm": "ed25519",
-            "seed_hex": seed.hex(), "public_key_hex": public.hex()}
+            "seed_hex": seed.hex(), "public_key_hex": public.hex(),
+            # See `generate_manifest_key`, which is defined below this function and called
+            # from it - the ordering is harmless at import time and the alternative is
+            # splitting an eight-line function in two to satisfy a linter.
+            "manifest_key": generate_manifest_key()}
 
 
 def assert_unique_seeds(units: list[dict]) -> None:
@@ -83,12 +91,24 @@ def assert_unique_seeds(units: list[dict]) -> None:
     rather than assumed.
     """
     seen: dict[str, str] = {}
+    manifest_seen: dict[str, str] = {}
     for unit in units:
         seed = unit["seed_hex"]
         if seed in seen:
             raise SystemExit(
                 f"seed collision between {seen[seed]} and {unit['node_id']}")
         seen[seed] = unit["node_id"]
+        # The manifest key too, and it was missed by the first version of this function. A
+        # shared manifest key is much less bad than a shared seed - every node would still
+        # have to pass its certificate checks - but it means one node can authorise firmware
+        # for all of them, which is exactly the separation this key was added to create.
+        manifest_key = unit.get("manifest_key")
+        if manifest_key:
+            if manifest_key in manifest_seen:
+                raise SystemExit(
+                    f"manifest key collision between {manifest_seen[manifest_key]} "
+                    f"and {unit['node_id']}")
+            manifest_seen[manifest_key] = unit["node_id"]
 
 
 def _posix_modes_are_meaningful() -> bool:
@@ -147,18 +167,36 @@ def post_json(url: str, token: str, body: dict) -> dict:
         raise SystemExit(f"{url} unreachable: {exc.reason}") from exc
 
 
+def generate_manifest_key() -> str:
+    """A secret for authorising firmware, separate from the one that authenticates data.
+
+    Generated rather than derived, and this is the point of the whole function: while the
+    manifest key was the device key, a node that had stolen one device key could authorise
+    firmware as well as forge that node's measurements. Two independent secrets means
+    compromising one leaves the other intact.
+
+    32 bytes of `os.urandom`, hex-encoded. Not a derived value, because a derived one is
+    predictable from the thing it is meant to be independent of.
+    """
+    return os.urandom(MANIFEST_KEY_BYTES).hex()
+
+
 def provision_units(central: str, token: str, units: list[dict]) -> list[dict]:
     results = []
     for unit in units:
         # The central is given the public key. Handing it the seed would make the
         # central able to impersonate every node, which is the one thing a gateway
         # and a central must not be able to do.
-        result = post_json(
-            f"{central.rstrip('/')}/v1/provision", token,
-            {"node_id": unit["node_id"],
-             "device_key": unit["public_key_hex"],
-             "device_key_algorithm": unit["algorithm"]},
-        )
+        #
+        # The manifest key is the exception, and it is not the same exception: it is a
+        # shared secret the central *must* hold, because it has to sign manifests with it.
+        # What the central must never hold is anything that can forge a node's identity.
+        body = {"node_id": unit["node_id"],
+                "device_key": unit["public_key_hex"],
+                "device_key_algorithm": unit["algorithm"]}
+        if unit.get("manifest_key"):
+            body["manifest_key"] = unit["manifest_key"]
+        result = post_json(f"{central.rstrip('/')}/v1/provision", token, body)
         results.append({"node_id": unit["node_id"], "status": result.get("status"),
                         "reinstated": result.get("reinstated", False)})
     return results
@@ -189,6 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", help="write the manifest here (owner-only)")
     parser.add_argument("--manifest",
                         help="install the identities in an existing manifest")
+    parser.add_argument("--no-manifest-key", action="store_true",
+                        help="omit the separate firmware-update key; the node then "
+                             "signs manifests with its data secret, which is the "
+                             "coupling this key exists to remove")
     parser.add_argument("--retire", help="retire this node id and exit")
     parser.add_argument("--reason", default="retired by provisioning tool",
                         help="reason recorded with --retire")
@@ -216,7 +258,16 @@ def main(argv: list[str] | None = None) -> int:
 
     units = []
     for node_id in _default_node_ids(args.prefix, args.count):
-        units.append(generate_identity(node_id))
+        unit = generate_identity(node_id)
+        if args.no_manifest_key:
+            # An explicit opt-out rather than the default. The central then falls back to the
+            # data secret and logs that it did - which is the correct outcome for something the
+            # operator asked for. The manifest still has to be complete, so the field is
+            # dropped rather than left null: a null says "not generated", and a node configured
+            # from that manifest would silently take the fallback without anybody having chosen
+            # it.
+            unit.pop("manifest_key", None)
+        units.append(unit)
     assert_unique_seeds(units)
 
     if args.out:

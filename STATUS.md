@@ -144,10 +144,25 @@ not. It overrides any aspirational claim elsewhere.
   derivation is unchanged, so a node is separated by setting a column, with no firmware change
   on the verifying side. Re-provisioning the data key no longer silently wipes the separation,
   which would have been the worst version of the feature: the column exists, the operator set
-  it, and a routine rotation removed it. 5 firmware + 9 backend tests.
-- ESP-NOW / mDNS peer-to-peer. `Replication` and `IPeerLink` exist and are
-  tested; the radio and discovery do not. This is a Phase 0 decision, not an
-  oversight.
+  it, and a routine rotation removed it. `tools/provision.py` generates the key per unit
+  (`--no-manifest-key` to opt out) and refuses two units sharing one. 5 firmware + 9 backend
+  tests.
+- ESP-NOW peer-to-peer: the driver now exists and compiles for `esp32dev`, and the
+  on-air frame format is host-tested (17 tests: round trip, truncation at every
+  length, every single-bit flip, foreign magic, unknown version, a count that
+  contradicts the length, an unterminated node id). What no host test can reach is
+  the radio. Discovery answers an announcement broadcast rather than using **mDNS**,
+  which remains uncompiled.
+  The arithmetic is what limits this link, and the driver states it: an ESP-NOW
+  payload is 250 bytes and a record costs 59, so one frame carries **three** records
+  - one node's minute of data at the default sampling interval. That is a link for a
+  few nodes on one site, not a mesh.
+  **What is missing is the loop.** There is no `PeerExchange`: nothing polls
+  discovery, nothing drains a received frame into the merge, and `main.cpp`
+  constructs no peer radio. The driver and the frame are now reachable from
+  `main.cpp` by anyone who wants them - a real difference from a component nobody can
+  call - but it is not a working peer link, and calling it one would be the false
+  positive this file keeps recording.
 - A **signed downlink that has never been observed arriving**. The command path exists
   end to end and is host-tested; the bench now reaches the batch-building and
   credential-loading stages of the same path on real hardware, but no command has been
