@@ -26,7 +26,7 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 357 tests en host (Unity)
+pio test -e native          # 388 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
@@ -158,7 +158,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-357 firmware + 541 backend tests + build ESP32 + E2E = **898 chequeos
+388 firmware + 566 backend tests + build ESP32 + E2E = **954 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 

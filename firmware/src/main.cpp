@@ -2,6 +2,7 @@
 
 #include "cauce/app/DeepSleepController.h"
 #include "cauce/app/MeasurementScheduler.h"
+#include "cauce/core/BootDiagnostics.h"
 #include "cauce/core/DataExporter.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
@@ -37,6 +38,13 @@
 #include "cauce/core/ConfigManager.h"
 #include "cauce/core/SecurityUtils.h"
 #include "cauce/hal/Esp32Hal.h"
+
+// Survives a watchdog reset, not a power cycle - which is the right trade, because the
+// failure being chased is a reset loop and a power cycle is an operator action that produces a
+// clean boot anyway. 64 bytes rather than the 28 the record needs, so a future field fits
+// without a layout change that would invalidate every record already on a board.
+RTC_NOINIT_ATTR static uint8_t g_bootRtc[64] __attribute__((aligned(4)));
+static cauce::BootDiagnostics g_bootDiag{};
 
 static cauce::hal::Esp32LittleFs g_fs;
 static cauce::hal::Esp32Clock g_clock;
@@ -170,9 +178,10 @@ namespace {
 struct SetupStepScope {
   const char* name;
   uint32_t startedMs;
+  uint16_t ordinal;
 
   explicit SetupStepScope(const char* stepName)
-      : name(stepName), startedMs(millis()) {
+      : name(stepName), startedMs(millis()), ordinal(g_bootDiag.beginStep(stepName)) {
     esp_task_wdt_reset();
     Serial.printf("SETUP_STEP %s begin\n", name);
     Serial.flush();
@@ -180,6 +189,7 @@ struct SetupStepScope {
 
   ~SetupStepScope() {
     esp_task_wdt_reset();
+    g_bootDiag.endStep(ordinal, true);
     Serial.printf("SETUP_STEP %s end ms=%lu\n", name,
                   static_cast<unsigned long>(millis() - startedMs));
     Serial.flush();
@@ -187,6 +197,15 @@ struct SetupStepScope {
 };
 
 }  // namespace
+
+// The record's lines go to the serial log through the core's own reporter, so `cauce_core`
+// stays free of `Arduino.h`. `Serial.printf` would be one line here and an `#include
+// <Arduino.h>` in a portable component that has 13 host tests against it.
+void reportBootSerialLine(void* context, const char* line) {
+  (void)context;
+  Serial.printf("%s\n", line);
+  Serial.flush();
+}
 
 // Two levels of indirection because `##` suppresses expansion of its neighbour: pasting
 // __LINE__ directly yields a variable literally named cauce_step___LINE__ and every
@@ -196,11 +215,56 @@ struct SetupStepScope {
 #define CAUCE_SETUP_STEP(name) \
   SetupStepScope CAUCE_STEP_CONCAT(cauce_step_, __LINE__)(name)
 
+// The board's reset reason, in the form the record stores.
+//
+// `esp_reset_reason()` is called after the RTC read on purpose: reading it first would be fine
+// on this boot, but the value belongs to *this* boot while the record describes the previous
+// one, and reading it early is how the two get confused.
+static uint32_t currentResetReason() {
+  return static_cast<uint32_t>(esp_reset_reason());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
-  esp_task_wdt_init(30, true);
-  esp_task_wdt_add(NULL);
+
+  // Read the previous boot's record before anything else, and print it while the reason is
+  // still worth printing. Every line after this one competes for the same 115200 baud.
+  g_bootDiag.begin(g_bootRtc, sizeof(g_bootRtc), &reportBootSerialLine, nullptr);
+
+  // THE WATCHDOG, AND WHY THE RETURN VALUES ARE NOW CHECKED
+  //
+  // `esp_task_wdt_init(30, true)` does not do what it looks like. The Arduino core
+  // initialises the task watchdog itself in `initArduino()` and subscribes loopTask, so this
+  // call returns ESP_ERR_INVALID_STATE and the timeout stays at whatever the core set. There
+  // is no `esp_task_wdt_reconfigure` in the IDF this core ships (4.4), so the timeout cannot be
+  // changed afterwards at all - only `esp_task_wdt_deinit()` and `init()` again.
+  //
+  // The effective timeout is therefore CONFIG_ESP_TASK_WDT_TIMEOUT_S = 5 seconds, not 30. The
+  // original code assumed 30, which is the worst combination: it looked generous and was not.
+  //
+  // Deinit-then-init is the only way to actually get 30 seconds, and it is attempted - but a
+  // failure is *reported* rather than assumed away, because the difference between "the
+  // watchdog is 30 s" and "the watchdog is 5 s and we are running with 5 s" is exactly the
+  // kind of thing an operator needs to be told rather than to assume.
+  const esp_err_t wdtDeinit = esp_task_wdt_deinit();
+  esp_err_t wdtInit = wdtDeinit == ESP_OK ? esp_task_wdt_init(30, true) : ESP_FAIL;
+  esp_err_t wdtAdd = ESP_OK;
+  if (wdtInit == ESP_OK) {
+    wdtAdd = esp_task_wdt_add(NULL);
+    if (wdtAdd != ESP_OK) {
+      // Already subscribed by the core. That is fine: the subscription we want already exists,
+      // and re-adding it is what returned the error.
+      wdtAdd = ESP_OK;
+    }
+  }
+  Serial.printf(
+      "WDT init=%d add=%d timeout_s=%u note=%s\n",
+      static_cast<int>(wdtInit), static_cast<int>(wdtAdd), 30u,
+      (wdtInit == ESP_OK)
+          ? "30s applied"
+          : "FELL BACK to the core timeout (5s); a slow setup step can reset the board");
+  Serial.flush();
 
   {
     CAUCE_SETUP_STEP("mount_fs");
@@ -360,13 +424,117 @@ g_otaManager->setFeedHook(&feedOtaWatchdog);
   }
 
   esp_task_wdt_reset();
+  // Marks this boot as having finished, so the *next* boot will not report it as a re-attempt.
+  // Written after the log line: if the reset happens between the two, the honest record is
+  // "did not complete", and this boot genuinely did not.
+  g_bootDiag.complete(currentResetReason());
   g_logger->eventf(cauce::LogLevel::Info, "BOOT_COMPLETE",
                    "firmware=%s node=%s api=80", cauce::Versions::kFirmware,
                    config.nodeId);
 }
 
+// A factory check reachable from a serial monitor while the node is already running.
+//
+// Why this exists at all, given `bench_main.cpp` already has a self-test: the failing case is
+// a board that *will not boot*. A separate firmware for the factory means the factory needs a
+// second flash step and a second bootloader state, and the checks a line operator wants -
+// does flash work, does the config round-trip, does storage survive a reopen - are all
+// reachable from a node that booted. What genuinely needs the bench image is the sensor, the
+// radio and the signed sync, and those are the ones that stay there.
+//
+// Deliberately not free-running: waiting for a character costs nothing and printing 2000
+// records nobody asked for costs the watchdog's whole margin on a board that is also trying to
+// serve HTTP.
+void maybeRunSerialFactoryCheck() {
+  if (Serial.available() <= 0) return;
+  const char c = static_cast<char>(Serial.read());
+  if (c != 't') return;
+
+  Serial.println("\n=== CAUCE factory check ===");
+  int failures = 0;
+  int skipped = 0;
+  char detail[96];
+
+  const auto say = [&](const char* what, bool ok, const char* text) {
+    Serial.printf("%-30s %s  %s\n", what, ok ? "PASS" : "FAIL", text);
+    if (!ok) ++failures;
+  };
+  const auto skip = [&](const char* what, const char* why) {
+    Serial.printf("%-30s %s  %s\n", what, "SKIP", why);
+    ++skipped;
+  };
+
+  // The sensor is asked for here and not deferred to the bench image, because a unit with a
+  // dead BME280 is the single most common field failure and it is one I2C transaction.
+  CAUCE_SETUP_STEP("factory_sensor");
+  {
+    cauce::hal::Esp32WireBus bus(21, 22, 100000);
+    bus.begin();
+    cauce::drivers::Bme280Driver bme(bus, g_clock, "BME280-FACTORY");
+    const bool began = bme.begin();
+    cauce::drivers::Reading reading;
+    const bool read = bme.read(cauce::Variable::AirTemperature, reading);
+    // An absent bus reports a clean read of zero, and "0.00" on a line screen reads like a
+    // real number. The plausibility bound is in the assertion rather than left to the operator.
+    const bool plausible = reading.value > -40.0f && reading.value < 85.0f;
+    std::snprintf(detail, sizeof(detail), "begin=%d status=%d value=%.2f",
+                  began ? 1 : 0, static_cast<int>(reading.status),
+                  static_cast<double>(reading.value));
+    say("sensor read", began && read && plausible, detail);
+  }
+
+  CAUCE_SETUP_STEP("factory_config");
+  {
+    cauce::NodeConfig probe;
+    cauce::ConfigManager reader(g_fs, "/config/cauce.conf");
+    const auto status = reader.load(probe);
+    std::snprintf(detail, sizeof(detail), "status=%d node=%s", static_cast<int>(status),
+                  probe.nodeId);
+    if (probe.syncDeviceKey[0] == '\0') {
+      skip("provisioned", "no sync_device_key");
+    } else {
+      say("provisioned", status == cauce::ConfigLoadStatus::Loaded, detail);
+    }
+  }
+
+  CAUCE_SETUP_STEP("factory_storage");
+  {
+    // Its own directory. Writing into /data would interleave with real measurements and make a
+    // failing check ambiguous about what it damaged.
+    cauce::LogStorageRepository store(g_fs, "/factory_check", 64u * 1024u);
+    const bool opened = store.open();
+    cauce::Measurement record{};
+    std::snprintf(record.nodeId, sizeof(record.nodeId), "FACTORY-CHECK");
+    record.sequence = 1;
+    record.timestampUtcMs = 1787356800000ULL;
+    record.value = 21.5f;
+    record.variable = cauce::Variable::AirTemperature;
+    record.quality = cauce::Quality::Valid;
+    const bool appended = opened && store.append(record);
+
+    // Reopening is the part that matters: it is what a power cycle does, and it is where the
+    // checkpoint and the scan run, which is where the stack overflow lived.
+    cauce::LogStorageRepository reopened(g_fs, "/factory_check", 64u * 1024u);
+    const bool okReopen = reopened.open();
+    cauce::Measurement first{};
+    cauce::QueryStats stats{};
+    const uint32_t found = reopened.query(0, UINT64_MAX, 0, &first, 1, stats);
+    std::snprintf(detail, sizeof(detail), "records=%u value=%.2f",
+                  static_cast<unsigned>(reopened.totalRecords()),
+                  static_cast<double>(first.value));
+    say("storage round trip", appended && okReopen && found == 1 &&
+                                first.value == record.value,
+        detail);
+  }
+
+  Serial.printf("\nFACTORY_RESULT %s failures=%d skipped=%d\n",
+                failures == 0 ? "PASS" : "FAIL", failures, skipped);
+  Serial.flush();
+}
+
 void loop() {
   esp_task_wdt_reset();
+  maybeRunSerialFactoryCheck();
   // Downlink actuation, applied at the top of the loop rather than inside the
   // handler. The command usually arrives in the same batch as the sync response,
   // so a change made during ingestion would be racing the code that reads it.

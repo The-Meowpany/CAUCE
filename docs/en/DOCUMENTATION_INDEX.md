@@ -19,6 +19,9 @@ but paper is patient.
 | [BACKEND.md](BACKEND.md) | Central: endpoints, ingestion guarantees, limits | Stable |
 | [SECURITY.md](SECURITY.md) | What we do, what we openly don't | Stable |
 | [CALIBRATION.md](CALIBRATION.md) | Offset/scale model, honest limits, co-location plan | Model defined, runtime pending |
+| [CALIBRATION_PROCEDURE.md](CALIBRATION_PROCEDURE.md) | The field procedure: co-location, acceptance thresholds, when to re-calibrate | Complete, English only |
+| [RELEASE_ENGINEERING.md](RELEASE_ENGINEERING.md) | What the gate proves, what it does not, and the versioning policy | Complete, English only |
+| [..\..\backend\tools\pki.py](../backend/tools/pki.py) | X.509 issuance for the central's own TLS. Not for node identity | Complete, tested |
 | [OTA.md](OTA.md) | Decision FSM, anti-brick rules, manifest contract | Decision shipped, flashing pending |
 | [DASHBOARD.md](DASHBOARD.md) | Local SPA + captive portal, and why it's dependency-free | Stable |
 | [BENCH_PLAN.md](BENCH_PLAN.md) | B1–B5 physical validation with exit criteria | Plan, not executed |

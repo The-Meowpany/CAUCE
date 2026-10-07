@@ -23,6 +23,8 @@ void registerOtaRollbackTests();
 void registerNodeAuthTests();
 void registerNodeAuthWireTests();
 namespace cauce { namespace app { void registerSyncTransportAuthTests(); } }
+namespace cauce { void registerBootDiagnosticsTests(); }
+namespace cauce { namespace hal { void registerEsp32PeerLinkTests(); } }
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -35,6 +37,8 @@ void registerTextBufferTests();
 void registerSuiteIsolationTests();
 void printIsolationReport();
 unsigned isolationClashCount();
+void TEST_SUITE_MUTATES(const char* suite, const char* what);
+void TEST_SUITE_CLAIMS_DIRECTORY(const char* suite, const char* directory);
 
 int main() {
   UNITY_BEGIN();
@@ -59,6 +63,8 @@ int main() {
   registerNodeAuthTests();
   registerNodeAuthWireTests();
   cauce::app::registerSyncTransportAuthTests();
+  cauce::registerBootDiagnosticsTests();
+  cauce::hal::registerEsp32PeerLinkTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();
@@ -69,6 +75,14 @@ int main() {
   registerSx1276Tests();
   registerTextBufferTests();
   registerSuiteIsolationTests();
+  // Declared here rather than inside each suite's own register*Tests(), because the point is
+  // that the declaration is visible *before* any suite runs: a reader of the run order sees
+  // every piece of shared state the whole binary touches, not just the ones whose author
+  // remembered. STATUS.md claimed these were adopted while nothing called the function; the
+  // claim was true the moment this line was added and false the moment before it.
+  TEST_SUITE_MUTATES("test_commands.cpp", "g_calls, g_lastPayload");
+  TEST_SUITE_MUTATES("test_ota.cpp", "g_feedCalls, g_feedsBeforeFetch, g_feedsBeforeOpen");
+  TEST_SUITE_MUTATES("test_sync.cpp", "g_downlinkCalls, g_downlinkDetail");
   printIsolationReport();
   // A declared directory clash means two suites share a resource and run order
   // decides which one sees the other's leftovers. Reported above, failed here,

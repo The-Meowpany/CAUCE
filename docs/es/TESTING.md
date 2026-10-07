@@ -4,7 +4,7 @@
 
 ```powershell
 cd firmware
-pio test -e native          # 357 tests en PC (Unity)
+pio test -e native          # 388 tests en PC (Unity)
 pio run -e native           # compila el demo de simulación en host
 pio run -e esp32dev         # compila el firmware objetivo
 ```

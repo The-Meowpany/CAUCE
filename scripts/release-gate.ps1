@@ -304,9 +304,18 @@ Step "documentation"
 # mentioned - which is the drift this check exists to catch, applied to itself.
 $en = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "OTA.md", "SYNC.md", "API.md", "BACKEND.md", "DATA_MODEL.md",
-    "ARCHITECTURE.md", "CALIBRATION.md", "DEPLOYMENT.md", "HARDWARE.md",
+    "ARCHITECTURE.md", "CALIBRATION.md", "CALIBRATION_PROCEDURE.md",
+    "RELEASE_ENGINEERING.md", "DEPLOYMENT.md", "HARDWARE.md",
     "TESTING.md", "DASHBOARD.md", "LEGAL.md", "PILOT_SPEC.md", "I18N.md",
     "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md", "RUNBOOK.md")
+# CALIBRATION_PROCEDURE.md and RELEASE_ENGINEERING.md are deliberately absent from the Spanish
+# list. They are English-only on purpose, and the reason is worth recording: a Spanish copy of
+# RELEASE_ENGINEERING.md was written by machine-replacing the headings and left the body in
+# English, which is a document that looks translated and is not. Shipping that is worse than
+# shipping nothing, so the file was deleted and the gap recorded here instead. The per-language
+# comparison below is per-directory, so an English-only document needs no Spanish counterpart -
+# which is also the honest reading of "the same document in both languages": same subject,
+# not necessarily same file.
 $es = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "API.md", "ARCHITECTURE.md", "BACKEND.md", "DATA_MODEL.md",
     "CALIBRATION.md", "DEPLOYMENT.md", "DASHBOARD.md", "HARDWARE.md",

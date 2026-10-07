@@ -28,12 +28,16 @@
 // finding. The first suite that gets a real shared directory claims it here.
 void TEST_SUITE_CLAIMS_DIRECTORY(const char* suite, const char* directory);
 
+
 // Declares process-wide state this suite mutates, so a reader can see what it touched and
 // so two suites touching the same state stand out side by side in the end-of-run report.
+//
+// Called from `test_main.cpp` rather than from inside each suite. That is a deliberate
+// reversal: the earlier arrangement had the suites declare their own state, which is tidier
+// and less discoverable - a reader looking at the run order saw nothing. Declaring all of it
+// in one place means the shared state of a twenty-eight-suite single binary can be read off
+// one screen, which is the only property that makes this worth having.
 void TEST_SUITE_MUTATES(const char* suite, const char* what);
-
-// Prints what every suite declared. Called once, after the last suite has run.
-void printIsolationReport();
 
 // Directory clashes declared so far. Non-zero fails the run; see test_main.cpp.
 unsigned isolationClashCount();
