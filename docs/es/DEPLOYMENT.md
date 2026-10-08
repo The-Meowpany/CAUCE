@@ -32,7 +32,15 @@ Lo que establece:
 | `WORKDIR /app` más las capas `COPY` producen un sistema servible | sí |
 | el `CMD` declarado responde `GET /healthz` por HTTP real | 200, versión 0.1.0 |
 | las escrituras se rechazan sin `CAUCE_API_TOKEN` | 503 |
-| la suite del backend pasa **dentro de la imagen** | 502 pasan |
+| la suite del backend pasa **dentro de la imagen** | 577 passed |
+| la suite del backend pasa en el host | 575 passed, 2 skipped |
+
+Los dos recuentos no son una discrepancia. `tests/test_pki.py` y
+`tests/test_provisioning_tool.py` tienen cada uno un caso que comprueba los modos de
+fichero POSIX, y esos casos se omiten en Windows en lugar de fingir que pasan. Dentro
+de la imagen Linux se ejecutan, y eso son 577. Una ejecución en host que informara de
+577 significaría que las comprobaciones de modo se habían omitido en silencio, así que
+la diferencia es justamente la razón de ejecutar ambos.
 | dos builds del mismo árbol producen un mismo ID de imagen | idénticos |
 
 Podman en lugar de Docker porque no necesita demonio ni elevación, así que esto puede correr
@@ -71,7 +79,7 @@ Backend:
 ```powershell
 cd backend
 pip install --require-hashes -r requirements.lock
-python -m pytest tests -q # esperado 540 passed
+python -m pytest tests -q # esperado: 575 passed, 2 skipped (los dos casos de modo POSIX)
 ```
 
 Integración nodo↔servidor:

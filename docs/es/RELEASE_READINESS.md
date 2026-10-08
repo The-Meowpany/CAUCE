@@ -124,22 +124,46 @@ equivocado.
 
 ### 2.1 Radio LoRa y link budget — **obligatorio si LoRa se entrega**
 
-- [ ] Driver SX1276 detrás de la interfaz `ILoRaRadio` ya probada.
-- [ ] Link budget escrito: factor de署ctamiento, ancho de banda, payload, airtime
-      por frame, duty cycle, y el peor caso de nodos por gateway.
-- [ ] Medido, no calculado: RSSI, SNR, tasa de error de paquete a distancia.
-- [ ] Regulatorio: límites de duty cycle y certificación de banda para la región de
-      despliegue (`docs/en/LEGAL.md`).
+- [x] Driver SX1276 detrás de las interfaces probadas `IRadioControl`/`ISpiBus`, probado en host, y
+      construido en `main.cpp` detrás de `lora_enabled` con la región mapeada por nombre.
+- [ ] Impulsar el sync desde `loop()`. `g_loraSync` se construye y se configura en `setup()`
+      pero nunca se ejecuta, así que el transporte existe y nada lo llama - el mismo hueco que
+      2.2, y la razón por la que `radioUp` solo se informa en lugar de ejercitarse.
+- [ ] Link budget escrito: factor de expansión, ancho de banda, carga útil, tiempo en aire por
+      trama, ciclo de trabajo, y el peor número de nodos por gateway.
+- [ ] Medido, no calculado: RSSI, SNR, tasa de error de paquetes en distancia.
+- [ ] Regulatorio: límites de ciclo de trabajo y certificación de banda para la región de
+      despliegue (`docs/en/LEGAL.md`). `EU433` se rechaza en lugar de mapear a un valor por
+      defecto, porque el driver no tiene frecuencias que ofrecer para ella.
 
 ### 2.2 ESP-NOW / mDNS punto a punto — **decidir antes de cerrar la Fase 0**
 
-`Replication.h` e `IPeerLink.h` existen y están probados; el transporte no.
+`Replication.h`, `IPeerLink.h` y la primitiva de almacenamiento que necesita la mezcla existen y
+están probados. `Esp32PeerExchange` implementa la interfaz `PeerExchange` con 25 tests de host, y
+`PeerWatermarks` persiste una marca de agua acotada por nodo. `main.cpp` construye la radio, el
+descubrimiento y el intercambio detrás de `peer_enabled` y `peer_channel`, y el formato de frame
+en el aire está probado en host incluido cada volteo de un solo bit.
 
-- [ ] Entregarlo: `IPeerDiscovery` sobre mDNS, `IPeerRadio` sobre ESP-NOW, y el
-      bucle de intercambio cableado en `main.cpp`.
-- [ ] O diferirlo. Diferir es defendible — la propia tesis argumenta que no hace
-      falta mesh — pero entonces se difiere *explícitamente*, no se deja como una
-      interfaz sin implementación.
+**Todavía no intercambia nada, y conviene decir el hueco con precisión** en lugar de redondearlo
+a «conectado»: `loop()` nunca llama al intercambio, y `setLocalRecords()` no se llama nunca, así
+que aunque se llamara no habría nada que ofrecer. El único `poll(nullptr, 0)` de `setup()` drena
+cero bytes. La lógica está probada contra fakes; nada la planifica. mDNS no se compila; el
+descubrimiento responde a un anuncio por difusión.
+
+- [x] El driver y el formato de frame.
+- [x] `IStorageRepository::containsRecord`, para que la mezcla pueda responder «¿ya lo tengo?» a
+      un registro de otro nodo - la primitiva que faltaba y se había apuntado como bloqueo dos
+      veces en lugar de construirse.
+- [x] `Esp32PeerExchange` y `PeerWatermarks`, probados en host contra fakes.
+- [ ] Impulsar el intercambio desde `loop()`: sondear el descubrimiento hacia el intercambio por
+      cada nodo descubierto, y alimentar `setLocalRecords()` desde el almacén. Hasta que existan
+      ambas mitades, el subsistema está construido e inactivo.
+- [ ] mDNS, si el descubrimiento debe abarcar subredes en lugar de un canal de radio.
+- [ ] Entregarlo del todo: `IPeerDiscovery` sobre mDNS e `IPeerRadio` sobre ESP-NOW, para que el
+      descubrimiento abarque subredes en vez de un solo canal.
+- [ ] O diferirlo. Diferir es defendible -la propia tesis argumenta que no hace falta una malla-,
+      pero entonces se difiere *explícitamente*, no se deja como una interfaz sin implementación.
+
 
 ### 2.3 Deep sleep activo por defecto
 

@@ -117,27 +117,41 @@ suite that leaks state will eventually pass for the wrong reason.
 
 ### 2.1 LoRa radio and link budget — **required if LoRa ships**
 
-- [ ] SX1276 driver behind the tested `ILoRaRadio` interface.
+- [x] SX1276 driver behind the tested `IRadioControl`/`ISpiBus` interfaces, host-tested, and
+      constructed in `main.cpp` behind `lora_enabled` with the region mapped by name.
+- [ ] Drive the sync from `loop()`. `g_loraSync` is constructed and configured in `setup()`
+      but never ticked, so the transport exists and nothing calls it - the same gap as 2.2,
+      and the reason `radioUp` is only reported rather than exercised.
 - [ ] Link budget written out: spreading factor, bandwidth, payload, airtime per
       frame, duty cycle, and the worst-case number of nodes per gateway.
 - [ ] Measured, not calculated: RSSI, SNR, packet error rate at range.
 - [ ] Regulatory: duty-cycle limits and band certification for the deployment
-      region (`docs/en/LEGAL.md`).
+      region (`docs/en/LEGAL.md`). `EU433` is refused rather than mapped to a default,
+      because the driver has no frequencies to offer for it.
+
 
 ### 2.2 ESP-NOW / mDNS peer-to-peer — **decide before Phase 0 closes**
 
 `Replication.h`, `IPeerLink.h` and the storage primitive the merge needs all exist and are
-tested. The ESP-NOW driver compiles for `esp32dev` and the on-air frame format is host-tested
-including every single-bit flip. **The exchange loop does not exist**: nothing polls discovery,
-nothing drains a frame into the merge, and `main.cpp` constructs no peer radio. mDNS is not
+tested. `Esp32PeerExchange` implements the `PeerExchange` interface with 25 host tests, and
+`PeerWatermarks` persists a bounded per-peer high-water mark. `main.cpp` constructs the radio,
+the discovery and the exchange behind `peer_enabled` and `peer_channel`, and the on-air frame
+format is host-tested including every single-bit flip.
+
+**It still exchanges nothing, and the gap is worth stating precisely** rather than rounding
+down to "wired": `loop()` never calls the exchange, and `setLocalRecords()` is never called at
+all, so even if it did there would be nothing to offer. The one `poll(nullptr, 0)` in `setup()`
+drains zero bytes. The logic is tested against fakes; nothing schedules it. mDNS is not
 compiled; discovery answers an announcement broadcast.
 
 - [x] The driver and the frame format.
 - [x] `IStorageRepository::containsRecord`, so the merge can answer "already held?" for a
       record from another node - the primitive that was missing and had been written down as a
       blocker twice instead of being built.
-- [ ] The exchange loop in `main.cpp`, plus persisting the per-peer watermark that
-      `containsRecord`'s `afterSequenceHint` parameter expects to be given.
+- [x] `Esp32PeerExchange` and `PeerWatermarks`, host-tested against fakes.
+- [ ] Drive the exchange from `loop()`: poll discovery into the exchange per discovered peer,
+      and feed `setLocalRecords()` from the store. Until both halves exist, the subsystem is
+      constructed and idle.
 - [ ] mDNS, if discovery is to span subnets rather than one radio channel.
 - [ ] Or defer the whole thing explicitly. Deferring is defensible - the thesis itself argues
       a mesh is not required - but "deferred" has to be a decision, not a file that looks

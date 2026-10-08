@@ -181,6 +181,37 @@ con alta resolución sí podría. Donde el propio dispositivo deba considerarse 
 usar una biblioteca de tiempo constante.
 
 
+### El nodo vuelve a comprobar el certificado por su cuenta
+
+El certificado llega al nodo dentro de `NodeConfig`, lo que significa que el nodo está
+confiando en un documento que ha venido por el mismo transporte que todo lo demás. Así que el
+firmware no se lo cree: `CertificateVerifier` reconstruye el cuerpo canónico, verifica la firma
+de la CA contra una clave pública de CA fijada en `NodeConfig.ca_public_key_hex`, y comprueba que
+el `node_id` del certificado es el que el nodo cree que tiene, y que `not_before`/`not_after`
+abarcan la hora UTC actual.
+
+Dos detalles que son el punto entero:
+
+- **La clave de la CA está fijada en configuración, no se lee del certificado.** Un verificador
+  que toma la clave de la CA de aquello que está verificando no verifica nada. Fijarla es lo que
+  hace que en el nodo se cumpla también la propiedad del verificador offline.
+- **Se compara la identidad propia del nodo, no solo la firma.** Una firma válida de la CA sobre
+  el certificado de *otro* nodo es un documento bien formado que pertenece a alguien más.
+
+Lo que sigue sin hacer: no consulta al central, así que no puede ver revocaciones. Un
+certificado retirado en el central todavía verifica en un nodo al que no se le ha comunicado.
+Esa es la mitad pendiente de la retirada de dispositivos, y por eso importa el fallback del
+transporte: sin `ca_public_key_hex` configurado, el nodo cae al esquema HMAC, que *sí* se
+comprueba contra el estado del central en cada petición.
+
+El manejo de buffers aquí es del tipo que hace útil a un analizador estático. Los campos del
+certificado se copian a un buffer fijo de 512 bytes, y los ayudantes de append rechazan en
+lugar de calcular cuando un valor no cabría: un `snprintf` que devuelve la longitud que
+*habría* escrito hace crecer el desplazamiento más allá de la capacidad, y `capacity - offset`
+se desborda como `size_t`. Un buffer más grande no lo habría arreglado; el bug era la
+aritmética. La comprobación que lo detecta es la de CodeQL, porque un test de host solo puede
+afirmar que la verificación falló, nunca que nada fuera del buffer se tocara.
+
 ### Un nodo demuestra posesión en vez de guardar un secreto
 
 Para un nodo aprovisionado con una clave Ed25519, `/v1/sync` puede autenticarlo por

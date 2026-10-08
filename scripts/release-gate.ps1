@@ -308,21 +308,45 @@ $en = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "RELEASE_ENGINEERING.md", "DEPLOYMENT.md", "HARDWARE.md",
     "TESTING.md", "DASHBOARD.md", "LEGAL.md", "PILOT_SPEC.md", "I18N.md",
     "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md", "RUNBOOK.md")
-# CALIBRATION_PROCEDURE.md and RELEASE_ENGINEERING.md are deliberately absent from the Spanish
-# list. They are English-only on purpose, and the reason is worth recording: a Spanish copy of
-# RELEASE_ENGINEERING.md was written by machine-replacing the headings and left the body in
-# English, which is a document that looks translated and is not. Shipping that is worse than
-# shipping nothing, so the file was deleted and the gap recorded here instead. The per-language
-# comparison below is per-directory, so an English-only document needs no Spanish counterpart -
-# which is also the honest reading of "the same document in both languages": same subject,
-# not necessarily same file.
+# The Spanish list now matches the English one file for file. It did not, and the reason is
+# worth recording because the gate did not notice: CALIBRATION_PROCEDURE.md and
+# RELEASE_ENGINEERING.md were English-only, and the check compared each hand-maintained list
+# against its own directory rather than against the other language. Both lists were internally
+# consistent, so two untranslated documents passed as fully translated.
+#
+# The earlier Spanish copies were not hand-written. They were produced by machine-replacing the
+# headings, which left the body in English - a document that looks translated and is not, which
+# is worse than shipping nothing, so those files were deleted. The translations now in docs/es
+# were written as prose, and the parity check below is what stops the gap reopening: a new
+# English-only document now has to be added to $englishOnly to pass, which makes the decision
+# explicit instead of leaving it to whoever next edits a list.
 $es = @("RELEASE_READINESS.md", "ROADMAP.md", "BENCH_PLAN.md", "SECURITY.md",
     "API.md", "ARCHITECTURE.md", "BACKEND.md", "DATA_MODEL.md",
-    "CALIBRATION.md", "DEPLOYMENT.md", "DASHBOARD.md", "HARDWARE.md",
-    "I18N.md", "LEGAL.md", "OTA.md", "PILOT_SPEC.md", "SYNC.md", "TESTING.md",
+    "CALIBRATION.md", "CALIBRATION_PROCEDURE.md", "DEPLOYMENT.md", "DASHBOARD.md",
+    "HARDWARE.md", "I18N.md", "LEGAL.md", "OTA.md", "PILOT_SPEC.md",
+    "RELEASE_ENGINEERING.md", "SYNC.md", "TESTING.md",
     "DOMAIN_GLOSSARY.md", "DOCUMENTATION_INDEX.md", "RUNBOOK.md")
+
+# An English-only document is allowed, but only by being named here. The alternative - checking
+# each language against itself - is what let two missing translations pass unnoticed.
+$englishOnly = @()
+
 Test-Docs "docs/en" $en
 Test-Docs "docs/es" $es
+
+# Every English document needs a Spanish counterpart unless it is named above, and the
+# comparison runs on the tree rather than on either hand-maintained list: a list that drifts
+# from its own directory is the failure this whole check exists to catch.
+$untranslated = @($en | Where-Object { ($_ -notin $es) -and ($_ -notin $englishOnly) })
+$orphanSpanish = @($es | Where-Object { $_ -notin $en })
+$staleAllowlist = @($englishOnly | Where-Object { $_ -notin $en })
+if ($untranslated.Count -eq 0 -and $orphanSpanish.Count -eq 0 -and $staleAllowlist.Count -eq 0) {
+    Ok "every English document has a Spanish counterpart ($($en.Count) files, none exempt)"
+} else {
+    if ($untranslated.Count) { Fail ("English-only, and not in `$englishOnly: " + ($untranslated -join ", ")) }
+    if ($orphanSpanish.Count) { Fail ("Spanish with no English original: " + ($orphanSpanish -join ", ")) }
+    if ($staleAllowlist.Count) { Fail ("`$englishOnly names a document that no longer exists: " + ($staleAllowlist.Count -join ", ")) }
+}
 
 # The lists above are hand-maintained, so they drift. Compare them against the tree, in
 # both languages, so a new document cannot ship without being listed and a renamed one

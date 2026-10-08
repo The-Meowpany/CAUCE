@@ -35,6 +35,7 @@ Two failure modes cost real time in this project, and both are the same shape:
 | SBOM | every pin in the SBOM agrees with the lock |
 | CA fails closed | with no CA key configured, the certificate endpoints are `503` |
 | documentation | every document the index lists exists, in both languages |
+| en/es parity | every document in `docs/en` has a counterpart in `docs/es`, unless it is named in an explicit `$englishOnly` list |
 | firmware signs | the codec declares, signs and selects both algorithms, and refuses a bad key length |
 | group order | the Ed25519 group order constant is still the verified one |
 | no unregistered tests | no firmware test file mentions `NOT REGISTERED` |
@@ -61,7 +62,7 @@ Stated plainly, because a gate's value is entirely in the boundary of its claim:
 phases 0 and 2 are unstarted, and the board has never been on a desk. A `1.0.0` here would be a
 claim about readiness that nothing in the repository supports.
 
-The tag is annotated and its message is the release notes. It is 7 kB and states what the
+The tag is annotated and its message is the release notes. It is about 18 kB and states what the
 release does **not** establish, because a release note that lists only achievements is a
 marketing document.
 

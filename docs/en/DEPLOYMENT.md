@@ -32,8 +32,15 @@ What it establishes:
 | `WORKDIR /app` plus the `COPY` layers produce a servable filesystem | yes |
 | the declared `CMD` answers `GET /healthz` over real HTTP | 200, version 0.1.0 |
 | writes are refused without `CAUCE_API_TOKEN` | 503 |
-| the backend suite passes **inside the image** | 502 passed |
-| two builds of one tree produce one image ID | identical |
+| the backend suite passes **inside the image** | 577 passed |
+| the backend suite passes on the host | 575 passed, 2 skipped |
+
+The two counts are not a discrepancy. `tests/test_pki.py` and
+`tests/test_provisioning_tool.py` each have one case that asserts POSIX file
+modes, and those skip on Windows rather than pretending to pass. Inside the Linux
+image they run, which is 577. A host run that reported 577 would mean the mode
+assertions had been skipped silently, so the difference is the point of running
+both.
 
 Podman rather than Docker because it needs no daemon and no elevation, so this can run in
 `scripts/release-gate.ps1` rather than in a note asking somebody else to try it. Docker
@@ -71,7 +78,7 @@ Backend:
 ```powershell
 cd backend
 pip install --require-hashes -r requirements.lock
-python -m pytest tests -q # expect 540 passed
+python -m pytest tests -q # expect: 575 passed, 2 skipped (the two POSIX-mode cases)
 ```
 
 Node↔server integration:

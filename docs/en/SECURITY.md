@@ -151,6 +151,37 @@ With `CAUCE_CA_KEY` unset every endpoint answers `503
 certificate_authority_not_configured`. The alternative — issuing documents signed by
 nothing — would produce certificates that look authoritative and verify against no key.
 
+### The node re-checks the certificate itself
+
+The certificate is delivered to the node in `NodeConfig`, which means the node is trusting a
+document that came over the same transport as everything else. So the firmware does not take
+it on trust: `CertificateVerifier` rebuilds the canonical body, verifies the CA signature
+against a CA public key pinned in `NodeConfig.ca_public_key_hex`, and checks that the
+certificate's `node_id` is the one the node believes it is, and that `not_before`/`not_after`
+bracket the current UTC time.
+
+Two details that are the whole point:
+
+- **The CA key is pinned in configuration, not read from the certificate.** A verifier that
+  takes the CA key from the thing it is verifying verifies nothing. Pinning it is what makes
+  the offline verifier's property hold on the node as well.
+- **The node's own identity is compared, not just the signature.** A valid CA signature over a
+  certificate for a *different* node is a well-formed document that belongs to someone else.
+
+What it still does not do: it does not consult the central, so it cannot see revocation. A
+certificate retired at the central still verifies on a node that has not been told. That is
+the outstanding half of device retirement and it is why the transport fallback matters: with
+`ca_public_key_hex` unset, the node falls back to the HMAC scheme, which *is* checked against
+central state on every request.
+
+Buffer handling here is the kind a static analyser earns its keep on. Certificate fields are
+copied into a fixed 512-byte buffer, and the append helpers refuse rather than compute when a
+value would not fit — a `snprintf` that returns the length it *would* have written grows the
+offset past the capacity, and `capacity - offset` then wraps as `size_t`. A larger buffer
+would not have fixed it; the arithmetic was the bug. The check that catches it is CodeQL's,
+because a host test can only assert that verification failed, never that nothing outside the
+buffer was touched.
+
 ### A node proves possession instead of holding a secret
 
 For a node provisioned with an Ed25519 key, `/v1/sync` can authenticate the node by
