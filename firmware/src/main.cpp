@@ -37,6 +37,9 @@
 #include "cauce/app/SyncManager.h"
 #include "cauce/hal/Esp32HttpSyncTransport.h"
 #include "cauce/hal/Esp32PeerLink.h"
+#include "cauce/hal/Esp32RadioBus.h"
+#include "cauce/hal/Sx1276Radio.h"
+#include "cauce/app/LoRaSyncTransport.h"
 #include "cauce/hal/Esp32WifiController.h"
 #include "cauce/app/Esp32PeerExchange.h"
 #include "cauce/app/PeerWatermarks.h"
@@ -81,6 +84,13 @@ static cauce::app::Esp32ChallengeSource* g_challengeSource = nullptr;
 // Certificate verification. The node checks that its own certificate was signed by the CA and
 // names this node, rather than presenting whatever JSON it was configured with.
 static cauce::app::CertificateVerifier* g_certVerifier = nullptr;
+// LoRa. Reachable now that `ISpiBus` and `IRadioControl` have ESP32 implementations; before
+// this the entire stack existed only in the test binary.
+static cauce::hal::Esp32SpiBus* g_loraSpi = nullptr;
+static cauce::hal::Esp32RadioControl* g_loraControl = nullptr;
+static cauce::hal::Sx1276Radio* g_loraRadio = nullptr;
+static cauce::app::LoRaSyncTransport* g_loraTransport = nullptr;
+static cauce::app::SyncManager* g_loraSync = nullptr;
 // Peer-to-peer. Both objects are held for the node's life; the exchange is enabled by
 // `peer_enabled`, and an absent radio or discovery leaves it disabled rather than failing.
 static cauce::hal::Esp32PeerRadio* g_peerRadio = nullptr;
@@ -250,6 +260,38 @@ void reportBootSerialLine(void* context, const char* line) {
 // one, and reading it early is how the two get confused.
 static uint32_t currentResetReason() {
   return static_cast<uint32_t>(esp_reset_reason());
+}
+
+// The band a region implies, and the modulation this project uses everywhere else.
+//
+// A region name mapped to a frequency here rather than a number in the config file, because a
+// *frequency* in a text config is one typo away from putting a node on a band it must not use,
+// and there is no safe default for that: 868 MHz and 915 MHz differ enough that a wrong value
+// is silent - the radio transmits, and nobody nearby hears it.
+//
+// Returns false for a region this build does not know, and the caller reports it rather than
+// falling back. Falling back to 868 MHz for an unrecognised region would put an AU node on the
+// European band, which is the exact failure this refuses.
+bool kLoRaDefaultsFor(const char* region, cauce::hal::Sx1276Config& out) {
+  out = cauce::hal::Sx1276Config{};
+  if (region == nullptr || region[0] == '\0') return false;
+  if (std::strcmp(region, "EU868") == 0 || std::strcmp(region, "EU433") == 0) {
+    out.frequencyHz = 868100000u;  // EU868 only; EU433 is 434 and is not supported here
+    return std::strcmp(region, "EU868") == 0;
+  }
+  if (std::strcmp(region, "US915") == 0) {
+    out.frequencyHz = 915000000u;
+    return true;
+  }
+  if (std::strcmp(region, "AU915") == 0) {
+    out.frequencyHz = 915200000u;
+    return true;
+  }
+  if (std::strcmp(region, "AS923") == 0) {
+    out.frequencyHz = 923200000u;
+    return true;
+  }
+  return false;
 }
 
 void setup() {
@@ -472,6 +514,51 @@ void setup() {
   // format, fragmentation, acknowledgement and a forwarding loop that no node ever reached.
   // A component with tests and no caller is not half-done; it is a component that exists only
   // in the test binary, and every test of it proves something about code no board runs.
+  {
+    CAUCE_SETUP_STEP("lora");
+    // Off by default, and reported at boot when it cannot come up. A node configured for LoRa
+    // that silently never transmits is the failure this line exists to prevent.
+    //
+    // The pins are the ones `docs/en/HARDWARE.md` documents for the SX1276 hat. They are here
+    // rather than in config because a *wrong* pin set does not fail loudly - it talks to
+    // nothing and reads back noise - and putting the only correct set in one place beats
+    // offering a configurable one nobody knows the values for.
+    if (config.loraEnabled) {
+      g_loraSpi = new cauce::hal::Esp32SpiBus(1000000);
+      g_loraControl = new cauce::hal::Esp32RadioControl();
+      const bool spiUp = g_loraSpi->begin();
+      // SCK=18, MISO=19, MOSI=23; NSS=5, RESET=14, DIO0=26, DIO1=33, BUSY=32.
+      g_loraRadio = new cauce::hal::Sx1276Radio(*g_loraSpi, *g_loraControl,
+                                                 /*resetPin=*/14, /*dio0Pin=*/26,
+                                                 /*dio1Pin=*/33, /*busyPin=*/32);
+      cauce::hal::Sx1276Config loraConfig{};
+      const bool regionKnown = kLoRaDefaultsFor(config.loraRegion, loraConfig);
+      const bool radioUp = regionKnown && spiUp && g_loraRadio->begin(loraConfig);
+      if (!regionKnown) {
+        // Said by name, because "the radio did not come up" and "the region is not one this
+        // build knows" have opposite fixes and the same symptom otherwise.
+        g_logger->eventf(cauce::LogLevel::Warn, "LORA_REGION_UNKNOWN region=%s",
+                         config.loraRegion);
+      }
+      if (radioUp) {
+        g_loraTransport = new cauce::app::LoRaSyncTransport(*g_loraRadio, g_clock);
+        // Its own SyncManager: a node with LoRa relays through a peer with a radio rather than
+        // reaching the central itself, and that is a different transport with different
+        // credentials, not a second endpoint on the HTTP one.
+        g_loraSync = new cauce::app::SyncManager(*g_store, *g_loraTransport, g_clock,
+                                                  *g_logger, g_fs, "/state/lora_sync");
+        g_loraSync->setNodeId(config.nodeId);
+        g_loraSync->setDeviceSecret(config.syncDeviceKey);
+        g_loraSync->setSyncIntervalS(config.loraSyncIntervalS);
+        g_loraSync->loadState();
+        g_logger->eventf(cauce::LogLevel::Info, "LORA_ENABLED", "region=%s spi=%d",
+                         config.loraRegion, spiUp ? 1 : 0);
+      } else {
+        g_logger->event(cauce::LogLevel::Warn, "LORA_UNAVAILABLE the radio did not come up");
+      }
+    }
+  }
+
   {
     CAUCE_SETUP_STEP("peer_exchange");
     g_peerMarks = new cauce::app::PeerWatermarks(g_fs, config.peerStatePath);

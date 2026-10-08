@@ -1,5 +1,35 @@
 # CAUCE Hardware
 
+## SX1276 LoRa hat - the pins the firmware uses
+
+`main.cpp` builds the radio when `lora_enabled=1`, with these pins. They are in code rather
+than in the config file on purpose: a *frequency* in a text config is one typo away from putting
+a node on a band it must not use, and there is no safe default for that.
+
+| Signal | GPIO | Notes |
+|---|---|---|
+| SCK | 18 | VSPI |
+| MISO | 19 | VSPI |
+| MOSI | 23 | VSPI |
+| NSS | 5 | chip select, active low |
+| RESET | 14 | held low briefly at `begin()` |
+| DIO0 | 26 | TxDone / RxDone |
+| DIO1 | 33 | optional, used for Fhss / timeout |
+| BUSY | 32 | input, polled while the radio is busy |
+
+SPI runs at **1 MHz**, which is the SX1276's own maximum for the modes this driver uses.
+
+The region comes from `lora_region` as a **name** - `EU868`, `US915`, `AU915`, `AS923` - and
+each maps to its frequency in `kLoRaDefaultsFor`. A region this build does not recognise is
+refused and reported as `LORA_REGION_UNKNOWN`; it does not fall back to 868 MHz, because
+putting an AU node on the European band is precisely the failure the refusal exists to prevent.
+
+### What is not proven about this
+
+That the wiring is correct. `LORA_ENABLED` says the SPI peripheral initialised and the radio
+accepted its configuration register writes - not that a register read returned a plausible
+value. The first real evidence is that read, and it needs a board.
+
 ## Status
 
 **No physical hardware bought yet.** Everything firmware-side is proven
