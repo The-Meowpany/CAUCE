@@ -29,6 +29,7 @@ namespace cauce { void registerNodeCredentialTests(); }
 namespace cauce { void registerManifestKeyTests(); }
 namespace cauce { void registerStorageContainsTests(); }
 namespace cauce { namespace app { void registerPeerExchangeTests(); } }
+namespace cauce { namespace app { void registerCertificateVerifierTests(); } }
 void registerOtaBootConfirmTests();
 void registerLoRaTests();
 void registerLoRaBatchTests();
@@ -73,6 +74,7 @@ int main() {
   cauce::registerManifestKeyTests();
   cauce::registerStorageContainsTests();
   cauce::app::registerPeerExchangeTests();
+  cauce::app::registerCertificateVerifierTests();
   registerOtaBootConfirmTests();
   registerLoRaTests();
   registerLoRaBatchTests();

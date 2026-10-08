@@ -144,9 +144,13 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("sync_device_key=%s\n", config.syncDeviceKey);
   c.write("sync_auth_seed=%s\n", config.syncAuthSeedHex);
   c.write("sync_certificate=%s\n", config.syncCertificate);
+  c.write("ca_public_key=%s\n", config.caPublicKeyHex);
   c.write("ota_manifest_key=%s\n", config.otaManifestKey);
   c.write("ota_manifest_url=%s\n", config.otaManifestUrl);
   c.write("lora_enabled=%d\n", config.loraEnabled ? 1 : 0);
+  c.write("peer_enabled=%d\n", config.peerEnabled ? 1 : 0);
+  c.write("peer_channel=%u\n", static_cast<unsigned>(config.peerChannel));
+  c.write("peer_state_path=%s\n", config.peerStatePath);
   c.write("lora_sync_interval_s=%lu\n",
           static_cast<unsigned long>(config.loraSyncIntervalS));
   c.write("lora_region=%s\n", config.loraRegion);
@@ -287,8 +291,21 @@ bool parseConfig(const char* text, NodeConfig& out) {
           // signature, which points at the certificate instead of at the config line.
           badCredentialLine = true;
         }
+      } else if (std::strcmp(key, "ca_public_key") == 0) {
+        copyString(cfg.caPublicKeyHex, sizeof(cfg.caPublicKeyHex), valueText);
       } else if (std::strcmp(key, "sync_certificate") == 0) {
         copyString(cfg.syncCertificate, sizeof(cfg.syncCertificate), valueText);
+      } else if (std::strcmp(key, "peer_enabled") == 0 &&
+                 parseInt(valueText, intValue)) {
+        cfg.peerEnabled = intValue != 0;
+      } else if (std::strcmp(key, "peer_channel") == 0 &&
+                 parseInt(valueText, intValue)) {
+        // Clamped to the radio's real range. ESP-NOW channels are 0-13 and an
+        // out-of-range one silently joins a band the operator did not choose.
+        cfg.peerChannel = (intValue >= 0 && intValue <= 13)
+                              ? static_cast<uint8_t>(intValue) : 0;
+      } else if (std::strcmp(key, "peer_state_path") == 0) {
+        copyString(cfg.peerStatePath, sizeof(cfg.peerStatePath), valueText);
       } else if (std::strcmp(key, "lora_enabled") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.loraEnabled = intValue != 0;

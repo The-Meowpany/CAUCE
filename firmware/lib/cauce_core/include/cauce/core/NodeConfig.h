@@ -41,6 +41,11 @@ struct NodeConfig {
   // implementation of a format this module does not own. 1024 bytes is generous
   // for the current document, which is around 300.
   char syncCertificate[1024]{};
+  // The CA public key, hex. Pinned in the node's own configuration rather than taken
+  // from the certificate, because `ca_public_key` travels *inside* the document it
+  // describes: a verifier that trusted that field would let any certificate name the
+  // key that verifies it, which verifies nothing.
+  char caPublicKeyHex[65]{};
   // The key that authorises firmware updates, kept separate from `syncDeviceKey`.
   //
   // They were the same secret, which meant the credential that could authorise a firmware
@@ -52,6 +57,14 @@ struct NodeConfig {
   char otaManifestKey[65]{};
   char otaManifestUrl[160]{};
   bool loraEnabled{false};
+  // Peer-to-peer over ESP-NOW. Off by default, like deep sleep, because a node that
+  // announces itself onto a radio segment it was not asked to join is a deployment
+  // decision rather than a default. The channel is explicit for the same reason the
+  // driver's is: two ends on different channels find each other and cannot reach each
+  // other, which presents as total silence and reads as a broken driver.
+  bool peerEnabled{false};
+  uint8_t peerChannel{0};
+  char peerStatePath[64]{"/state/peer_marks"};
   uint32_t loraSyncIntervalS{3600};
   char loraRegion[16]{"EU868"};
   uint32_t storageMaxBytes{512u * 1024u};

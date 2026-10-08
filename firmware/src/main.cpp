@@ -26,6 +26,7 @@
 #include "cauce/core/NodeActuator.h"
 #include "cauce/app/Esp32ApiServer.h"
 #include "cauce/app/Esp32ChallengeSource.h"
+#include "cauce/app/CertificateVerifier.h"
 #include "cauce/app/NodeCertificateAuth.h"
 #include "cauce/app/Esp32CaptivePortal.h"
 #include "cauce/app/Esp32Ota.h"
@@ -35,7 +36,10 @@
 #include "cauce/app/OtaManager.h"
 #include "cauce/app/SyncManager.h"
 #include "cauce/hal/Esp32HttpSyncTransport.h"
+#include "cauce/hal/Esp32PeerLink.h"
 #include "cauce/hal/Esp32WifiController.h"
+#include "cauce/app/Esp32PeerExchange.h"
+#include "cauce/app/PeerWatermarks.h"
 #include "cauce/app/SerialLogSink.h"
 #include "cauce/core/ConfigManager.h"
 #include "cauce/core/SecurityUtils.h"
@@ -74,6 +78,22 @@ static cauce::hal::Esp32HttpSyncTransport* g_syncTransport = nullptr;
 static cauce::app::NodeAuthenticator* g_nodeAuth = nullptr;
 static cauce::app::NodeCertificateAuth* g_certAuth = nullptr;
 static cauce::app::Esp32ChallengeSource* g_challengeSource = nullptr;
+// Certificate verification. The node checks that its own certificate was signed by the CA and
+// names this node, rather than presenting whatever JSON it was configured with.
+static cauce::app::CertificateVerifier* g_certVerifier = nullptr;
+// Peer-to-peer. Both objects are held for the node's life; the exchange is enabled by
+// `peer_enabled`, and an absent radio or discovery leaves it disabled rather than failing.
+static cauce::hal::Esp32PeerRadio* g_peerRadio = nullptr;
+static cauce::hal::Esp32PeerDiscovery* g_peerDiscovery = nullptr;
+static cauce::app::PeerWatermarks* g_peerMarks = nullptr;
+static cauce::app::Esp32PeerExchange* g_peerExchange = nullptr;
+// LoRa. The forwarding gateway path, separate from the HTTP one: a node that cannot reach the
+// central directly relays through a peer with a radio.
+// LoRa is NOT constructed here. `Sx1276Radio` needs an `ISpiBus` and an `IRadioControl`, and
+// neither has an ESP32 implementation - so the driver, the frame format, fragmentation, the
+// acknowledgement and the forwarding loop are all real and all unreachable from a node.
+// Naming that gap precisely is more useful than a commented-out construction that looks like
+// a decision rather than an omission.
 static cauce::app::SyncManager* g_syncManager = nullptr;
 static cauce::app::Esp32CaptivePortal* g_portal = nullptr;
 static cauce::hal::Esp32WifiController* g_netController = nullptr;
@@ -398,6 +418,23 @@ void setup() {
         g_logger->event(cauce::LogLevel::Error,
                         "NODE_AUTH_SEED_UNREADABLE falling back to the shared secret");
       } else {
+        // Verify the certificate before it is presented. A node that cannot tell a CA-signed
+        // certificate from an attacker's has no defence of its own - only the central's - and a
+        // valid certificate naming a *different* node is exactly the case that passes there and
+        // should not.
+        g_certVerifier = new cauce::app::CertificateVerifier();
+        g_certVerifier->pinCaPublicKey(config.caPublicKeyHex);
+        const cauce::app::CertVerifyStatus verdict = g_certVerifier->verify(
+            config.syncCertificate, config.nodeId, g_clock.utcTimeValid() ? g_clock.utcMs() : 0);
+        if (verdict != cauce::app::CertVerifyStatus::Ok) {
+          g_logger->eventf(cauce::LogLevel::Warn, "NODE_AUTH_CERT_REJECTED",
+                           "reason=%s (%s)",
+                           static_cast<int>(verdict),
+                           cauce::app::describeCertVerify(verdict));
+        } else {
+          g_logger->eventf(cauce::LogLevel::Info, "NODE_AUTH_CERT_OK", "serial=%s",
+                           g_certVerifier->serial());
+        }
         g_nodeAuth = new cauce::app::NodeAuthenticator();
         g_nodeAuth->setCredential(seed, config.syncCertificate);
         g_challengeSource = new cauce::app::Esp32ChallengeSource();
@@ -428,6 +465,38 @@ void setup() {
   g_commands->setHandler("request_resync", cmdRequestResync);
   g_commands->setHandler("set_led_mode", cmdSetLedMode);
   g_syncManager->setCommandExecutor(g_commands);
+
+  // Peer-to-peer and LoRa, both behind their configuration flags.
+  //
+  // Both subsystems have existed for a while with tests and no caller - a driver, a frame
+  // format, fragmentation, acknowledgement and a forwarding loop that no node ever reached.
+  // A component with tests and no caller is not half-done; it is a component that exists only
+  // in the test binary, and every test of it proves something about code no board runs.
+  {
+    CAUCE_SETUP_STEP("peer_exchange");
+    g_peerMarks = new cauce::app::PeerWatermarks(g_fs, config.peerStatePath);
+    g_peerMarks->load();
+    if (config.peerEnabled) {
+      g_peerRadio = new cauce::hal::Esp32PeerRadio();
+      g_peerDiscovery = new cauce::hal::Esp32PeerDiscovery(config.peerChannel);
+      const bool radioUp = g_peerRadio->begin(config.peerChannel);
+      const bool discoveryUp = g_peerDiscovery->begin();
+      g_peerExchange = new cauce::app::Esp32PeerExchange(*g_store, *g_peerMarks,
+                                                         g_peerRadio, g_peerDiscovery);
+      if (g_peerExchange->enable()) {
+        g_logger->eventf(cauce::LogLevel::Info, "PEER_EXCHANGE_ENABLED",
+                         "channel=%u peers_seen=%u", static_cast<unsigned>(config.peerChannel),
+                         static_cast<unsigned>(g_peerDiscovery->poll(nullptr, 0)));
+      } else {
+        // Said at boot because a node configured for peer exchange and not getting it is the
+        // exact failure that otherwise presents as "the feature does not work".
+        g_logger->eventf(cauce::LogLevel::Warn, "PEER_EXCHANGE_UNAVAILABLE",
+                         "radio=%d discovery=%d channel=%u", radioUp ? 1 : 0,
+                         discoveryUp ? 1 : 0, static_cast<unsigned>(config.peerChannel));
+      }
+    }
+  }
+
 
   {
     CAUCE_SETUP_STEP("wifi_controller");
