@@ -17,6 +17,14 @@ class Settings:
         self.retention_interval_h = int(
             os.environ.get("CAUCE_RETENTION_INTERVAL_H", "24")
         )
+        # How often the server-rendered dashboard reloads itself, in seconds. It was the
+        # literal 60 in every page template, which is a reasonable default for a central in
+        # a village with one Wi-Fi link and the wrong number for anything else: too slow to
+        # watch a node come back, and impossible to turn off without editing the template.
+        # 0 disables the meta refresh entirely, for a caller that refreshes another way.
+        self.dashboard_refresh_s = int(
+            os.environ.get("CAUCE_DASHBOARD_REFRESH_S", "60")
+        )
         self.vacuum_interval_h = int(os.environ.get("CAUCE_VACUUM_INTERVAL_H", "24"))
         # The Ed25519 private key that signs node certificates. Empty means "no CA", and
         # every certificate endpoint then refuses rather than falling back to the admin

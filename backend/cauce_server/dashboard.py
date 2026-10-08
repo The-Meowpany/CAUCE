@@ -228,15 +228,32 @@ def _legal_footer(code: str) -> str:
     return footer_html(code)
 
 
+def _refresh_meta() -> str:
+    """The meta-refresh tag, or nothing when the refresh is turned off.
+
+    Every page template carries a `__REFRESH__` token where the interval belongs, and this
+    is the one place the token is resolved. Two reasons it lives here rather than in each of
+    the nine render sites: the interval is a deployment decision, not a template decision,
+    and nine copies of a literal is nine chances to drift. `0` emits no tag at all rather
+    than `content="0"`, which some browsers treat as "reload as fast as possible" - the
+    opposite of what turning it off is supposed to mean.
+    """
+    seconds = settings.dashboard_refresh_s
+    if seconds <= 0:
+        return ""
+    return f'<meta http-equiv="refresh" content="{int(seconds)}">'
+
+
 def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("<main>", "<main id=\"main\">", 1)
+    page = page.replace("__REFRESH__", _refresh_meta())
     return page.replace("</main>", _legal_footer(code) + "</main>")
 
 
 _PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>{title}</title>
+__REFRESH__<title>{title}</title>
 <style>
 body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
 main{max-width:1000px;margin:0 auto;padding:1rem}
@@ -311,7 +328,7 @@ _NODE_CARD = ("""<div class="card"><h3><a href="/nodes/{nid}">{nid}</a></h3>
 _NODE_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>{title} — {nid}</title>
+__REFRESH__<title>{title} — {nid}</title>
 <style>
 body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
 main{max-width:900px;margin:0 auto;padding:1rem}
@@ -1718,7 +1735,7 @@ def compare_page(request: Request, a: str | None = None,
 _SYSTEM_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="60"><title>{title} — {h_sys}</title>
+__REFRESH__<title>{title} — {h_sys}</title>
 <style>
 body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
 main{max-width:900px;margin:0 auto;padding:1rem}

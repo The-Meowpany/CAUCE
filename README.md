@@ -156,7 +156,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-461 firmware + 575 backend tests + ESP32 build + E2E = **1036 automated
+461 firmware + 581 backend tests + ESP32 build + E2E = **1042 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).
