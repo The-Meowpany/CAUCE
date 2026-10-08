@@ -104,7 +104,11 @@ void gfToBytes(uint8_t out[32], const Gf in) {
     int64_t borrow = 0;
     for (int i = 0; i < 16; ++i) {
       const int64_t d = t[i] - kPrime[i] - borrow;
-      borrow = (d >> 63) & 1;
+      // The borrow is the sign of `d`, not a shift. Right-shifting a negative signed
+      // value is implementation-defined in C++17 - every compiler this project uses does
+      // an arithmetic shift, which is what the code wanted, and a compiler that does not
+      // would silently produce wrong field arithmetic. `d < 0` says what it means.
+      borrow = (d < 0) ? 1 : 0;
       t[i] = d & kMask;
     }
   }

@@ -131,7 +131,9 @@ bool NodeAuthenticator::jsonStringField(const char* json, const char* key, char*
     // read a real challenge. Only the escapes Python's `json.dumps` produces by default are
     // accepted, and `\u` is not one of them - see below.
     bool truncated = false;
-    char decoded = '\0';
+    // No initialiser: both branches below assign `decoded` before it is ever read, so one
+    // here is dead. Left as an initialiser it read as a guarantee it was not giving.
+    char decoded;
     while (*colon && *colon != '"') {
       if (*colon == '\\') {
         decoded = '\0';

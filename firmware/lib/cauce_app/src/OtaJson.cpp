@@ -74,7 +74,9 @@ bool parseOtaManifestJson(const char* json, OtaRelease& out) {
   if (!findValue(json, "total_size", val, quoted) || quoted) return false;
   char* endPtr = nullptr;
   const unsigned long size = std::strtoul(val, &endPtr, 10);
-  if (endPtr == val || size == 0 || size > 0xFFFFFFFFUL) return false;
+  // `ULL`, not `UL`: on Windows `unsigned long` is 32-bit, so a `UL` bound is vacuously
+  // never exceeded and the guard protects nothing while reading as though it does.
+  if (endPtr == val || size == 0 || size > 0xFFFFFFFFULL) return false;
   tmp.totalSize = static_cast<uint32_t>(size);
   tmp.manifestHmacHex[0] = '\0';
   if (findValue(json, "hmac", val, quoted) && quoted) {

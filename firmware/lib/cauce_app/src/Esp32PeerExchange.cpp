@@ -39,7 +39,10 @@ bool Esp32PeerExchange::toMeasurement(const ReplicatedRecord& in, Measurement& o
   const size_t idLen = std::strlen(in.nodeId);
   if (idLen >= sizeof(out.nodeId)) return false;
 
-  std::memset(&out, 0, sizeof(out));
+  // Value-initialise rather than `memset`. `Measurement` contains a `float`, and zeroing one
+  // with memset relies on all-zero bits meaning 0.0f, which IEEE-754 gives and the standard
+  // does not guarantee - so this is the portable spelling of the same intent.
+  out = Measurement{};
   std::memcpy(out.nodeId, in.nodeId, idLen);
   out.sequence = in.sequence;
   out.timestampUtcMs = in.timestampUtcMs;
