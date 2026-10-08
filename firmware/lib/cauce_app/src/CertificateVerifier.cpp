@@ -1,5 +1,6 @@
 #include "cauce/app/CertificateVerifier.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +55,45 @@ bool decodeHex32(const char* hex, uint8_t* out) {
 // The certificate's `node_id` and `site_id` may contain characters JSON escapes, so this refuses
 // a value containing a backslash rather than silently decoding it. A node id with a backslash in
 // it is not a thing this project issues, and guessing would mean signing bytes the CA did not.
+// Appends into a fixed buffer, refusing the moment the result would not fit.
+//
+// Three bugs live in the obvious version of this, and CodeQL flagged two of them:
+//
+// 1. `used += snprintf(out + used, capacity - used, ...)`. `snprintf` returns the length it
+//    *would* have written on truncation, so `used` becomes larger than the capacity and every
+//    later append writes further out of bounds. The loop then compounds it.
+// 2. `capacity - used` when `used >= capacity`. Both are `size_t`, so the subtraction wraps to
+//    nearly 4 GB and `snprintf` is handed a length it would never have been able to fill - which
+//    is the alert: "potentially overflowing call to snprintf".
+// 3. `out[used++] = ','` with no check at all, which writes one past the end at exactly the
+//    boundary where 1 and 2 have not yet bitten.
+//
+// The fix is not a bigger buffer. It is refusing instead of computing: every append is checked,
+// and one that would not fit ends the verification as `Malformed` rather than corrupting
+// anything. A certificate whose fields cannot fit in 512 bytes is not a certificate this build
+// can verify, and saying so is the correct answer.
+bool appendFormatted(char* out, size_t capacity, size_t& used, const char* format, ...)
+    __attribute__((format(printf, 4, 5)));
+
+bool appendFormatted(char* out, size_t capacity, size_t& used, const char* format, ...) {
+  if (out == nullptr || used >= capacity) return false;
+  va_list args;
+  va_start(args, format);
+  const int written = std::vsnprintf(out + used, capacity - used, format, args);
+  va_end(args);
+  if (written < 0) return false;
+  // `>=` not `>`: a result that exactly fills the buffer has no room for the terminator.
+  if (static_cast<size_t>(written) >= capacity - used) return false;
+  used += static_cast<size_t>(written);
+  return true;
+}
+
+bool appendChar(char* out, size_t capacity, size_t& used, char c) {
+  if (out == nullptr || used + 1 >= capacity) return false;
+  out[used++] = c;
+  return true;
+}
+
 // Reads one JSON value for `key`, whether it is a string or a bare number.
 //
 // Both, deliberately. The first version of this read only strings, and `version` in a
@@ -187,9 +227,19 @@ CertVerifyStatus CertificateVerifier::verify(const char* certificateJson, const 
   // Rebuild the canonical body: sorted keys, no whitespace, excluding signature and
   // ca_public_key. `site_id` is written as `null` when the certificate has none, because that
   // is what `json.dumps` produced when it was signed.
+  // Rebuild the canonical body: sorted keys, no whitespace, excluding signature and
+  // ca_public_key. `site_id` is written as `null` when the certificate has none, because that
+  // is what `json.dumps` produced when it was signed.
+  //
+  // 512 bytes is the largest a certificate can be and still fit every field: the header is 50,
+  // `public_key` is 64, and the fixed keys are about 120. So the buffer is comfortable for a
+  // real certificate and *tight* for a hostile one - which is the point, because every append
+  // below is checked rather than trusted.
   char body[512];
-  int n = std::snprintf(body, sizeof(body), "{");
-  if (n <= 0) return CertVerifyStatus::Malformed;
+  size_t used = 0;
+  if (!appendChar(body, sizeof(body), used, '{')) {
+    return CertVerifyStatus::Malformed;
+  }
 
   char site[24];
   if (!jsonField(certificateJson, "site_id", site, sizeof(site))) {
@@ -198,16 +248,15 @@ CertVerifyStatus CertificateVerifier::verify(const char* certificateJson, const 
   const bool siteIsNull = (std::strcmp(site, "null") == 0);
 
   for (size_t i = 0; i < kBodyKeyCount; ++i) {
-    if (i > 0) body[n++] = ',';
+    if (i > 0 && !appendChar(body, sizeof(body), used, ',')) {
+      return CertVerifyStatus::Malformed;
+    }
     const char* key = kBodyKeys[i];
     if (std::strcmp(key, "site_id") == 0) {
-      if (siteIsNull) {
-        n += std::snprintf(body + n, sizeof(body) - static_cast<size_t>(n),
-                           "\"site_id\":null");
-      } else {
-        n += std::snprintf(body + n, sizeof(body) - static_cast<size_t>(n), "\"site_id\":\"%s\"",
-                           site);
-      }
+      const bool ok = siteIsNull
+                          ? appendFormatted(body, sizeof(body), used, "\"site_id\":null")
+                          : appendFormatted(body, sizeof(body), used, "\"site_id\":\"%s\"", site);
+      if (!ok) return CertVerifyStatus::Malformed;
       continue;
     }
     // 80, not 64: public_key is 64 hex characters and needs a terminator. A 64-byte buffer
@@ -220,17 +269,17 @@ CertVerifyStatus CertificateVerifier::verify(const char* certificateJson, const 
     // produces a body that differs from the signed one, which fails as a bad signature - a
     // correct-looking error for a wrong reason.
     const bool numeric =
-        (std::strcmp(key, "not_after_utc_ms") == 0) || (std::strcmp(key, "not_before_utc_ms") == 0) ||
-        (std::strcmp(key, "version") == 0);
-    if (numeric) {
-      n += std::snprintf(body + n, sizeof(body) - static_cast<size_t>(n), "\"%s\":%s", key, value);
-    } else {
-      n += std::snprintf(body + n, sizeof(body) - static_cast<size_t>(n), "\"%s\":\"%s\"", key, value);
-    }
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(body)) return CertVerifyStatus::Malformed;
+        (std::strcmp(key, "not_after_utc_ms") == 0) ||
+        (std::strcmp(key, "not_before_utc_ms") == 0) || (std::strcmp(key, "version") == 0);
+    const bool ok =
+        numeric ? appendFormatted(body, sizeof(body), used, "\"%s\":%s", key, value)
+                : appendFormatted(body, sizeof(body), used, "\"%s\":\"%s\"", key, value);
+    if (!ok) return CertVerifyStatus::Malformed;
   }
-  body[n++] = '}';
-  body[n] = '\0';
+  if (!appendChar(body, sizeof(body), used, '}')) {
+    return CertVerifyStatus::Malformed;
+  }
+  body[used] = '\0';
 
   uint8_t signature[64];
   size_t sigLen = 0;
@@ -250,8 +299,7 @@ CertVerifyStatus CertificateVerifier::verify(const char* certificateJson, const 
 
   // The signature is checked before anything else, because without it none of the other fields
   // mean anything.
-  if (!ed25519Verify(caKey, reinterpret_cast<const uint8_t*>(body),
-                     static_cast<size_t>(n), signature)) {
+  if (!ed25519Verify(caKey, reinterpret_cast<const uint8_t*>(body), used, signature)) {
     return CertVerifyStatus::BadCaSignature;
   }
 

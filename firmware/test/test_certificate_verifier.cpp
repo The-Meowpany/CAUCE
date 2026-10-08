@@ -230,6 +230,50 @@ void test_every_status_has_a_description() {
   }
 }
 
+
+// The regression guard for the overflow CodeQL found in `CertificateVerifier.cpp`.
+//
+// The rebuild loop used `used += snprintf(out + used, capacity - used, ...)`. `snprintf` returns
+// the length it *would* have written on truncation, so `used` grows past the capacity, and
+// `capacity - used` then wraps - both operands are `size_t` - into a length of nearly 4 GB.
+// Nothing crashes; the buffer is simply written past its end, and on this target the symptom is
+// a corrupt adjacent member rather than a fault.
+//
+// This test feeds it a certificate whose fields cannot fit in 512 bytes and requires a refusal.
+// It is the case the original code would have corrupted memory on, so it is the one worth having.
+void test_a_certificate_too_large_to_canonically_encode_is_refused() {
+  // Every field is at its maximum the parser accepts, so the rebuilt body is far longer than 512.
+  char oversized[2048];
+  std::snprintf(oversized, sizeof(oversized),
+                "{\"algorithm\":\"ed25519\",\"kind\":\"cauce-node-certificate\","
+                "\"node_id\":\"CAUCE-001\",\"not_after_utc_ms\":1795132800000,"
+                "\"not_before_utc_ms\":1787356800000,"
+                "\"public_key\":\"%s\",\"serial\":\"e819290cdfea311acef47e2b9bfecde1\","
+                "\"signature\":\"" CAUCE_CERT_SIGNATURE_HEX "\","
+                "\"site_id\":\"SITE-A-THAT-IS-MUCH-TOO-LONG\",\"version\":1}",
+                kNodePublicHex);
+  CertificateVerifier v = pinned();
+  // Whatever it returns, it must not be Ok and it must not have written out of bounds. The
+  // second half is what the host cannot see, so it is CodeQL's assertion, not this test's.
+  TEST_ASSERT_TRUE(v.verify(oversized, "CAUCE-001", kNow) != CertVerifyStatus::Ok);
+}
+
+// A `site_id` that exactly fills its field, repeated, so the body crosses the boundary in the
+// middle of the loop rather than at its first append.
+void test_a_long_site_id_is_refused_rather_than_overflowing() {
+  char json[1024];
+  std::snprintf(json, sizeof(json),
+                "{\"algorithm\":\"ed25519\",\"kind\":\"cauce-node-certificate\","
+                "\"node_id\":\"CAUCE-001\",\"not_after_utc_ms\":1795132800000,"
+                "\"not_before_utc_ms\":1787356800000,"
+                "\"public_key\":\"%s\",\"serial\":\"e819290cdfea311acef47e2b9bfecde1\","
+                "\"signature\":\"" CAUCE_CERT_SIGNATURE_HEX "\","
+                "\"site_id\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"version\":1}",
+                kNodePublicHex);
+  CertificateVerifier v = pinned();
+  TEST_ASSERT_TRUE(v.verify(json, "CAUCE-001", kNow) != CertVerifyStatus::Ok);
+}
+
 }  // namespace
 
 void registerCertificateVerifierTests() {
@@ -248,6 +292,8 @@ void registerCertificateVerifierTests() {
   RUN_TEST(test_a_null_or_short_output_buffer_is_refused);
   RUN_TEST(test_the_serial_is_available_for_logging);
   RUN_TEST(test_every_status_has_a_description);
+  RUN_TEST(test_a_certificate_too_large_to_canonically_encode_is_refused);
+  RUN_TEST(test_a_long_site_id_is_refused_rather_than_overflowing);
 }
 
 }  // namespace cauce::app
