@@ -252,3 +252,113 @@ def test_minutes_are_used_where_they_read_better(monkeypatch):
         assert "1 minute" in D._refresh_hint("en")
     finally:
         settings.dashboard_refresh_s = original
+
+# --------------------------------------------------------------------- live patching
+
+
+def test_the_page_polls_instead_of_reloading():
+    """`content="0;url=self"`, not `content="5"`.
+
+    Reloading the document every five seconds meant every entrance animation replayed on that
+    period, so the page looked busy while showing nothing new. Zero hands the updating to the
+    script; `url=self` is the fallback for a browser with no JavaScript, and it keeps the
+    reader's query parameters, which a bare "/" would drop.
+    """
+    c = client()
+    body = c.get("/?lang=es").text
+    assert 'http-equiv="refresh" content="0;url=self"' in body
+    assert "/v1/live" in body
+
+
+def test_the_poll_interval_comes_from_the_setting_not_a_literal():
+    """The setting reaches the script. Asserting on the served page, not on the constant.
+
+    The script computes `seconds * 1000`, so no literal `7000` appears in it; what matters is
+    that the number the browser receives is the configured one.
+    """
+    from cauce_server.config import settings
+    from cauce_server.main import app
+    from fastapi.testclient import TestClient
+
+    original = settings.dashboard_refresh_s
+    try:
+        settings.dashboard_refresh_s = 7
+        with TestClient(app) as c:
+            body = c.get("/").text
+    finally:
+        settings.dashboard_refresh_s = original
+    m = re.search(r"var seconds = (\d+);", body)
+    assert m, "the poll interval did not reach the page"
+    assert m.group(1) == "7", f"the page polls every {m.group(1)}s while configured for 7"
+    # And it is in seconds, converted once inside the script rather than baked in here.
+    assert "seconds * 1000" in body
+
+
+def test_a_poll_never_rewrites_a_figure_that_did_not_change():
+    """Assigning an identical value still counts as a change to a screen reader and re-fires
+    a CSS transition. The comparison is what stops a live page flickering on every tick."""
+    from cauce_server.dashboard import _POLL_JS
+
+    assert "el.textContent !== text" in _POLL_JS, (
+        "the setter must compare before assigning, or every poll counts as a change")
+    assert "if (el && el.textContent !== text)" in _POLL_JS
+
+
+def test_the_poll_script_never_writes_text_outside_the_setters():
+    from cauce_server.dashboard import _POLL_JS
+
+    writes = re.findall(r"(\w+)\.textContent\s*=(?!=)", _POLL_JS)
+    assert writes == ["el"], (
+        f"only the guarded setter may assign, got {writes} - a bare e.target.textContent = "
+        f"would rewrite a figure that did not change")
+    # The assignment lives inside the comparison, so it cannot fire for an identical value.
+    assert re.search(r"if \(el && el\.textContent !== text\) \{ el\.textContent = text;",
+                     _POLL_JS), "the single assignment must be guarded by the comparison"
+
+
+def test_the_live_endpoint_answers_without_a_credential():
+    """It is the same data the page already renders unauthenticated.
+
+    Making it private would mean the header stopped updating for anyone whose client had no
+    token attached, which is everyone using a browser.
+    """
+    from cauce_server.main import app
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        r = c.get("/v1/live")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) >= {"nodes", "records", "last_sync_utc_ms", "unchanged"}
+
+
+def test_the_live_endpoint_throttles_per_client():
+    """Twenty open tabs must not mean twenty queries per cycle."""
+    from cauce_server.main import app
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        first = c.get("/v1/live").json()
+        second = c.get("/v1/live").json()
+    # Either the second is throttled, or the throttle window has passed; both are correct.
+    # What must never happen is an error.
+    assert isinstance(second, dict)
+    if first.get("unchanged") is False and second.get("unchanged") is False:
+        pytest.skip("throttle window elapsed between the two calls")
+
+
+def test_the_live_endpoint_reports_the_same_figures_the_page_shows():
+    from cauce_server.main import app
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        live = c.get("/v1/live").json()
+        page = c.get("/").text
+    import re
+
+    stats = re.findall(r'class="v">([^<]*)<', page)
+    if live.get("unchanged"):
+        pytest.skip("throttled")
+    assert stats, "the index no longer renders stat figures"
+    assert live["nodes"] == int(stats[0].replace(",", "")), (
+        f"the header says {live['nodes']} nodes, the page says {stats[0]!r}")

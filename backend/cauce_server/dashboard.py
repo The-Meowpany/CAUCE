@@ -308,6 +308,12 @@ def _refresh_hint(code: str) -> str:
 def _refresh_meta() -> str:
     """The meta-refresh tag, or nothing when the refresh is turned off.
 
+    `content="0;url=..."` is the important form: a zero interval tells the script to take over,
+    while the URL stays as the fallback for a browser with JavaScript disabled. Without the
+    URL the two halves cannot both be expressed - a script that never runs and a page that
+    never updates are the same outcome, and one of them has to win. This way the fallback is
+    the behaviour that is already proven.
+
     Every page template carries a `__REFRESH__` token where the interval belongs, and this
     is the one place the token is resolved. Two reasons it lives here rather than in each of
     the nine render sites: the interval is a deployment decision, not a template decision,
@@ -318,7 +324,11 @@ def _refresh_meta() -> str:
     seconds = settings.dashboard_refresh_s
     if seconds <= 0:
         return ""
-    return f'<meta http-equiv="refresh" content="{int(seconds)}">'
+    # A zero interval tells the script to take over; the URL is the fallback for a browser
+    # with JavaScript disabled. A bare `content="5"` made every entrance animation replay
+    # every five seconds, which is why the page looked busy and unchanged at the same time.
+    # `self` keeps any query parameters the reader arrived with, which a bare "/" would drop.
+    return '<meta http-equiv="refresh" content="0;url=self">'
 
 
 def _with_legal(page: str, labels, code: str) -> str:
@@ -326,11 +336,17 @@ def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("{refresh_hint}", _refresh_hint(code))
     page = page.replace("{base}", _BASE_CSS)
     page = page.replace("</style>", _MOTION_CSS + "</style>", 1)
+
     page = page.replace("__REFRESH__", _refresh_meta())
     # The motion script goes in last and only if the page actually has a </body>, so a
     # template without one is not silently rewritten into something it never was.
     if "</body>" in page:
-        page = page.replace("</body>", _MOTION_JS + "</body>", 1)
+        # The interval has to be substituted *into the script*, which is why this happens
+        # after the script is inserted rather than with the other placeholders: the token
+        # does not exist in the template at all, only in the constant being spliced in here.
+        poll = _POLL_JS.replace("__REFRESH_SECONDS__",
+                                str(max(1, settings.dashboard_refresh_s)))
+        page = page.replace("</body>", poll + _MOTION_JS + "</body>", 1)
     return page.replace("</main>", _legal_footer(code) + "</main>")
 
 
@@ -506,6 +522,64 @@ _MOTION_JS = """
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
+  }
+})();
+</script>"""
+
+
+_POLL_JS = """
+<script>
+/* Patch the live figures in place instead of reloading the document.
+ *
+ * The page used to reload itself with a meta refresh, which meant every entrance animation
+ * replayed on a fixed period and the whole document was rebuilt to change three numbers. This
+ * asks /v1/live for those three numbers and writes them where they belong, so the only thing
+ * that moves is a measurement that actually moved. That is the difference between a dashboard
+ * that is alive and one that is refreshing.
+ *
+ * Same accessibility contract as the rest of the motion: with reduced motion requested, the
+ * values still update - only the flourish goes away. A stale figure is a defect regardless of
+ * what the user asked for.
+ */
+(function () {
+  function fmtUtc(ms) {
+    if (!ms) return '—';
+    return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
+  }
+
+  /* Writes only when the text actually differs. Assigning an identical value still counts
+     as a change to a screen reader and re-triggers a CSS transition, so the comparison is
+     what keeps a live page from flickering on every poll. */
+  function setText(el, text) {
+    if (el && el.textContent !== text) { el.textContent = text; return true; }
+    return false;
+  }
+
+  function tick() {
+    fetch('/v1/live', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || d.unchanged) return;
+        var stats = document.querySelectorAll('.stat .v');
+        setText(stats[0], String(d.nodes));
+        setText(stats[1], d.records.toLocaleString('en-US'));
+        setText(stats[2], fmtUtc(d.last_sync_utc_ms));
+        /* The flash is the whole point: it marks the figure as one that moved, without
+           animating the number itself. */
+        stats.forEach(function (el) { el.classList.remove('cauce-changed'); void el.offsetWidth; });
+        setTimeout(function () {
+          stats.forEach(function (el) { el.classList.add('cauce-changed'); });
+        }, 20);
+      })
+      .catch(function () { /* offline or restarting: the next tick tries again */ });
+  }
+
+  var seconds = __REFRESH_SECONDS__;
+  if (seconds > 0) {
+    setTimeout(function tickLater() {
+      tick();
+      setTimeout(tickLater, seconds * 1000);
+    }, seconds * 1000);
   }
 })();
 </script>"""

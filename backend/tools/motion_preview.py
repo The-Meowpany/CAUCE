@@ -52,6 +52,19 @@ def unguard(html: str) -> str:
     return JS_GUARD.sub("var REDUCED = false;", html, count=1)
 
 
+# A snapshot opened as file:// can never update: the relative refresh resolves against the
+# filesystem, so the browser re-reads the same dead file and shows the same instant forever.
+# Repointed at the server the snapshot came from, the page keeps working and the motion still
+# runs on a machine whose OS reports reduced-motion.
+RELATIVE_REFRESH = re.compile(
+    r'<meta http-equiv="refresh" content="(\d+)">')
+
+
+def repoint(html: str, base: str) -> str:
+    return RELATIVE_REFRESH.sub(
+        lambda m: f'<meta http-equiv="refresh" content="{m.group(1)};url={base}/">', html)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -72,7 +85,7 @@ def main() -> int:
             print(f"  {path:<14} SKIPPED: {exc}")
             continue
 
-        fixed = unguard(ungate(html))
+        fixed = repoint(unguard(ungate(html)), args.base.rstrip("/"))
         target = out / f"{name}.html"
         target.write_text(fixed, encoding="utf-8")
 

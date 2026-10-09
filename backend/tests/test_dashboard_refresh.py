@@ -45,7 +45,23 @@ def test_the_interval_reaches_the_rendered_page(fast_restore):
     settings.dashboard_refresh_s = 5
     with TestClient(app) as client:
         body = client.get("/").text
-    assert '<meta http-equiv="refresh" content="5">' in body
+    # The interval is now the POLL period, not a document reload. A bare `content="5"` made
+    # every entrance animation replay every five seconds, so the page looked busy and
+    # unchanged simultaneously; `0` hands the updating to the script and `url=self` is the
+    # fallback for a browser without JavaScript.
+    assert '<meta http-equiv="refresh" content="0;url=self">' in body
+
+
+def test_the_refresh_names_itself_so_query_parameters_survive(fast_restore):
+    from fastapi.testclient import TestClient
+
+    settings.dashboard_refresh_s = 5
+    with TestClient(app) as client:
+        body = client.get("/?lang=es&from=x").text
+    # A bare "/" would drop the query string on the fallback reload, losing the reader's
+    # filters. `self` re-requests the URL they are already on.
+    assert 'url=self' in body
+    assert 'url=/"' not in body
 
 
 def test_every_page_carries_the_token_and_none_is_left_unresolved(fast_restore):

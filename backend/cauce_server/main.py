@@ -15,6 +15,7 @@ from .dashboard import router as dashboard_router
 from .evaluation import router as evaluation_router
 from .fleet import router as fleet_router
 from .legal import router as legal_router
+from .live import router as live_router
 from .retention import RetentionScheduler
 from .tokens import router as tokens_router
 
@@ -93,6 +94,7 @@ app.include_router(alerts_router)
 app.include_router(evaluation_router)
 app.include_router(dashboard_router)
 app.include_router(legal_router)
+app.include_router(live_router)
 app.include_router(coverage_router)
 app.include_router(fleet_router)
 app.include_router(calibration_router)
