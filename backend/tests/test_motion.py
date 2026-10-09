@@ -187,3 +187,74 @@ def test_motion_does_not_add_a_duplicate_of_anything(path):
     c = client()
     body = c.get(path).text
     assert body.count("window.matchMedia('(prefers-reduced-motion: reduce)')") <= 1
+
+# --------------------------------------------------------------------- the refresh claim
+
+
+def test_the_subtitle_states_the_interval_that_is_actually_set():
+    """The index claimed "auto-refreshes every 60 seconds" in three languages, as prose.
+
+    `CAUCE_DASHBOARD_REFRESH_S` sat beside it being read and could be set to anything. A mock
+    at 5s shipped a sentence wrong by an order of magnitude, and a deployment that set it to
+    0 to disable the refresh was still telling readers the page refreshed every minute. This
+    was visible on the index of a running server, not in a test.
+    """
+    from cauce_server import dashboard as D
+    from cauce_server.config import settings
+
+    original = settings.dashboard_refresh_s
+    try:
+        # Explicit rather than inheriting the default: the point is that the sentence tracks
+        # whatever is configured, and a test that only ever ran at 60s would pass against the
+        # original hardcoded prose.
+        settings.dashboard_refresh_s = 5
+        for code in ("en", "es", "pt"):
+            hint = D._refresh_hint(code)
+            assert "5" in hint, f"{code}: {hint!r} does not mention the configured 5 seconds"
+            assert "60" not in hint, (
+                f"{code}: still claims 60s while configured for 5s - {hint!r}")
+    finally:
+        settings.dashboard_refresh_s = original
+
+
+def test_zero_refresh_says_so_instead_of_describing_one(monkeypatch):
+    from cauce_server import dashboard as D
+    from cauce_server.config import settings
+
+    original = settings.dashboard_refresh_s
+    try:
+        settings.dashboard_refresh_s = 0
+        # The property: it says there is no refresh. Asserting on the absence of a number is
+        # the part that matters - any number here would be describing something that is off.
+        for code in ("en", "es", "pt"):
+            hint = D._refresh_hint(code).lower()
+            assert not any(ch.isdigit() for ch in hint), (
+                f"{code}: {hint!r} mentions a number while no refresh is configured")
+        assert D._refresh_hint("en") == "no auto-refresh"
+        assert D._refresh_hint("es") == "sin auto-refresco"
+    finally:
+        settings.dashboard_refresh_s = original
+
+
+def test_the_index_carries_the_resolved_hint_not_the_token():
+    c = client()
+    for lang in ("en", "es", "pt"):
+        body = c.get(f"/?lang={lang}").text
+        assert "{refresh_hint}" not in body, f"lang={lang} shipped the hint token unresolved"
+        assert "60 second" not in body and "60 segundos" not in body, (
+            f"lang={lang} still claims a 60 second refresh somewhere")
+
+
+def test_minutes_are_used_where_they_read_better(monkeypatch):
+    from cauce_server import dashboard as D
+    from cauce_server.config import settings
+
+    original = settings.dashboard_refresh_s
+    try:
+        settings.dashboard_refresh_s = 300
+        assert "5" in D._refresh_hint("es") and "minuto" in D._refresh_hint("es")
+        settings.dashboard_refresh_s = 60
+        assert "1 minuto" in D._refresh_hint("es"), "singular matters: 'cada 1 minutos' is wrong"
+        assert "1 minute" in D._refresh_hint("en")
+    finally:
+        settings.dashboard_refresh_s = original

@@ -43,7 +43,7 @@ _LABELS = {
     "heat_nodes_with": 'nodes above threshold',
     "heat_window": 'Window (hours back)',
     "heat_fleet": 'Heat events across the fleet',
-    "heat_title": 'Heat events',"title": "CAUCE Central", "subtitle": "Live microclimate readings from community microstations · auto-refreshes every 60 seconds",
+    "heat_title": 'Heat events',"title": "CAUCE Central", "subtitle": "Live microclimate readings from community microstations · {refresh_hint}",
            "node": "Node", "site": "Site", "last": "Last measurement (UTC)", "variable": "Variable",
            "value": "Value", "quality": "Quality", "total": "Total", "api": "API",
            "export": "export full CSV", "disclaimer": "Environmental comparative data. Differences between nodes may reflect placement or calibration; they do not establish causality.", "none": "—",
@@ -101,7 +101,7 @@ _LABELS = {
     "heat_nodes_with": 'nodos sobre el umbral',
     "heat_window": 'Ventana (horas atrás)',
     "heat_fleet": 'Eventos de calor en toda la red',
-    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · se actualiza cada 60 segundos",
+    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · {refresh_hint}",
            "node": "Nodo", "site": "Sitio", "last": "Última medición (UTC)", "variable": "Variable",
            "value": "Valor", "quality": "Calidad", "total": "Total", "api": "API",
            "export": "export CSV completo", "disclaimer": "Datos ambientales comparativos. Las diferencias entre nodos pueden reflejar ubicación o calibración; no constituyen causalidad.", "none": "—",
@@ -160,7 +160,7 @@ _LABELS = {
     "heat_nodes_with": 'nos acima do limiar',
     "heat_window": 'Janela (horas atrás)',
     "heat_fleet": 'Eventos de calor em toda a rede',
-    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Leituras microclimáticas ao vivo da rede comunitária · atualiza a cada 60 segundos",
+    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Leituras microclimáticas ao vivo da rede comunitária · {refresh_hint}",
            "node": "Nó", "site": "Local", "last": "Última medição (UTC)", "variable": "Variável",
            "value": "Valor", "quality": "Qualidade", "total": "Total", "api": "API",
            "export": "exportar CSV completo", "disclaimer": "Dados ambientais comparativos. Diferenças entre nós podem refletir localização ou calibração; não constituem causalidade.", "none": "—",
@@ -277,6 +277,34 @@ def _legal_footer(code: str) -> str:
     return footer_html(code)
 
 
+def _refresh_hint(code: str) -> str:
+    """The refresh interval, stated from the setting rather than remembered.
+
+    The subtitle used to say "auto-refreshes every 60 seconds" in three languages, as prose,
+    while `CAUCE_DASHBOARD_REFRESH_S` sat right next to it being read. Any deployment that
+    set it - including every mock - shipped a visible claim that was wrong by whatever factor
+    they had chosen. And a deployment that set it to 0, to disable the refresh, was still
+    telling readers the page refreshed every minute.
+
+    Says nothing when there is no refresh, rather than describing one that does not happen.
+    """
+    seconds = settings.dashboard_refresh_s
+    if seconds <= 0:
+        return {"en": "no auto-refresh", "es": "sin auto-refresco",
+                "pt": "sem atualizacao automatica"}[code]
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = seconds // 60
+        unit = "minute" if minutes == 1 else "minutes"
+        return {"en": f"auto-refreshes every {minutes} {unit}",
+                "es": f"se actualiza cada {minutes} "
+                      + ("minuto" if minutes == 1 else "minutos"),
+                "pt": f"atualiza a cada {minutes} "
+                      + ("minuto" if minutes == 1 else "minutos")}[code]
+    return {"en": f"auto-refreshes every {seconds} seconds",
+            "es": f"se actualiza cada {seconds} segundos",
+            "pt": f"atualiza a cada {seconds} segundos"}[code]
+
+
 def _refresh_meta() -> str:
     """The meta-refresh tag, or nothing when the refresh is turned off.
 
@@ -295,6 +323,7 @@ def _refresh_meta() -> str:
 
 def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("<main>", "<main id=\"main\">", 1)
+    page = page.replace("{refresh_hint}", _refresh_hint(code))
     page = page.replace("{base}", _BASE_CSS)
     page = page.replace("</style>", _MOTION_CSS + "</style>", 1)
     page = page.replace("__REFRESH__", _refresh_meta())

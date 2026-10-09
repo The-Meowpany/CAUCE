@@ -69,14 +69,19 @@ FIXED_BASE_TS = 1787356800000
 BASE_TS = FIXED_BASE_TS
 
 
-def default_base_ts() -> int:
-    """Today at 00:00 UTC, so a freshly seeded central has data a 'recent' query finds."""
-    now = datetime.now(UTC)
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Leave a day of room at the end so the series does not run into the future: a
-    # measurement from the future is not obviously wrong to the database, but it makes
-    # "last seen" and every staleness rule lie.
-    return int((midnight - timedelta(days=1)).timestamp() * 1000)
+def default_base_ts(days: int = 1) -> int:
+    """The START of a window that ENDS yesterday, so no sample is dated in the future.
+
+    Each scenario emits `days * 1440` minutes forward from BASE_TS, so the anchor has to be a
+    whole window before now - in minutes, not in days. Anchoring to yesterday's midnight was
+    correct only for `days=1`; with `--days 3` the series ran three days past it, and the
+    backend accepted every row without complaint because a future timestamp is not a
+    constraint violation. The visible damage was `last_seen` reading 23:59 tomorrow while every
+    node's real last reading was minutes ago, and every staleness rule comparing itself against
+    data that has not happened yet.
+    """
+    minutes = max(1, days) * 1440
+    return int((datetime.now(UTC) - timedelta(minutes=minutes)).timestamp() * 1000)
 
 
 def iso(ms: int) -> str:
@@ -293,9 +298,10 @@ def main() -> int:
     args = parser.parse_args()
 
     global BASE_TS
-    BASE_TS = args.base_ts if args.base_ts is not None else default_base_ts()
-    print(f"base timestamp: {BASE_TS} "
-          f"({datetime.fromtimestamp(BASE_TS / 1000, UTC).isoformat()})")
+    BASE_TS = (args.base_ts if args.base_ts is not None
+               else default_base_ts(args.days))
+    print(f"window: {datetime.fromtimestamp(BASE_TS / 1000, UTC).isoformat()} .. now"
+          f"  ({args.days} day(s) ending now; no sample is dated in the future)")
 
     exit_code = 0
     for index, (name, fn) in enumerate(SCENARIOS.items(), start=1):
