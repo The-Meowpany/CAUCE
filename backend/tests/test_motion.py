@@ -62,54 +62,57 @@ def test_the_script_bails_out_when_reduced_motion_is_requested():
         "the reduced-motion check happens after the DOM is already being touched")
 
 
-# --------------------------------------------------------------------- the counter
+# ------------------------------------------------------------- numbers must not move
+#
+# The counter is gone, and these tests are why it cannot come back by accident. It animated
+# `.stat .v` from zero to its value on every page load, and the dashboard reloads itself every
+# `CAUCE_DASHBOARD_REFRESH_S` seconds - five, on a mock. So a measurement read 74,132 went
+# 0 -> 74,132 every five seconds, forever. It looked like the number was falling and rising.
+#
+# A figure that falls and rises is worse than a static one: it reports a value the system
+# never had. On a monitoring panel read by someone deciding whether to send a technician, a
+# number that animates is a number nobody can trust at a glance. The entrance animations stay
+# because they finish inside a second and settle; a value that keeps resetting never settles.
 
 
-def _counter_regex() -> str:
-    """The same pattern the script uses, extracted so the test and the page cannot diverge."""
-    m = re.search(r"raw\.match\(/(.+?)/\)", _MOTION_JS)
-    assert m, "the counter's parse pattern is gone"
-    return m.group(1)
+def test_no_animated_number_is_ever_written_to_the_dom():
+    from cauce_server.dashboard import _MOTION_JS
+
+    assert "countUp" not in _MOTION_JS, "the count-up animation is back"
+    assert "IntersectionObserver" not in _MOTION_JS, (
+        "the IntersectionObserver existed only to trigger the counter, once per value")
+    # The specific act: replacing a rendered measurement with a placeholder.
+    assert not re.search(r"textContent\s*=\s*['\"]0['\"]", _MOTION_JS), (
+        "a zero is written into a value element before counting; that is the "
+        "0 -> real -> 0 cycle")
 
 
-def test_the_counter_recognises_the_numbers_the_dashboard_actually_renders():
-    import re as _re
+def test_the_motion_script_only_ever_reads_text():
+    """No assignment to `textContent` anywhere - reading is fine, writing is not.
 
-    pattern = _re.compile(_counter_regex())
-    for value in ("0", "42", "107238", "1,072,384", "24.5", "-3.2", "12 %", "34°",
-                  "8.4 km/h", "2.1 m"):
-        assert pattern.match(value), f"{value!r} would not be recognised, so it would not animate"
-
-
-def test_the_counter_declines_anything_that_is_not_just_a_number():
-    import re as _re
-
-    pattern = _re.compile(_counter_regex())
-    # Text, dates and identifiers must be left exactly as they are. A counter that mangles a
-    # timestamp to make it count up is worse than one that does not move.
-    for value in ("CAUCE-SIM-001", "2026-10-09T01:30Z", "sin datos", "N/A", "", "3d 4h",
-                  "42 Measurement"):
-        assert not pattern.match(value), f"{value!r} would be treated as a number"
-
-
-def test_the_counter_keeps_precision_and_separators():
-    """The animation must end on the original string, never on a reformatted number.
-
-    `int.toLocaleString` and `toFixed` are both lossy in a way that shows: 107238 rendered as
-    107,238 is fine, but the same value finished as 107237.9 is a lie about a measurement.
-    So the script restores the original text on the final frame.
+    `flashChanges` reads a figure to compare it with the last one seen, and that is
+    legitimate. Writing one is what made a measurement rise and fall. The check is on the
+    assignment, not on the word, because reading the current value is exactly what a
+    comparison needs.
     """
-    assert 'el.textContent = raw;' in _MOTION_JS, (
-        "the final frame must restore the original text, not a formatted approximation")
-    assert "toFixed(decimals)" in _MOTION_JS, "precision must follow the source string"
-    assert "decimals" in _MOTION_JS
+    from cauce_server.dashboard import _MOTION_JS
+
+    writes = re.findall(r"\w+\.textContent\s*=(?!=)", _MOTION_JS)
+    assert writes == [], (
+        f"the motion script writes textContent ({writes}); a measurement must only ever be "
+        f"written by the server that measured it")
 
 
-def test_counting_up_never_overshoots_the_value():
-    # easeOutExpo is monotonic in [0,1]; if that ever changed to a spring that overshoots, a
-    # temperature would briefly read above its real value on the way past.
-    assert "Math.pow(2, -10 * t)" in _MOTION_JS
-    assert "t === 1 ? 1" in _MOTION_JS
+def test_the_only_thing_the_script_flashes_is_a_class():
+    """What remains: the highlight on a changed figure, which touches no text.
+
+    Kept deliberately. A number that moved since you last looked is worth noticing, and
+    saying so with a background flash reports nothing false.
+    """
+    from cauce_server.dashboard import _MOTION_JS
+
+    assert "classList.add" in _MOTION_JS
+    assert re.search(r"\w+\.textContent\s*=(?!=)", _MOTION_JS) is None
 
 
 # --------------------------------------------------------------------- charts
@@ -128,15 +131,6 @@ def test_charts_draw_only_after_measuring_the_real_length():
     assert "setAttribute('data-draw', '')" in _MOTION_JS
     assert re.search(r"try\s*\{\s*len\s*=", _MOTION_JS), (
         "measuring can throw on a detached element; the chart must survive it")
-
-
-def test_values_animate_only_when_scrolled_into_view():
-    assert "IntersectionObserver" in _MOTION_JS
-    assert "io.unobserve" in _MOTION_JS, "each value must animate once, not on every scroll"
-    assert "seen.has" in _MOTION_JS
-
-
-# --------------------------------------------------------------------- integration
 
 
 def test_every_page_carries_the_motion_and_none_of_it_is_stray():

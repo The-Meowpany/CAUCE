@@ -470,39 +470,6 @@ _MOTION_JS = """
     });
   }
 
-  /* Count numbers up. Reads the final value out of the element's own text, so the animation
-     never invents a number: if it cannot parse one, the element is left exactly as it was.
-     The formatter keeps the original precision and thousands separators, because a counter
-     that animates 107238 to "1,072.4" has made the data less true, not more alive. */
-  var FRACTIONS = new Map([['km', 1], ['mi', 1], ['m', 0], ['km/h', 1], ['%', 1]]);
-  function countUp(el) {
-    var raw = (el.textContent || '').trim();
-    if (!raw) return;
-    var m = raw.match(/^([-+]?[\\d.,\\s]+)(\\s*[%°]|\\s*(?:km|mi|m|km\\/h))?$/);
-    if (!m) return;
-    var numeric = parseFloat(m[1].replace(/\\s/g, '').replace(/,(?=\\d{3}\b)/g, ''));
-    if (!isFinite(numeric)) return;
-    var decimals = (m[1].split('.')[1] || '').length;
-    var suffix = m[2] || '';
-    var duration = 900;
-    var start = performance.now();
-    function step(now) {
-      var t = Math.min(1, (now - start) / duration);
-      /* easeOutExpo: fast off the line, then settles, so the value arrives rather than
-         crawls. Linear would make a small change look like nothing and a big one violent. */
-      var eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
-      var value = numeric * eased;
-      var text = decimals
-        ? value.toFixed(decimals)
-        : Math.round(value).toLocaleString('en-US');
-      el.textContent = text + suffix;
-      if (t < 1) requestAnimationFrame(step);
-      else el.textContent = raw;
-    }
-    el.textContent = (decimals ? (0).toFixed(decimals) : '0') + suffix;
-    requestAnimationFrame(step);
-  }
-
   /* Flash a stat whose value moved since this browser last saw this page. sessionStorage
      is per-tab and expires on its own, which suits "since you last looked". Anything that
      throws - private mode, a full quota - is swallowed: losing the flourish is not a reason
@@ -529,32 +496,10 @@ _MOTION_JS = """
     try { store.setItem(key, JSON.stringify(next)); } catch (e) { /* not worth surfacing */ }
   }
 
-  /* Values animate only when they are actually on screen. A counter that fires for content
-     nobody has scrolled to is motion spent on nothing. */
-  function animateWhenVisible() {
-    var targets = document.querySelectorAll('.stat .v, .card .v');
-    if (!targets.length) return;
-    if (!('IntersectionObserver' in window)) {
-      targets.forEach(countUp);
-      return;
-    }
-    var seen = new WeakSet();
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (!entry.isIntersecting || seen.has(entry.target)) return;
-        seen.add(entry.target);
-        countUp(entry.target);
-        io.unobserve(entry.target);
-      });
-    }, { threshold: 0.4 });
-    targets.forEach(function (el) { io.observe(el); });
-  }
-
   function init() {
     indexElements();
     prepareCharts();
     flashChanges();
-    animateWhenVisible();
   }
 
   if (document.readyState === 'loading') {
