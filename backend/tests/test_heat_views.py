@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from pathlib import Path
 
 from cauce_server.analytics import detect_heat_events, heat_summary
 
@@ -332,3 +333,76 @@ def test_an_absurd_window_is_clamped_rather_than_scanning_everything():
     assert c.get("/map?hours=999999999").status_code == 200
     assert c.get("/map?hours=0").status_code == 200
     assert c.get("/map?hours=-5").status_code == 200
+
+# --------------------------------------------------------------- shared stylesheet
+
+
+def test_every_page_resolves_the_shared_base_css():
+    """The base stylesheet exists once, and every page must actually receive it.
+
+    The extractor that introduced this printed "10 of 10 templates now reference {base}"
+    while having changed nothing: its early-continue skipped the write, and the `replace` that
+    followed silently matched nothing. Nothing failed. The pages kept rendering, unstyled,
+    and 600 tests stayed green because none of them looks at a stylesheet.
+
+    So this asserts the observable thing: no page may still carry the base inline, and the
+    token has to be there in all of them.
+    """
+    from cauce_server import dashboard as D
+
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    templates = re.findall(r'(_[A-Z_]+) = """<!DOCTYPE html>(.*?)"""', src, re.S)
+    assert len(templates) == 10, f"expected 10 templates, found {len(templates)}"
+    for name, body in templates:
+        m = re.search(r"<style>(.*?)</style>", body, re.S)
+        assert m, f"{name} has no <style> block"
+        css = m.group(1)
+        assert "{base}" in css, f"{name} does not reference the shared base"
+        for decl in ("body{margin:0;background:#0f1720", ".mut{color:#8aa0b4",
+                     ":focus-visible{outline:2px solid"):
+            assert decl not in css, (
+                f"{name} still carries {decl!r} inline; the base exists so this is edited "
+                f"once, not ten times")
+
+
+def test_the_base_stylesheet_is_not_defined_twice():
+    import cauce_server.dashboard as D
+
+    assert D._BASE_CSS.strip(), "the shared stylesheet is empty"
+    assert "body{" in D._BASE_CSS
+    assert ".mut{" in D._BASE_CSS
+
+
+def test_all_pages_agree_on_the_page_measure():
+    """One content width across the dashboard.
+
+    `main` was 900px on nine pages, 1000px on the index and 1100px on the heat page written
+    earlier the same day. The same table therefore sat in three different columns depending on
+    where you navigated from, and no one had decided any of it - each was typed by whoever was
+    editing that one page.
+    """
+    import cauce_server.dashboard as D
+
+    widths = set(re.findall(r"main\{max-width:(\d+)px",
+                            Path(D.__file__).read_text(encoding="utf-8")))
+    assert widths == {"900"}, f"main width is set per page: {widths}"
+
+
+def test_a_printed_report_keeps_its_small_text_legible():
+    """The print stylesheet flips to black on white but never restyled `.mut`.
+
+    `.mut` is a blue-grey chosen for the dark theme: 2.7:1 on white, below the 4.5:1 floor and
+    effectively unreadable. So the disclaimer, the generation time and the range line vanished
+    from every printed node report. The contrast detector found it as two findings on a page
+    it thought was white-backgrounded, which is how it is meant to be found.
+    """
+    import cauce_server.dashboard as D
+
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    m = re.search(r"@media print\{(.*?)\}\s*</style>", src, re.S)
+    assert m, "no print stylesheet found"
+    block = m.group(1)
+    assert "background:#fff" in block, "print block does not switch to a light background"
+    assert ".mut" in block, (
+        "print block sets a white background but never restyles .mut, so the muted text "
+        "stays dark-theme blue-grey on paper")

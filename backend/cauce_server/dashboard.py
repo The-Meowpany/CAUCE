@@ -295,19 +295,46 @@ def _refresh_meta() -> str:
 
 def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("<main>", "<main id=\"main\">", 1)
+    page = page.replace("{base}", _BASE_CSS)
     page = page.replace("__REFRESH__", _refresh_meta())
     return page.replace("</main>", _legal_footer(code) + "</main>")
+
+
+_BASE_CSS = """body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:1rem}
+h1{color:#39c2a7;letter-spacing:.08em;font-size:1.5rem}
+h2{color:#8aa0b4;font-size:1.14rem;margin:1.6rem 0 .5rem}
+a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+.mut{color:#8aa0b4;font-size:.85rem}
+:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
+input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
+::-webkit-scrollbar{height:8px;width:8px}
+::-webkit-scrollbar-track{background:#0f1720}
+::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}
+*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
+table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}"""
+
+
+_BASE_CSS = """body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
+main{max-width:900px;margin:0 auto;padding:1rem}
+h1{color:#39c2a7;letter-spacing:.08em;font-size:1.2rem}
+h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+.mut{color:#8aa0b4;font-size:.85rem}
+:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
+input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
+::-webkit-scrollbar{height:8px;width:8px}
+::-webkit-scrollbar-track{background:#0f1720}
+::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}
+*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
+table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}"""
 
 
 _PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 __REFRESH__<title>{title}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:1000px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
@@ -324,14 +351,12 @@ td{padding:.55rem .8rem;border-top:1px solid #223140}
 .card .big{font-size:1.6rem;font-weight:600}
 canvas.spark{width:100%;height:64px}
 .q-VALID,.q-CALIBRATED{color:#39c2a7}.q-SUSPECT{color:#e6b455}.q-INVALID,.q-MISSING{color:#e26d5a}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
-.mut{color:#8aa0b4;font-size:.85rem}
+
+@media(max-width:640px){}
+
 nav.mut a{margin-right:1rem}
 #langsw{float:right;display:inline-flex;border:1px solid #39c2a7;border-radius:8px;overflow:hidden}
 #langsw a{margin:0;padding:.1rem .5rem;color:#8aa0b4;font-size:.8rem}
@@ -378,11 +403,7 @@ _NODE_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 __REFRESH__<title>{title} — {nid}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
@@ -393,14 +414,12 @@ td{padding:.55rem .8rem;border-top:1px solid #223140}
 .card .v{font-size:1.5rem;font-weight:600}
 .card .u{color:#8aa0b4;font-size:.8rem}
 .q-VALID,.q-CALIBRATED{color:#39c2a7}.q-SUSPECT{color:#e6b455}.q-INVALID,.q-MISSING{color:#e26d5a}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
-.mut{color:#8aa0b4;font-size:.85rem}
+
+@media(max-width:640px){}
+
 canvas#chart{width:100%;height:220px;background:#182430;border-radius:12px}
 </style></head><body><main>
 <p><a href="/">{back}</a></p>
@@ -479,29 +498,20 @@ _COLOC_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {h_coloc}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
 th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #223140}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
+
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
+
+@media(max-width:640px){}
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
+
+@media(max-width:640px){}
 canvas#chart{width:100%;height:220px;background:#182430;border-radius:12px}
 </style></head><body><main>
 <p><a href="/">{back}</a></p>
@@ -554,29 +564,20 @@ _ALERTS_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {h_alerts}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
 th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #223140}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
+
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
+
+@media(max-width:640px){}
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
+
+@media(max-width:640px){}
 form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.4rem;background:#182430;border-radius:12px;padding:.8rem}
 form.grid label{display:flex;flex-direction:column;font-size:.8rem;color:#8aa0b4}
 .ok{color:#39c2a7}.fail{color:#e26d5a}
@@ -627,30 +628,21 @@ _REPORT_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {nid} — {h_report}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
 th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #223140}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
+
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
+
+@media(max-width:640px){}
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
-@media print{body{background:#fff;color:#000}main{max-width:100%}table{background:#fff}th{background:#eee;color:#000}td{border-top:1px solid #ccc}a{color:#000}.noprint{display:none}h1{color:#000}h2{color:#333}}
+
+@media(max-width:640px){}
+@media print{body{background:#fff;color:#000}main{max-width:100%}table{background:#fff}th{background:#eee;color:#000}td{border-top:1px solid #ccc}a{color:#000}.noprint{display:none}h1{color:#000}h2{color:#333}.mut,.stat .u,.card .u,#langsw a,label{color:#445}button{border:1px solid #999;color:#000;background:#fff}}
 </style></head><body><main>
 <p class="noprint"><a href="/nodes/{nid}">{back_node}</a> · <a href="/">{back}</a> · <button onclick="window.print()">{print}</button></p>
 <h1>{title} — {nid} — {h_report}</h1>
@@ -673,13 +665,9 @@ _HEAT_PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 __REFRESH__
 <title>{title} \u00b7 {h_heat}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:1100px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
+<style>{base}
+
+
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
 .warn{background:#3a2410;border-radius:6px;padding:.6rem .9rem;
       box-shadow:inset 0 0 0 1px #6b4a24;color:#f0c99a;font-size:.85rem;margin:.6rem 0}
@@ -718,12 +706,7 @@ _MAP_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {h_map}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
+<style>{base}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
 svg{width:100%;height:auto;background:#182430;border-radius:12px}
 </style></head><body><main>
@@ -756,24 +739,18 @@ _EVENTS_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {nid} — {h_ev}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
 th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #223140}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
-.mut{color:#8aa0b4;font-size:.85rem}
+
+@media(max-width:640px){}
+
 input,select,button{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
 </style></head><body><main>
@@ -790,24 +767,18 @@ _COMPARE_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} — {h_compare}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
 .tbl table{white-space:nowrap}
 th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #223140}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}.stat .v{font-size:1.15rem}.card .big{font-size:1.3rem}canvas#chart{height:170px}}
 select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
-input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:-.15rem;padding:0}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
-::-webkit-scrollbar{height:8px;width:8px}::-webkit-scrollbar-track{background:#0f1720}::-webkit-scrollbar-thumb{background:#223140;border-radius:4px}*{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
-@media(max-width:640px){table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}}
-.mut{color:#8aa0b4;font-size:.85rem}
+
+@media(max-width:640px){}
+
 canvas#chart{width:100%;height:220px;background:#182430;border-radius:12px}
 select,button{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
 </style></head><body><main>
@@ -2064,11 +2035,7 @@ _SYSTEM_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 __REFRESH__<title>{title} — {h_sys}</title>
-<style>
-body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
-main{max-width:900px;margin:0 auto;padding:1rem}
-h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
-h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+<style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
 .tbl{overflow-x:auto;border-radius:12px}
 .tbl table{white-space:nowrap}
@@ -2078,9 +2045,7 @@ td{padding:.55rem .8rem;border-top:1px solid #223140}
 .card{background:#182430;border-radius:12px;padding:.7rem .9rem}
 .card .v{font-size:1.4rem;font-weight:600}
 .card .u{color:#8aa0b4;font-size:.8rem}
-a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
-.mut{color:#8aa0b4;font-size:.85rem}
-:focus-visible{outline:2px solid #39c2a7;outline-offset:2px}
+
 .skip{display:none}
 @media(max-width:640px){main{padding:.6rem}th,td{padding:.4rem .45rem;font-size:.82rem}}
 </style></head><body><main>
