@@ -12,7 +12,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from . import node_auth, revocation
 from .alerts import evaluate_heat_rules
-from .analytics import summary_stats
+from .analytics import detect_heat_events, summary_stats
 from .calibration import (
     apply_value,
     calibration_for,
@@ -1262,38 +1262,7 @@ def analytics_heat_events(
         rows = [{"timestamp_utc_ms": r["timestamp_utc_ms"],
                  "value": apply_value(r["value"], calibration)} for r in rows]
 
-    events: list[dict] = []
-    start_ms: int | None = None
-    peak = None
-    prev_ts: int | None = None
-    for r in rows:
-        ts, v = r["timestamp_utc_ms"], r["value"]
-        above = v >= threshold
-        if above and start_ms is None:
-            start_ms, peak = ts, v
-        elif above and start_ms is not None:
-            if v > (peak or v):
-                peak = v
-            duration_ms = ts - start_ms
-            if duration_ms >= min_duration_min * 60000 and prev_ts is not None:
-                events.append({
-                    "start_utc_ms": start_ms,
-                    "end_utc_ms": ts,
-                    "duration_min": round(duration_ms / 60000),
-                    "peak_value": round(peak, 2),
-                })
-                start_ms, peak = None, None
-        elif not above and start_ms is not None:
-            duration_ms = (prev_ts or start_ms) - start_ms
-            if duration_ms >= min_duration_min * 60000:
-                events.append({
-                    "start_utc_ms": start_ms,
-                    "end_utc_ms": prev_ts,
-                    "duration_min": round(duration_ms / 60000),
-                    "peak_value": round(peak, 2),
-                })
-            start_ms, peak = None, None
-        prev_ts = ts
+    events = detect_heat_events(rows, threshold, min_duration_min)
 
     return {
         "node_id": node_id,

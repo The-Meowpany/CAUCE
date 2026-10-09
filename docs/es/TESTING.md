@@ -6,7 +6,7 @@
 cd firmware
 ```sh
 pio test -e native          # 461 tests en PC (Unity)
-python -m pytest tests -q    # 581 tests del backend
+python -m pytest tests -q    # 593 tests del backend
 ```
 pio run -e native           # compila el demo de simulación en host
 pio run -e esp32dev         # compila el firmware objetivo

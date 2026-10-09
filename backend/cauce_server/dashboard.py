@@ -9,11 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from .analytics import summary_stats
+from .analytics import detect_heat_events, heat_summary, summary_stats
 from .api import analytics_heat_events
 from .calibration import (
     apply_value,
     calibrated_uncertainty,
+    calibration_for,
     is_identity,
     site_calibrations,
     transform_stats,
@@ -26,7 +27,19 @@ from .security import require_bearer_token
 router = APIRouter()
 
 _LABELS = {
-    "en": {"title": "CAUCE Central", "subtitle": "Live microclimate readings from community microstations · auto-refreshes every 60 seconds",
+    "en": {
+    "map_colour_fixed": 'Colour scale is fixed, so the same colour means the same temperature on every load.',
+    "map_no_window": 'no reading in window',
+    "map_window": 'Window',
+    "heat_scale_note": 'Threshold from the form below applies to every row.',
+    "heat_no_any": 'No node crossed the threshold in this window.',
+    "heat_open_note": 'Counts closed runs only. A run still above the threshold when the data ends is not counted, because its end was not observed.',
+    "heat_longest": 'Longest',
+    "heat_hours_above": 'Hours above',
+    "heat_nodes_with": 'nodes above threshold',
+    "heat_window": 'Window (hours back)',
+    "heat_fleet": 'Heat events across the fleet',
+    "heat_title": 'Heat events',"title": "CAUCE Central", "subtitle": "Live microclimate readings from community microstations · auto-refreshes every 60 seconds",
            "node": "Node", "site": "Site", "last": "Last measurement (UTC)", "variable": "Variable",
            "value": "Value", "quality": "Quality", "total": "Total", "api": "API",
            "export": "export full CSV", "disclaimer": "Environmental comparative data. Differences between nodes may reflect placement or calibration; they do not establish causality.", "none": "—",
@@ -68,7 +81,19 @@ _LABELS = {
             "cal_none": "No calibration recorded for this site.",
             "fleet_hint": "A visit is needed when a node is offline, its clock is unset, storage is nearly full or frames are corrupted.",
             "yes": "yes", "no": "no",},
-    "es": {"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · se actualiza cada 60 segundos",
+    "es": {
+    "map_colour_fixed": 'La escala de color es fija, así el mismo color significa la misma temperatura en cada carga.',
+    "map_no_window": 'sin lectura en la ventana',
+    "map_window": 'Ventana',
+    "heat_scale_note": 'El umbral del formulario de abajo se aplica a todas las filas.',
+    "heat_no_any": 'Ningún nodo cruzó el umbral en esta ventana.',
+    "heat_open_note": 'Solo cuenta tramos cerrados. Un tramo que sigue sobre el umbral cuando acaban los datos no se cuenta, porque su final no se observó.',
+    "heat_longest": 'Más larga',
+    "heat_hours_above": 'Horas por encima',
+    "heat_nodes_with": 'nodos sobre el umbral',
+    "heat_window": 'Ventana (horas atrás)',
+    "heat_fleet": 'Eventos de calor en toda la red',
+    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Lecturas microclimáticas en vivo de la red comunitaria · se actualiza cada 60 segundos",
            "node": "Nodo", "site": "Sitio", "last": "Última medición (UTC)", "variable": "Variable",
            "value": "Valor", "quality": "Calidad", "total": "Total", "api": "API",
            "export": "export CSV completo", "disclaimer": "Datos ambientales comparativos. Las diferencias entre nodos pueden reflejar ubicación o calibración; no constituyen causalidad.", "none": "—",
@@ -111,7 +136,19 @@ _LABELS = {
             "fleet_hint": "Hace falta visita cuando un nodo está caído, su reloj no está fijado, el almacenamiento se llena o hay tramas corruptas.",
             "yes": "sí", "no": "no",},
 
-    "pt": {"title": "CAUCE Central", "subtitle": "Leituras microclimáticas ao vivo da rede comunitária · atualiza a cada 60 segundos",
+    "pt": {
+    "map_colour_fixed": 'A escala de cor e fixa, portanto a mesma cor significa a mesma temperatura em cada carga.',
+    "map_no_window": 'sem leitura na janela',
+    "map_window": 'Janela',
+    "heat_scale_note": 'O limiar do formulario abaixo aplica-se a todas as linhas.',
+    "heat_no_any": 'Nenhum nó cruzou o limiar nesta janela.',
+    "heat_open_note": 'Apenas conta trechos fechados. Um trecho ainda acima do limiar quando os dados acabam nao e contado, porque o fim nao foi observado.',
+    "heat_longest": 'Mais longa',
+    "heat_hours_above": 'Horas acima',
+    "heat_nodes_with": 'nos acima do limiar',
+    "heat_window": 'Janela (horas atrás)',
+    "heat_fleet": 'Eventos de calor em toda a rede',
+    "heat_title": 'Eventos de calor',"title": "CAUCE Central", "subtitle": "Leituras microclimáticas ao vivo da rede comunitária · atualiza a cada 60 segundos",
            "node": "Nó", "site": "Local", "last": "Última medição (UTC)", "variable": "Variável",
            "value": "Valor", "quality": "Qualidade", "total": "Total", "api": "API",
            "export": "exportar CSV completo", "disclaimer": "Dados ambientais comparativos. Diferenças entre nós podem refletir localização ou calibração; não constituem causalidade.", "none": "—",
@@ -619,6 +656,52 @@ input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:
 {evbody}
 <p class="mut">{disclaimer}</p></main></body></html>"""
 
+_HEAT_PAGE = """<!DOCTYPE html>
+<html lang="{lang}"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
+<title>{title} \u00b7 {h_heat}</title>
+<style>
+body{margin:0;background:#0f1720;color:#e8eef4;font:15px/1.45 system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:1rem}
+h1{color:#39c2a7;letter-spacing:.12em;font-size:1.2rem}
+h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
+a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
+.mut{color:#8aa0b4;font-size:.85rem}
+.empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
+.warn{background:#3a2410;border-left:3px solid #d98b3a;border-radius:6px;padding:.6rem .9rem;
+      color:#f0c99a;font-size:.85rem;margin:.6rem 0}
+form{display:flex;gap:.8rem;flex-wrap:wrap;align-items:flex-end;background:#182430;
+     border-radius:12px;padding:.8rem 1rem;margin:.8rem 0}
+label{display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;color:#8aa0b4}
+input,select,button{background:#0f1720;color:#e8eef4;border:1px solid #2b3b4d;
+     border-radius:6px;padding:.35rem .5rem;font:inherit}
+button{background:#39c2a7;color:#06231d;border:0;cursor:pointer}
+.tbl{overflow-x:auto;border-radius:12px;margin-bottom:.9rem}
+table{width:100%;border-collapse:collapse;background:#182430}
+th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;
+   text-transform:uppercase;color:#8aa0b4}
+td{padding:.55rem .8rem;border-top:1px solid #2b3b4d}
+tr.hot td{background:#2a1512}
+tr.hot td:first-child{border-left:3px solid #e2725b}
+.pill{display:inline-block;padding:.05rem .45rem;border-radius:99px;font-size:.72rem;
+      background:#39c2a7;color:#06231d}
+</style></head><body><main>
+<p><a href="/">{back}</a> \u00b7 <a href="/map">{map}</a></p>
+<h1>{h_heat}</h1>
+<p class="mut">{heat_fleet}</p>
+<form method="get">
+<label>{h_thr} (\u00b0C)<input name="threshold" value="{thr}"></label>
+<label>{h_dur} (min)<input name="min_duration" value="{dur}"></label>
+<label>{heat_window}<input name="hours" value="{hours}"></label>
+<button>{apply}</button>
+</form>
+{summary}
+<div class="warn">{heat_open_note}</div>
+{body}
+<p class="mut">{disclaimer}</p></main></body></html>"""
+
+
 _MAP_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -632,7 +715,7 @@ a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
 svg{width:100%;height:auto;background:#182430;border-radius:12px}
 </style></head><body><main>
-<p><a href="/">{back}</a></p>
+<p><a href="/heat">{events}</a> · <a href="/">{back}</a></p>
 <h1>{title} — {h_map}</h1>
 {body}
 <p class="mut">{disclaimer}</p></main></body></html>"""
@@ -675,7 +758,7 @@ input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:
 input,select,button{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39c2a7;border-radius:8px;padding:.3rem .6rem;margin:.15rem}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
 </style></head><body><main>
-<p><a href="/nodes/{nid}">{back_node}</a> · <a href="/">{back}</a></p>
+<p><a href="/nodes/{nid}">{back_node}</a> · <a href="/heat">{events}</a> · <a href="/">{back}</a></p>
 <h1>{title} — {nid} — {h_ev}</h1>
 <form method="get" action="#results" class="mut">{h_var}: <select name="variable">{opts_v}</select>
 {h_thr}: <input type="number" name="threshold" step="0.5" value="{thr}" style="width:5rem">
@@ -966,15 +1049,47 @@ def node_page(node_id: str, request: Request, days: int = 1,
     return HTMLResponse(_with_legal(page, labels, code))
 
 
+def _heat_rows(node_id: str, variable: str,
+               from_utc_ms: int | None = None,
+               to_utc_ms: int | None = None) -> list[dict]:
+    """Samples for heat detection, calibrated, in the same shape `detect_heat_events` wants.
+
+    The quality filter matches the API endpoint exactly. It is not a trust signal - a SUSPECT
+    or UNCALIBRATED reading is still a real measurement and hiding it would make the heat
+    count disagree with the chart above it - but a NULL value is not a measurement at all,
+    and comparing None against a threshold raises.
+    """
+    sql = ("SELECT timestamp_utc_ms, value FROM measurements"
+           " WHERE node_id=? AND variable=? AND value IS NOT NULL"
+           " AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')")
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        sql += " AND timestamp_utc_ms>=?"
+        params.append(from_utc_ms)
+    if to_utc_ms is not None:
+        sql += " AND timestamp_utc_ms<=?"
+        params.append(to_utc_ms)
+    sql += " ORDER BY timestamp_utc_ms"
+    rows = query(sql, tuple(params))
+    calibration = calibration_for(node_id, variable)
+    if calibration and not is_identity(calibration["scale"],
+                                      calibration["offset"]):
+        rows = [{"timestamp_utc_ms": r["timestamp_utc_ms"],
+                 "value": apply_value(r["value"], calibration)} for r in rows]
+    return rows
+
+
 @router.get("/nodes/{node_id}/events", response_class=HTMLResponse)
 def node_events_page(node_id: str, request: Request,
                      variable: str = "air_temperature",
                      threshold: float = 32.0,
-                     min_duration_min: int = 60,
-                     authorization: Annotated[str | None, Header()] = None):
-    # Annotated so the default is a real None: this route calls an api.py route function
-    # directly and has to hand it the caller's credential explicitly. With a plain
-    # `Header(default=None)` the forwarded value was a Header object.
+                     min_duration_min: int = 60):
+    # This page used to forward the browser's `Authorization` header into
+    # `api.analytics_heat_events`, which requires a read scope. A browser cannot set that
+    # header from an address bar, so the one page whose entire job is to show heat events was
+    # the only dashboard page that answered 401 - and the node page linked straight into it.
+    # The credential bought nothing: every reading this page shows is already rendered
+    # unauthenticated by `/`, `/map`, `/colocation` and `/nodes/{id}`.
     check_rate(request)
     code, labels = _pick(request)
     nodes = query("SELECT node_id FROM nodes WHERE node_id=?", (node_id,))
@@ -986,19 +1101,17 @@ def node_events_page(node_id: str, request: Request,
     if variable not in variables:
         variable = "air_temperature" if "air_temperature" in variables else (
             variables[0] if variables else "air_temperature")
-    data = analytics_heat_events(
-        node_id=node_id, request=request, variable=variable,
-        threshold=threshold, min_duration_min=min_duration_min,
-        authorization=authorization)
+    events = detect_heat_events(
+        _heat_rows(node_id, variable), threshold, min_duration_min)
     peak_seen = query(
         "SELECT MAX(value) AS m FROM measurements WHERE node_id=?"
         " AND variable=? AND value IS NOT NULL", (node_id, variable))[0]["m"]
-    if data["events"]:
+    if events:
         rows = "".join(
             _EV_ROW.format(start=_fmt_utc(e["start_utc_ms"]),
                            end=_fmt_utc(e["end_utc_ms"]),
                            dur=e["duration_min"], peak=e["peak_value"])
-            for e in data["events"])
+            for e in events)
         body = (
             "<div class=\"tbl\">"
             f"<table><tr><th>{labels['start']}</th><th>{labels['end']}</th>"
@@ -1024,6 +1137,7 @@ def node_events_page(node_id: str, request: Request,
             .replace("{title}", labels["title"])
             .replace("{nid}", html.escape(node_id))
             .replace("{h_ev}", labels["ev_title"])
+            .replace("{events}", labels["events"])
             .replace("{back_node}", labels["node"])
             .replace("{back}", labels["back"])
             .replace("{h_var}", labels["variable"])
@@ -1383,6 +1497,114 @@ def colocation_page(request: Request, variable: str = "air_temperature",
     return HTMLResponse(_with_legal(page, labels, code))
 
 
+
+@router.get("/heat", response_class=HTMLResponse)
+def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
+                    min_duration_min: int = 60):
+    """Every node's heat events in one table.
+
+    The per-node page at `/nodes/{id}/events` existed and worked, and answering "which nodes
+    had a heat event" meant visiting each one in turn and reading the number. For the question
+    an operator actually asks during a warm spell - who is above threshold, and since when -
+    the fleet view is the page that answers it, so this is it.
+
+    Window and threshold are query parameters rather than form fields alone, so a URL can be
+    shared and bookmarked. Both are clamped: an unbounded window would scan the whole table
+    on every refresh, and this page reloads itself.
+    """
+    check_rate(request)
+    code, labels = _pick(request)
+    hours = max(1, min(int(hours), 24 * 365))
+    threshold = max(-80.0, min(float(threshold), 80.0))
+    min_duration_min = max(1, min(int(min_duration_min), 24 * 60))
+
+    to_ms = query("SELECT MAX(timestamp_utc_ms) AS m FROM measurements")[0]["m"] or 0
+    from_ms = to_ms - hours * 3600000
+
+    per_node = []
+    for r in query("SELECT node_id FROM nodes ORDER BY node_id"):
+        nid = r["node_id"]
+        events = detect_heat_events(_heat_rows(nid, "air_temperature", from_ms, to_ms),
+                                    threshold, min_duration_min)
+        summary = heat_summary(events)
+        last = query("SELECT MAX(timestamp_utc_ms) AS m FROM measurements"
+                     " WHERE node_id=? AND variable='air_temperature'"
+                     " AND value IS NOT NULL", (nid,))[0]["m"]
+        # `event_list`, not `events`: `heat_summary` returns a count under the key
+        # `events`, and a later `**` silently overwrites the list with an int - which
+        # failed at the first `max()` rather than at the assignment.
+        per_node.append({"node_id": nid, "event_list": events, **summary,
+                        "last_utc_ms": last})
+
+    with_events = [p for p in per_node if p["events"] > 0]
+    rows_html = ""
+    for p in sorted(per_node, key=lambda x: (-x["events"], x["node_id"])):
+        if p["events"]:
+            recent = max(p["event_list"], key=lambda e: e["end_utc_ms"])
+            last_ev = (f"<a href=\"/nodes/{html.escape(p['node_id'])}/events"
+                       f"?threshold={threshold:g}&min_duration={min_duration_min}\">"
+                       f"{_fmt_utc(recent['end_utc_ms'])}</a>")
+        else:
+            last_ev = '<span class="mut">\u2014</span>'
+        cls = " class=\"hot\"" if p["events"] else ""
+        peak = p["peak_value"]
+        peak_txt = "—" if peak is None else f"{peak:.1f}"
+        rows_html += (
+            f"<tr{cls}><td><a href=\"/nodes/{html.escape(p['node_id'])}\">"
+            f"{html.escape(p['node_id'])}</a></td>"
+            f"<td>{p['events']}</td>"
+            f"<td>{round(p['total_minutes'] / 60, 1)}</td>"
+            f"<td>{p['longest_min']}</td>"
+            f"<td>{peak_txt}</td>"
+            f"<td>{last_ev}</td></tr>")
+
+    if with_events:
+        hottest = max(with_events, key=lambda x: x["peak_value"] or -99)
+        longest = max(with_events, key=lambda x: x["total_minutes"])
+        summary = (
+            f"<p><span class=\"pill\">{len(with_events)}</span> "
+            f"{labels['heat_nodes_with']} "
+            f"\u00b7 {labels['heat_hours_above']}: "
+            f"{round(sum(p['total_minutes'] for p in with_events) / 60, 1)} h "
+            f"\u00b7 {labels['worst_node']}: "
+            f"<a href=\"/nodes/{html.escape(hottest['node_id'])}\">"
+            f"{html.escape(hottest['node_id'])}</a> "
+            f"({hottest['peak_value']:.1f} \u00b0C) "
+            f"\u00b7 {labels['heat_longest']}: "
+            f"<a href=\"/nodes/{html.escape(longest['node_id'])}\">"
+            f"{html.escape(longest['node_id'])}</a> "
+            f"({round(longest['total_minutes'] / 60, 1)} h)</p>")
+    else:
+        summary = f"<div class=\"empty\"><p>{labels['heat_no_any']}</p></div>"
+
+    body = (
+        "<div class=\"tbl\"><table><tr>"
+        f"<th>{labels['node']}</th><th>{labels['events']}</th>"
+        f"<th>{labels['heat_hours_above']} (h)</th>"
+        f"<th>{labels['heat_longest']} (min)</th>"
+        f"<th>{labels['peak']} (\u00b0C)</th>"
+        f"<th>{labels['end']}</th></tr>"
+        + rows_html + "</table></div>")
+
+    page = (_HEAT_PAGE.replace("{lang}", code)
+            .replace("{title}", labels["title"])
+            .replace("{h_heat}", labels["heat_title"])
+            .replace("{heat_fleet}", labels["heat_fleet"])
+            .replace("{back}", labels["back"])
+            .replace("{map}", labels["map"])
+            .replace("{h_thr}", labels["threshold"])
+            .replace("{thr}", _form_value(threshold))
+            .replace("{h_dur}", labels["min_dur"])
+            .replace("{dur}", _form_value(min_duration_min))
+            .replace("{heat_window}", labels["heat_window"])
+            .replace("{hours}", _form_value(hours))
+            .replace("{apply}", labels["apply"])
+            .replace("{summary}", summary)
+            .replace("{body}", body)
+            .replace("{heat_open_note}", labels["heat_open_note"])
+            .replace("{disclaimer}", labels["disclaimer"]))
+    return HTMLResponse(_with_legal(page, labels, code))
+
 @router.get("/map", response_class=HTMLResponse)
 def map_page(request: Request):
     check_rate(request)
@@ -1507,6 +1729,7 @@ def map_page(request: Request):
     page = (_MAP_PAGE.replace("{lang}", code)
             .replace("{title}", labels["title"])
             .replace("{h_map}", labels["map"])
+            .replace("{events}", labels["events"])
             .replace("{back}", labels["back"])
             .replace("{body}", body)
             .replace("{disclaimer}", labels["disclaimer"]))
