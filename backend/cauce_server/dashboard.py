@@ -306,29 +306,35 @@ def _refresh_hint(code: str) -> str:
 
 
 def _refresh_meta() -> str:
-    """The meta-refresh tag, or nothing when the refresh is turned off.
+    """The no-JavaScript fallback: reload this page after `settings.dashboard_refresh_s`.
 
-    `content="0;url=..."` is the important form: a zero interval tells the script to take over,
-    while the URL stays as the fallback for a browser with JavaScript disabled. Without the
-    URL the two halves cannot both be expressed - a script that never runs and a page that
-    never updates are the same outcome, and one of them has to win. This way the fallback is
-    the behaviour that is already proven.
+    Not a live-update mechanism any more. The client polls `/v1/live` and patches the figures
+    in place, and its first act is to remove this tag - so a browser with JavaScript reloads
+    nothing, and a browser without it still gets fresh data.
 
-    Every page template carries a `__REFRESH__` token where the interval belongs, and this
-    is the one place the token is resolved. Two reasons it lives here rather than in each of
-    the nine render sites: the interval is a deployment decision, not a template decision,
-    and nine copies of a literal is nine chances to drift. `0` emits no tag at all rather
-    than `content="0"`, which some browsers treat as "reload as fast as possible" - the
-    opposite of what turning it off is supposed to mean.
+    The interval is honest here rather than being set to zero to mean "the script has this".
+    There is no meta-refresh spelling that expresses both at once: `content="0"` with no URL
+    reloads immediately and forever, and `url=self` is not a URL keyword but a link *type*, so
+    the browser resolved it as a relative path and every page 404'd on `/self`. An earlier
+    attempt used that anyway.
+
+    Every page template carries a `__REFRESH__` token and this resolves it in one place: the
+    interval is a deployment decision, and nine copies of a literal is nine chances to drift.
+    A configured `0` emits no tag at all.
     """
     seconds = settings.dashboard_refresh_s
     if seconds <= 0:
         return ""
-    # A zero interval tells the script to take over; the URL is the fallback for a browser
-    # with JavaScript disabled. A bare `content="5"` made every entrance animation replay
-    # every five seconds, which is why the page looked busy and unchanged at the same time.
-    # `self` keeps any query parameters the reader arrived with, which a bare "/" would drop.
-    return '<meta http-equiv="refresh" content="0;url=self">'
+    # `content="0"` with no URL reloads immediately, forever. With a URL, `self` is not a
+    # URL keyword - it is a link *type* - so the browser resolved it as a relative path and
+    # the page 404'd on /self. There is no way to express "reload me after N seconds" and
+    # "do not reload me" in one meta tag, so the tag keeps the honest interval and the script
+    # removes it before it can fire.
+    #
+    # The script deleting the tag is why the fallback still works for a browser with no
+    # JavaScript: no script, no deletion, the reload happens. With JavaScript the tag is gone
+    # before the timer is armed and the polling takes over.
+    return f'<meta http-equiv="refresh" id="cauce-fallback-refresh" content="{int(seconds)}">'
 
 
 def _with_legal(page: str, labels, code: str) -> str:
@@ -337,7 +343,10 @@ def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("{base}", _BASE_CSS)
     page = page.replace("</style>", _MOTION_CSS + "</style>", 1)
 
-    page = page.replace("__REFRESH__", _refresh_meta())
+    # `count=1` and an unconditional strip afterwards: a template that forgot its token would
+    # otherwise ship the literal string to the reader, which is worse than not refreshing.
+    page = page.replace("__REFRESH__", _refresh_meta(), 1)
+    page = page.replace("__REFRESH__", "")
     # The motion script goes in last and only if the page actually has a </body>, so a
     # template without one is not silently rewritten into something it never was.
     if "</body>" in page:
@@ -542,6 +551,13 @@ _POLL_JS = """
  * what the user asked for.
  */
 (function () {
+  /* First, before anything else: disarm the meta refresh. It carries the honest interval as
+     its no-JavaScript fallback, and we are about to become the thing that keeps the figures
+     current. Removing the tag here means the fallback still holds for a browser that never
+     runs this, and does not fire for one that does. */
+  var fallback = document.getElementById('cauce-fallback-refresh');
+  if (fallback && fallback.parentNode) { fallback.parentNode.removeChild(fallback); }
+
   function fmtUtc(ms) {
     if (!ms) return '—';
     return new Date(ms).toISOString().replace('T', ' ').slice(0, 16);
@@ -751,6 +767,7 @@ _STAT_ROW = ("<tr><td>{k}</td><td>{a}</td><td>{b}</td></tr>")
 _COLOC_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {h_coloc}</title>
 <style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
@@ -817,6 +834,7 @@ var series = {series_json};
 _ALERTS_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {h_alerts}</title>
 <style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
@@ -881,6 +899,7 @@ document.getElementById("checkbtn").addEventListener("click", function(){
 _REPORT_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {nid} — {h_report}</title>
 <style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
@@ -959,6 +978,7 @@ tr.hot td:first-child{box-shadow:inset 2px 0 0 #e2725b}
 _MAP_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {h_map}</title>
 <style>{base}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
@@ -992,6 +1012,7 @@ _EV_ROW = ("<tr><td>{start}</td><td>{end}</td>"
 _EVENTS_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {nid} — {h_ev}</title>
 <style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}
@@ -1020,6 +1041,7 @@ input,select,button{font:inherit;background:#223140;color:#e8eef4;border:1px sol
 _COMPARE_PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+__REFRESH__
 <title>{title} — {h_compare}</title>
 <style>{base}
 table{width:100%;border-collapse:collapse;background:#182430;border-radius:12px;overflow:hidden}

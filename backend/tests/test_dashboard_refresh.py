@@ -45,23 +45,58 @@ def test_the_interval_reaches_the_rendered_page(fast_restore):
     settings.dashboard_refresh_s = 5
     with TestClient(app) as client:
         body = client.get("/").text
-    # The interval is now the POLL period, not a document reload. A bare `content="5"` made
-    # every entrance animation replay every five seconds, so the page looked busy and
-    # unchanged simultaneously; `0` hands the updating to the script and `url=self` is the
-    # fallback for a browser without JavaScript.
-    assert '<meta http-equiv="refresh" content="0;url=self">' in body
+    # The tag is the no-JavaScript fallback and carries the honest interval. It is NOT set to
+    # zero: `content="0"` with no URL reloads immediately and forever, and `url=self` is not a
+    # URL keyword but a link *type*, so the browser resolved it as a relative path and every
+    # page 404'd on `/self`. The script removes the tag before it can fire.
+    assert 'id="cauce-fallback-refresh"' in body
+    assert 'content="5"' in body
+    assert "url=self" not in body
 
 
-def test_the_refresh_names_itself_so_query_parameters_survive(fast_restore):
+def test_the_fallback_names_no_url_at_all(fast_restore):
+    """A bare `content="N"` reloads the page you are on.
+
+    Any URL at all is worse: the tag cannot express "reload me in N seconds, but not if I have
+    JavaScript", and the attempt to say so with `url=self` sent every page to `/self`.
+    """
     from fastapi.testclient import TestClient
 
     settings.dashboard_refresh_s = 5
     with TestClient(app) as client:
         body = client.get("/?lang=es&from=x").text
-    # A bare "/" would drop the query string on the fallback reload, losing the reader's
-    # filters. `self` re-requests the URL they are already on.
-    assert 'url=self' in body
-    assert 'url=/"' not in body
+    tag = body.split('id="cauce-fallback-refresh"')[1].split(">")[0]
+    assert "url" not in tag, f"the refresh names a URL: {tag!r}"
+
+
+def test_every_page_carries_the_token_so_no_page_is_frozen(fast_restore):
+    """Six of the ten templates never had the token, so they never refreshed at all.
+
+    `_with_legal` has always resolved `__REFRESH__`; six templates simply did not carry it, so
+    `/map`, `/colocation`, `/alerts`, `/report`, `/events` and `/compare` were static and no
+    test noticed, because the tests only asked about `/`.
+    """
+    import re
+    from pathlib import Path
+
+    from cauce_server import dashboard as D
+    from fastapi.testclient import TestClient
+
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    templates = re.findall(r'(_[A-Z_]+) = """<!DOCTYPE html>(.*?)"""', src, re.S)
+    assert len(templates) == 10
+    for name, body in templates:
+        assert "__REFRESH__" in body, f"{name} has no refresh token and would never update"
+
+    # And with the interval off, no page may emit a tag at all.
+    settings.dashboard_refresh_s = 0
+    with TestClient(app) as client:
+        for path in ("/", "/map", "/alerts", "/colocation"):
+            body = client.get(path).text
+            # The string appears in the script, which always tries to remove the tag. What
+            # must be absent is the tag itself.
+            assert 'id="cauce-fallback-refresh"' not in body, path
+            assert "http-equiv=\"refresh\"" not in body, path
 
 
 def test_every_page_carries_the_token_and_none_is_left_unresolved(fast_restore):
@@ -102,5 +137,5 @@ def test_the_tag_is_valid_html_and_carries_no_stray_braces():
     # The token sits inside a `.format()`-ed template, so an unescaped brace here would
     # either break formatting or survive into the output as a literal.
     tag = _refresh_meta()
-    assert tag.startswith('<meta http-equiv="refresh" content="')
+    assert tag.startswith('<meta http-equiv="refresh" id="cauce-fallback-refresh" content="')
     assert "{" not in tag and "}" not in tag
