@@ -43,8 +43,15 @@ campo `transport` (wifi/lora).
 
 ```bash
 python simulator/generate_scenarios.py --outdir data/sim --days 2
+```sh
+python simulator/generate_scenarios.py --outdir data/sim --days 2
 python simulator/generate_scenarios.py --sync-url http://localhost:8000/v1/sync --days 1
 ```
+
+La serie empieza en la medianoche UTC de ayer, así que cualquier cosa que pida datos recientes
+los encuentra. `--base-ts 1787356800000` fija la fecha que el generador tenía hardcodeada, para
+cuando importa más la salida byte a byte idéntica que estar al día.
+
 
 Escribe CSVs, o alimenta el backend directo vía `/v1/sync`. Cada
 timestamp emite air_temperature, relative_humidity, pressure,

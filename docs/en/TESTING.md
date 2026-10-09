@@ -40,8 +40,15 @@ dashboard localization (en/es/pt) · CSV export · `transport` field
 
 ```bash
 python simulator/generate_scenarios.py --outdir data/sim --days 2
+```sh
+python simulator/generate_scenarios.py --outdir data/sim --days 2
 python simulator/generate_scenarios.py --sync-url http://localhost:8000/v1/sync --days 1
 ```
+
+The series starts at yesterday's midnight UTC, so anything asking for recent data finds it.
+`--base-ts 1787356800000` pins the fixed date the generator used to hardcode, for when
+byte-identical output matters more than being current.
+
 
 Writes CSVs, or feeds the backend directly over `/v1/sync`. Each
 timestamp emits air_temperature, relative_humidity, pressure,

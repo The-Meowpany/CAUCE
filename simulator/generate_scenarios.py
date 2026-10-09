@@ -17,7 +17,7 @@ import math
 import os
 import random
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 _STRINGS = {
     "es": {
@@ -52,7 +52,31 @@ HEADER = ["node_id", "sensor_id", "sequence", "timestamp_utc_ms",
           "timestamp_iso", "variable", "value", "unit", "quality",
           "reason_bits", "time_uncertain"]
 
-BASE_TS = 1787356800000
+# The first minute of a fixed day, used when `--base-ts` is not given a value of its own.
+#
+# It used to be a bare module constant, which meant this generator always produced data
+# dated 2026-08-22 no matter when it ran. That is defensible for a fixture and wrong for a
+# scenario you intend to look at: every window that asks for recent data - the co-location
+# page's seven days, coverage, the stale-node alert rules - came back empty, so a central
+# seeded from this looked broken rather than old. The date only drifts further from today,
+# which means the failure gets quieter, not louder.
+#
+# The tests keep their own copies of a fixed epoch, so nothing here depends on this value.
+FIXED_BASE_TS = 1787356800000
+
+# Rebound by main() from --base-ts. The scenario functions read it as a module global,
+# which is why the default cannot be a plain constant any more.
+BASE_TS = FIXED_BASE_TS
+
+
+def default_base_ts() -> int:
+    """Today at 00:00 UTC, so a freshly seeded central has data a 'recent' query finds."""
+    now = datetime.now(UTC)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Leave a day of room at the end so the series does not run into the future: a
+    # measurement from the future is not obviously wrong to the database, but it makes
+    # "last seen" and every staleness rule lie.
+    return int((midnight - timedelta(days=1)).timestamp() * 1000)
 
 
 def iso(ms: int) -> str:
@@ -261,7 +285,17 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--node-prefix", default="CAUCE-SIM")
     parser.add_argument("--sync-url", default=None, help=_t("sync_help"))
+    parser.add_argument(
+        "--base-ts", type=int, default=None,
+        help="epoch ms the series starts at. Defaults to yesterday's midnight UTC so the "
+             "data is recent. Pass 1787356800000 for the fixed date the generator used to "
+             "hardcode, when byte-identical output matters more than being current.")
     args = parser.parse_args()
+
+    global BASE_TS
+    BASE_TS = args.base_ts if args.base_ts is not None else default_base_ts()
+    print(f"base timestamp: {BASE_TS} "
+          f"({datetime.fromtimestamp(BASE_TS / 1000, UTC).isoformat()})")
 
     exit_code = 0
     for index, (name, fn) in enumerate(SCENARIOS.items(), start=1):
