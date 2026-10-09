@@ -18,8 +18,20 @@ wrong, which is the best of the three ways that could have gone. A test that onl
 
 from __future__ import annotations
 
+import os
+import re
+import time
+
 from cauce_server.analytics import detect_heat_events, heat_summary
-from cauce_server.main import app
+
+# This module raises the rate limit for itself, before the app is imported, because
+# `config.Settings` reads the environment once at import time. It cannot be done in conftest:
+# conftest is imported first, so by the time a module sets it the value is already fixed for
+# the whole run, and `test_the_challenge_endpoint_is_rate_limited` would stop seeing a 429.
+# Raising it suite-wide to make this module comfortable would delete that test's subject.
+os.environ.setdefault("CAUCE_RATE_LIMIT", "100000")
+
+from cauce_server.main import app  # noqa: E402
 from fastapi.testclient import TestClient
 
 MINUTE = 60_000
@@ -30,8 +42,17 @@ def rows(*pairs: tuple[int, float | None]) -> list[dict]:
     return [{"timestamp_utc_ms": m * MINUTE, "value": v} for m, v in pairs]
 
 
+# One shared client for the module. The rate limiter counts per client, so a fresh client
+# per test exhausts it and every assertion after the first few comes back `rate_limited` -
+# which reads as a broken feature rather than as a test that hammered the limiter. The
+# bearer token is the literal "admin-token" that `conftest` configures; importing it is not
+# possible because `tests` also exists in site-packages and that copy shadows this repo's.
+
+_SHARED = TestClient(app, headers={"Authorization": "Bearer admin-token"})
+
+
 def client() -> TestClient:
-    return TestClient(app)
+    return _SHARED
 
 
 # --------------------------------------------------------------- the pure detector
@@ -104,14 +125,14 @@ def test_an_empty_input_is_no_events_not_an_error():
 
 def test_the_per_node_events_page_opens_without_a_credential():
     """The regression. No token in the client, and the page must still answer."""
-    with client() as c:
-        r = c.get("/nodes/CAUCE-001/events")
+    c = client()
+    r = c.get("/nodes/CAUCE-001/events")
     assert r.status_code == 200, f"unauthenticated heat page -> {r.status_code}"
 
 
 def test_the_fleet_page_renders_and_reports_a_count_per_node():
-    with client() as c:
-        r = c.get("/heat")
+    c = client()
+    r = c.get("/heat")
     assert r.status_code == 200
     # The count and the list must not have collided again. A page that renders the word
     # "CAUCE-001" twice with one number each is the shape this file exists to catch.
@@ -121,32 +142,32 @@ def test_the_fleet_page_renders_and_reports_a_count_per_node():
 def test_the_fleet_page_survives_a_threshold_nothing_crosses():
     # An unreachable threshold is the normal state of a real fleet on a cool day, and it is
     # the branch that had no rows to iterate.
-    with client() as c:
-        r = c.get("/heat?threshold=79")
+    c = client()
+    r = c.get("/heat?threshold=79")
     assert r.status_code == 200
 
 
 def test_the_fleet_page_clamps_an_absurd_window_rather_than_scanning_the_table():
-    with client() as c:
-        r = c.get("/heat?hours=99999999")
+    c = client()
+    r = c.get("/heat?hours=99999999")
     assert r.status_code == 200
 
 
 def test_no_page_ships_an_unresolved_placeholder():
     # The dashboard already has this guard for its own pages; /heat joined it late and the
     # existing test only covers what it knew about.
-    with client() as c:
-        for path in ("/", "/map", "/colocation", "/alerts", "/heat", "/system"):
-            body = c.get(path).text
-            leftovers = [tok for tok in ("{events}", "{body}", "{summary}",
-                                         "{heat_window}", "{thr}") if tok in body]
-            assert not leftovers, f"{path} shipped {leftovers}"
+    c = client()
+    for path in ("/", "/map", "/colocation", "/alerts", "/heat", "/system"):
+        body = c.get(path).text
+        leftovers = [tok for tok in ("{events}", "{body}", "{summary}",
+                                     "{heat_window}", "{thr}") if tok in body]
+        assert not leftovers, f"{path} shipped {leftovers}"
 
 
 def test_the_map_and_the_events_page_link_to_the_fleet_view():
-    with client() as c:
-        assert '"/heat"' in c.get("/map").text
-        assert '"/heat"' in c.get("/nodes/CAUCE-001/events").text
+    c = client()
+    assert '"/heat"' in c.get("/map").text
+    assert '"/heat"' in c.get("/nodes/CAUCE-001/events").text
 
 def test_the_legend_is_the_scale_the_field_is_painted_with():
     """Why this test exists: the legend used to lie, and look like it did not.
@@ -180,9 +201,134 @@ def test_the_legend_is_the_scale_the_field_is_painted_with():
 
 
 def test_the_map_page_carries_no_gradient_legend():
-    with client() as c:
-        body = c.get("/map").text
+    c = client()
+    body = c.get("/map").text
     # No data in this module's database, so there is no field and no legend to draw - the
     # point here is only that the gradient construction is gone. The populated case, where
     # the ramp's ticks and cells are asserted, is `test_map_field_and_legend` in test_api.
     assert "linearGradient" not in body
+
+# --------------------------------------------------------------- map window and staleness
+
+
+_SEED_N = 0
+
+
+def _seed_site_and_nodes(client, ages_h: dict):
+    """Place nodes on one site, each with a single reading `ages_h` old.
+
+    The module shares one database, so reusing a node id across tests means the second test
+    sees the first test's reading - the map takes the highest sequence, not the one just
+    written. Ids are therefore unique per call, which is what makes these tests independent
+    of the order they happen to run in.
+    """
+    global _SEED_N
+    _SEED_N += 1
+    tag = f"w{_SEED_N}"
+    site = f"s-{tag}"
+    client.post("/v1/sites", json={"site_id": site})
+    client.put(f"/v1/sites/{site}/location", json={"lat": -34.9, "lon": -56.16})
+    from cauce_server import db as _db
+
+    now = int(time.time() * 1000)
+    nodes = {}
+    for i, (nid, age_h) in enumerate(ages_h.items(), start=1):
+        real = f"CAUCE-{tag}-{nid.rsplit('-', 1)[-1]}"
+        nodes[real] = 20.0 + i
+        client.post("/v1/sync", json={
+            "protocol_version": 1, "node_id": real,
+            "measurements": [{
+                "node_id": real, "sensor_id": "BME-1", "sequence": 1,
+                "timestamp_utc_ms": now - int(age_h * 3600000),
+                "variable": "air_temperature", "value": 20.0 + i, "unit": "C",
+                "quality": "VALID", "reason_bits": 0, "time_uncertain": False,
+            }],
+        })
+    with _db.transaction() as conn:
+        conn.execute(f"UPDATE nodes SET site_id=? WHERE node_id IN ({','.join('?' * len(nodes))})",
+                     (site, *nodes))
+    return nodes
+
+
+def test_the_map_offers_a_window_control():
+    c = client()
+    _seed_site_and_nodes(c, {"CAUCE-FRESH": 0.2})
+    body = c.get("/map").text
+    assert "/map?hours=1" in body
+    assert "/map?hours=168" in body
+
+
+def test_a_node_older_than_the_window_is_drawn_hollow_not_dropped():
+    """A node that reported yesterday is still a node.
+
+    Dropping it would hide a station, which is the opposite of what a map should do. But
+    painting it identically to one that reported a minute ago made a three-day-old reading
+    look current. It is drawn, unfilled and dashed, and the tooltip says how old.
+    """
+    c = client()
+    nodes = _seed_site_and_nodes(c, {"CAUCE-FRESH": 0.2, "CAUCE-OLD": 300})
+    old_id = next(n for n in nodes if n.endswith("OLD"))
+    fresh = next(n for n in nodes if n.endswith("FRESH"))
+    body = c.get("/map?hours=24").text
+    assert old_id in body, "a stale node must still appear on the map"
+
+    def circle_for(name):
+        m = re.search(r"<circle\b[^>]*>(?:(?!</circle>).)*?"
+                      + re.escape(name) + r".*?</circle>", body, re.S)
+        assert m, f"{name} has no circle on the map"
+        return m.group(0)
+
+    assert 'fill="none"' in circle_for(old_id), "the stale node should be hollow"
+    assert "stroke-dasharray" in circle_for(old_id), "the stale node should be dashed"
+    assert 'fill="none"' not in circle_for(fresh), "the fresh node should be filled"
+
+def test_both_nodes_still_show_their_temperatures():
+    """A stale node keeps its value on the map.
+
+    The temperature lives in the SVG `<title>` as a tooltip rather than as visible text, so
+    this asserts the tooltip carries it. Asserting on visible page text would be asserting
+    on a rendering choice rather than on the behaviour.
+    """
+    c = client()
+    nodes = _seed_site_and_nodes(c, {"CAUCE-FRESH": 0.2, "CAUCE-OLD": 300})
+    body = c.get("/map?hours=24").text
+    titles = dict(re.findall(r"<title>(CAUCE-\w+-[A-Z]+): ([^<]+)</title>", body))
+    fresh = next(n for n in nodes if n.endswith("FRESH"))
+    old_id = next(n for n in nodes if n.endswith("OLD"))
+    assert titles.get(fresh, "").startswith(f"{nodes[fresh]:.1f}"), titles
+    assert titles.get(old_id, "").startswith(f"{nodes[old_id]:.1f}"), titles
+    # The stale one says so and how old; the fresh one says it is inside the window.
+    assert "antiguo" in titles.get(old_id, ""), titles.get(old_id)
+    assert "en ventana" in titles.get(fresh, ""), titles.get(fresh)
+
+
+def test_a_wide_window_makes_an_old_node_fresh_again():
+    """The staleness mark is relative to the window, not absolute.
+
+    A reading 300 h old is stale for a 24 h window and current for a 30-day one, which is
+    the honest answer: "stale" only means something relative to the question being asked.
+    """
+    c = client()
+    nodes = _seed_site_and_nodes(c, {"CAUCE-OLD": 300})
+    nid = next(iter(nodes))
+    narrow = c.get("/map?hours=24").text
+    wide = c.get("/map?hours=720").text
+
+    def hollow_for(body, name):
+        # Scoped to this test's own node: the module shares a database, so other tests'
+        # nodes are on the map too, and a page-wide check would assert about whatever
+        # happened to be stale there.
+        for m in re.finditer(r"<circle\b[^>]*>(?:(?!</circle>).)*?</circle>", body, re.S):
+            if f"<title>{name}:" in m.group(0):
+                return 'fill="none"' in m.group(0)
+        return False
+
+    assert hollow_for(narrow, nid), f"{nid} should be hollow at a 24h window"
+    assert not hollow_for(wide, nid), f"{nid} should be filled at a 720h window"
+
+
+def test_an_absurd_window_is_clamped_rather_than_scanning_everything():
+    c = client()
+    assert c.get("/map?hours=999999999").status_code == 200
+    assert c.get("/map?hours=0").status_code == 200
+    assert c.get("/map?hours=-5").status_code == 200

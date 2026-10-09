@@ -28,6 +28,9 @@ router = APIRouter()
 
 _LABELS = {
     "en": {
+    "map_never": 'never reported',
+    "map_fresh": 'within window',
+    "map_stale": 'stale',
     "map_outside_scale": 'outside 0-40 \\u00b0C',
     "map_colour_fixed": 'Colour scale is fixed, so the same colour means the same temperature on every load.',
     "map_no_window": 'no reading in window',
@@ -83,6 +86,9 @@ _LABELS = {
             "fleet_hint": "A visit is needed when a node is offline, its clock is unset, storage is nearly full or frames are corrupted.",
             "yes": "yes", "no": "no",},
     "es": {
+    "map_never": 'sin datos nunca',
+    "map_fresh": 'en ventana',
+    "map_stale": 'antiguo',
     "map_outside_scale": 'fuera de 0-40 \\u00b0C',
     "map_colour_fixed": 'La escala de color es fija, así el mismo color significa la misma temperatura en cada carga.',
     "map_no_window": 'sin lectura en la ventana',
@@ -139,6 +145,9 @@ _LABELS = {
             "yes": "sí", "no": "no",},
 
     "pt": {
+    "map_never": 'sem dados nunca',
+    "map_fresh": 'na janela',
+    "map_stale": 'antigo',
     "map_outside_scale": 'fora de 0-40 \\u00b0C',
     "map_colour_fixed": 'A escala de cor e fixa, portanto a mesma cor significa a mesma temperatura em cada carga.',
     "map_no_window": 'sem leitura na janela',
@@ -1616,17 +1625,29 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
     return HTMLResponse(_with_legal(page, labels, code))
 
 @router.get("/map", response_class=HTMLResponse)
-def map_page(request: Request):
+def map_page(request: Request, hours: int = 24):
     check_rate(request)
     code, labels = _pick(request)
+    # Clamped: this page reloads itself, and an unbounded window means re-scanning the
+    # whole measurements table on every refresh.
+    hours = max(1, min(int(hours), 24 * 30))
     sites = query(
         "SELECT site_id, name, lat, lon FROM sites"
         " WHERE lat IS NOT NULL AND lon IS NOT NULL")
+    max_ts = query("SELECT MAX(timestamp_utc_ms) AS m FROM measurements")[0]["m"] or 0
+    # The window does NOT filter which reading is used. Filtering here was the first version
+    # and it was wrong: a node whose last reading predates the window came back with a NULL
+    # temperature, so the map drew it as an empty marker - the same as hiding it, which is
+    # what the window was supposed to avoid. A node that reported three days ago still has a
+    # temperature. It is drawn, marked stale, and weighted down in the interpolation.
     nodes = query(
         """SELECT n.node_id, n.site_id,
                   (SELECT value FROM measurements m WHERE m.node_id=n.node_id
                    AND variable='air_temperature' AND value IS NOT NULL
-                   ORDER BY sequence DESC LIMIT 1) AS temp
+                   ORDER BY sequence DESC LIMIT 1) AS temp,
+                  (SELECT timestamp_utc_ms FROM measurements m WHERE m.node_id=n.node_id
+                   AND variable='air_temperature' AND value IS NOT NULL
+                   ORDER BY sequence DESC LIMIT 1) AS temp_at
            FROM nodes n ORDER BY n.node_id""")
     placed = [n for n in nodes
               if any(s["site_id"] == n["site_id"] for s in sites)]
@@ -1675,6 +1696,15 @@ def map_page(request: Request):
                     for nd, nx, ny in with_temp:
                         d2 = (px - nx) ** 2 + (py - ny) ** 2 + 400.0
                         w = 1.0 / d2
+                        # Down-weight a node whose reading is old, so the field reflects
+                        # the neighbourhood now rather than being dragged by a reading from
+                        # yesterday. Not excluded: an excluded node would leave a hole in
+                        # the interpolation exactly where you most want to know the value.
+                        nd_at = nd["temp_at"]
+                        if nd_at and max_ts:
+                            age_h = (max_ts - nd_at) / 3600000.0
+                            if age_h > hours:
+                                w *= 0.25
                         num += w * nd["temp"]
                         den += w
                     cells.append(
@@ -1730,20 +1760,51 @@ def map_page(request: Request):
         circles = []
         for n, x, y in members_xy:
             t = n["temp"]
-            ttxt = "—" if t is None else f"{t:.1f}°"
+            at = n["temp_at"]
+            age_h = None if not at else (max_ts - at) / 3600000.0
+            stale = age_h is not None and age_h > hours
+            if t is None:
+                ttxt = "\u2014"
+            else:
+                ttxt = f"{t:.1f}\u00b0"
+            if age_h is None:
+                # No reading in the window *and* none at all outside it. A node with an old
+                # reading is handled below, so this branch is genuinely "never reported".
+                when = labels["map_never"]
+            elif stale:
+                age_txt = (f"{age_h / 24:.1f} {labels['days']}" if age_h >= 48
+                           else f"{age_h:.0f}h")
+                when = f"{age_txt} \u00b7 {labels['map_stale']}"
+            else:
+                when = labels["map_fresh"]
+            # A stale node keeps its colour but loses its fill: hollow reads as "this value
+            # is old" without inventing a second colour, which would then need its own
+            # legend entry and would imply the hue means something it does not.
+            fill = 'fill="none"' if stale else f'fill="{_temp_color(t)}"'
+            dash = ('stroke-dasharray="4 3"' if stale else "")
+            label_fill = "#8aa0b4" if stale else "#e8eef4"
             circles.append(
                 f"<a href=\"/nodes/{html.escape(n['node_id'])}\">"
-                f"<circle cx=\"{x:.0f}\" cy=\"{y:.0f}\" r=\"16\""
-                f" fill=\"{_temp_color(t)}\" stroke=\"#0f1720\" stroke-width=\"2\">"
-                f"<title>{html.escape(n['node_id'])}: {ttxt}</title></circle>"
+                f"<circle cx=\"{x:.0f}\" cy=\"{y:.0f}\" r=\"16\" {fill}"
+                f" stroke=\"{'#d98b3a' if stale else '#0f1720'}\""
+                f" stroke-width=\"2\" {dash}>"
+                f"<title>{html.escape(n['node_id'])}: {ttxt} - "
+                f"{html.escape(when)}</title></circle>"
                 f"<text x=\"{x:.0f}\" y=\"{y + 32:.0f}\""
-                f" text-anchor=\"middle\" fill=\"#e8eef4\" font-size=\"12\">"
+                f" text-anchor=\"middle\" fill=\"{label_fill}\" font-size=\"12\">"
                 f"{html.escape(n['node_id'])}</text></a>")
+
         labels_svg = "".join(
             f"<text x=\"{x:.0f}\" y=\"{y - 24:.0f}\" text-anchor=\"middle\""
             f" fill=\"#8aa0b4\" font-size=\"12\">{html.escape(sid)}</text>"
             for sid, (x, y) in site_xy.items())
-        body = (f"<p class=\"mut\"><button id=\"zin\" aria-label=\"{labels['zin']}\">+</button> "
+        links = " ".join(
+            f"<a href=\"/map?hours={h}&lang={code}\""
+            f"{' style=\"color:#39c2a7;font-weight:600\"' if h == hours else ''}>"
+            f"{labels['map_window']}: {h}h</a>"
+            for h in (1, 6, 24, 72, 168))
+        body = (f"<p class=\"mut\">{links}</p>"
+                f"<p class=\"mut\"><button id=\"zin\" aria-label=\"{labels['zin']}\">+</button> "
                 f"<button id=\"zout\" aria-label=\"{labels['zout']}\">−</button> "
                 f"<button id=\"zreset\" aria-label=\"{labels['zreset']}\">⟲</button></p>"
                 f"<svg id=\"map\" viewBox=\"0 0 {W} {H}\">{field_svg}{labels_svg}"
