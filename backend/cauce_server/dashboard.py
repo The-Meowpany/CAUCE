@@ -296,7 +296,12 @@ def _refresh_meta() -> str:
 def _with_legal(page: str, labels, code: str) -> str:
     page = page.replace("<main>", "<main id=\"main\">", 1)
     page = page.replace("{base}", _BASE_CSS)
+    page = page.replace("</style>", _MOTION_CSS + "</style>", 1)
     page = page.replace("__REFRESH__", _refresh_meta())
+    # The motion script goes in last and only if the page actually has a </body>, so a
+    # template without one is not silently rewritten into something it never was.
+    if "</body>" in page:
+        page = page.replace("</body>", _MOTION_JS + "</body>", 1)
     return page.replace("</main>", _legal_footer(code) + "</main>")
 
 
@@ -329,6 +334,207 @@ input[type=checkbox]{accent-color:#39c2a7;width:1rem;height:1rem;vertical-align:
 *{scrollbar-width:thin;scrollbar-color:#223140 #0f1720}
 table.rules td:nth-child(6),table.rules th:nth-child(6),table.rules td:nth-child(7),table.rules th:nth-child(7){display:none}"""
 
+
+
+_MOTION_CSS = """
+/* Motion. One block, injected by `_with_legal`, so a page gets it without asking.
+   Every rule is inside a `no-preference` block: with reduced motion set, this collapses to
+   nothing and the dashboard is exactly the static thing it was. Nothing here gates
+   information - a number is legible before it has finished counting, and a chart is
+   readable the whole time it draws. Motion is the difference between the data arriving and
+   the data being there, never a thing you have to wait for.
+   Timings are short on purpose. Anything past ~600ms on a panel someone reads fifty times a
+   day stops being polish and becomes a tax. */
+@media (prefers-reduced-motion:no-preference){
+  @keyframes cauce-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @keyframes cauce-pop{from{opacity:0;transform:scale(.62)}to{opacity:1;transform:scale(1)}}
+  @keyframes cauce-fade{from{opacity:0}to{opacity:1}}
+  @keyframes cauce-draw{from{stroke-dashoffset:var(--len)}to{stroke-dashoffset:0}}
+  @keyframes cauce-pulse{0%,100%{opacity:.45}50%{opacity:1}}
+  @keyframes cauce-sweep{from{opacity:.15;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @keyframes cauce-flash{from{background:#39c2a7}to{background:transparent}}
+
+  /* Staggered entrance. `--i` is set per element by the script, so rows arrive in order
+     instead of all at once, which reads as the table assembling itself. */
+  main>*{animation:cauce-rise .45s cubic-bezier(.22,.9,.24,1) both}
+  main>*:nth-child(1){animation-delay:0s}
+  main>*:nth-child(2){animation-delay:.05s}
+  main>*:nth-child(3){animation-delay:.1s}
+  main>*:nth-child(4){animation-delay:.15s}
+  main>*:nth-child(5){animation-delay:.2s}
+  main>*:nth-child(6){animation-delay:.25s}
+
+  .card,.stat,.empty{animation:cauce-pop .5s cubic-bezier(.34,1.4,.5,1) both}
+  tbody tr{animation:cauce-rise .32s cubic-bezier(.22,.9,.24,1) both;
+    animation-delay:calc(var(--i,0)*26ms)}
+
+  /* Charts draw themselves. `--len` is the measured path length, set by the script; without
+     it the dash animation cannot run and the line simply appears, which is the right
+     fallback rather than a permanently invisible chart. */
+  svg path[data-draw],svg polyline[data-draw],svg line[data-draw]{
+    stroke-dasharray:var(--len);animation:cauce-draw 1.1s cubic-bezier(.3,.8,.3,1) both;
+    animation-delay:.15s}
+
+  /* The map's interpolated field washes in from below; the node markers pop after it. */
+  #field{animation:cauce-sweep .9s cubic-bezier(.3,.8,.3,1) both}
+  svg circle{animation:cauce-pop .42s cubic-bezier(.34,1.45,.5,1) both;
+    animation-delay:calc(var(--i,0)*55ms + .3s)}
+  /* A node whose reading is older than the window breathes, so "stale" is legible without
+     reading the tooltip. It is the only looping motion on the page, and it is deliberate. */
+  svg circle[stroke-dasharray]{animation:cauce-pop .42s cubic-bezier(.34,1.45,.5,1) both,
+    animation-delay:calc(var(--i,0)*55ms + .3s),cauce-pulse 2.6s ease-in-out 1.4s infinite}
+
+  button,a,th{twill:1}
+  button{transition:transform .12s cubic-bezier(.34,1.5,.5,1),filter .12s}
+  button:hover{transform:translateY(-1px);filter:brightness(1.12)}
+  button:active{transform:translateY(1px) scale(.975)}
+  a{transition:color .15s}
+  th{transition:background .15s,color .15s}
+  tbody tr{transition:background .14s}
+  tbody tr:hover{background:#1e2f3d}
+  .stat{transition:transform .22s cubic-bezier(.34,1.4,.5,1),border-color .22s}
+  .stat:hover{transform:translateY(-3px);border-color:#39c2a7}
+  .card{transition:transform .22s cubic-bezier(.34,1.4,.5,1),border-color .22s}
+  .card:hover{transform:translateY(-2px);border-color:#2b5560}
+
+  /* A value that changed between reloads flashes once. Set by the script from a value kept
+     in sessionStorage, which is why the flash is rare rather than constant: it only fires
+     when the number actually moved since you last looked at this page. */
+  .cauce-changed{animation:cauce-flash 1.1s ease-out both}
+}
+"""
+
+_MOTION_JS = """
+<script>
+/* Motion, driven by the same `prefers-reduced-motion` switch as the stylesheet: if the user
+   has asked for less movement, this script does nothing at all rather than animating things
+   the CSS then cannot hide. No library, because this dashboard has no build step and the
+   pilot Pis do not have the memory for one. */
+(function () {
+  var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (REDUCED) return;
+
+  var SPRING = function (ms) {
+    return 'cubic-bezier(.34,1.4,.5,1)';
+  };
+
+  /* Rows and markers get an index so the CSS stagger has something to stagger by. */
+  function indexElements() {
+    document.querySelectorAll('tbody tr').forEach(function (tr, i) {
+      tr.style.setProperty('--i', Math.min(i, 24));
+    });
+    document.querySelectorAll('svg circle').forEach(function (c, i) {
+      c.style.setProperty('--i', Math.min(i, 24));
+    });
+  }
+
+  /* Measure the real length so the draw animation ends exactly on the line. A hardcoded
+     number would either leave a gap or overshoot into a dash pattern. */
+  function prepareCharts() {
+    document.querySelectorAll('svg path, svg polyline, svg line').forEach(function (el) {
+      if (typeof el.getTotalLength !== 'function') return;
+      var len;
+      try { len = el.getTotalLength(); } catch (e) { return; }
+      if (!len || !isFinite(len)) return;
+      el.setAttribute('data-draw', '');
+      el.style.setProperty('--len', len);
+    });
+  }
+
+  /* Count numbers up. Reads the final value out of the element's own text, so the animation
+     never invents a number: if it cannot parse one, the element is left exactly as it was.
+     The formatter keeps the original precision and thousands separators, because a counter
+     that animates 107238 to "1,072.4" has made the data less true, not more alive. */
+  var FRACTIONS = new Map([['km', 1], ['mi', 1], ['m', 0], ['km/h', 1], ['%', 1]]);
+  function countUp(el) {
+    var raw = (el.textContent || '').trim();
+    if (!raw) return;
+    var m = raw.match(/^([-+]?[\\d.,\\s]+)(\\s*[%°]|\\s*(?:km|mi|m|km\\/h))?$/);
+    if (!m) return;
+    var numeric = parseFloat(m[1].replace(/\\s/g, '').replace(/,(?=\\d{3}\b)/g, ''));
+    if (!isFinite(numeric)) return;
+    var decimals = (m[1].split('.')[1] || '').length;
+    var suffix = m[2] || '';
+    var duration = 900;
+    var start = performance.now();
+    function step(now) {
+      var t = Math.min(1, (now - start) / duration);
+      /* easeOutExpo: fast off the line, then settles, so the value arrives rather than
+         crawls. Linear would make a small change look like nothing and a big one violent. */
+      var eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      var value = numeric * eased;
+      var text = decimals
+        ? value.toFixed(decimals)
+        : Math.round(value).toLocaleString('en-US');
+      el.textContent = text + suffix;
+      if (t < 1) requestAnimationFrame(step);
+      else el.textContent = raw;
+    }
+    el.textContent = (decimals ? (0).toFixed(decimals) : '0') + suffix;
+    requestAnimationFrame(step);
+  }
+
+  /* Flash a stat whose value moved since this browser last saw this page. sessionStorage
+     is per-tab and expires on its own, which suits "since you last looked". Anything that
+     throws - private mode, a full quota - is swallowed: losing the flourish is not a reason
+     to fail a page load. */
+  function flashChanges() {
+    var store;
+    try { store = window.sessionStorage; } catch (e) { return; }
+    if (!store) return;
+    var key = 'cauce:' + location.pathname;
+    var prev;
+    try { prev = JSON.parse(store.getItem(key) || '{}'); } catch (e) { prev = {}; }
+    var next = {};
+    document.querySelectorAll('.stat .v, .card .v').forEach(function (el) {
+      var text = (el.textContent || '').trim();
+      next[text] = true;
+      if (prev[text] === undefined) return;
+    });
+    document.querySelectorAll('.stat .v, .card .v').forEach(function (el) {
+      var text = (el.textContent || '').trim();
+      if (prev[text] && prev[text] !== text) {
+        el.classList.add('cauce-changed');
+      }
+    });
+    try { store.setItem(key, JSON.stringify(next)); } catch (e) { /* not worth surfacing */ }
+  }
+
+  /* Values animate only when they are actually on screen. A counter that fires for content
+     nobody has scrolled to is motion spent on nothing. */
+  function animateWhenVisible() {
+    var targets = document.querySelectorAll('.stat .v, .card .v');
+    if (!targets.length) return;
+    if (!('IntersectionObserver' in window)) {
+      targets.forEach(countUp);
+      return;
+    }
+    var seen = new WeakSet();
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting || seen.has(entry.target)) return;
+        seen.add(entry.target);
+        countUp(entry.target);
+        io.unobserve(entry.target);
+      });
+    }, { threshold: 0.4 });
+    targets.forEach(function (el) { io.observe(el); });
+  }
+
+  function init() {
+    indexElements();
+    prepareCharts();
+    flashChanges();
+    animateWhenVisible();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>"""
 
 _PAGE = """<!DOCTYPE html>
 <html lang="{lang}"><head><meta charset="utf-8">

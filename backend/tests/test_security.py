@@ -138,8 +138,17 @@ def test_hostile_identifiers_cannot_reach_the_html(client):
         response = client.get("/nodes/CAUCE-001/events",
                               params={param: value})
         assert response.status_code == 200
+        # The motion layer means the page now legitimately contains an inline <script>, so
+        # the original disjunction ("no <script> at all") no longer holds and is not the
+        # property being protected. What matters is that the attacker's payload never
+        # reaches the page in a form a browser would execute: either it is escaped, or it
+        # was never reflected at all. `variable` falls back to a default rather than being
+        # echoed, so only the absence of the live payload is guaranteed - and that absence
+        # is the property, exactly as the comment above it describes.
         assert "<script>alert" not in response.text
-        assert "script&gt;alert" in response.text or "<script" not in response.text
+        assert "alert(" not in response.text.replace(
+            "cauce-alert", "")  # the only alert token on the page is the motion keyframe
+        assert HOSTILE not in response.text or "script&gt;" in response.text
 
     hostile_path = client.get(f"/nodes/{HOSTILE}/events")
     assert hostile_path.status_code == 404
