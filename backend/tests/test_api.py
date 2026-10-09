@@ -906,7 +906,19 @@ def test_map_field_and_legend(client):
         conn.execute("UPDATE nodes SET site_id='s-f'")
     r = client.get('/map')
     assert r.status_code == 200
-    assert '<rect' in r.text and 'linearGradient' in r.text
+    # The field cells are rectangles, painted with `_temp_color`, and the legend is drawn
+    # from that same scale. The previous assertion required a `linearGradient` here, which
+    # is the defect this replaces: the bar interpolated between the colours of the lowest
+    # and highest value present, so most of the colours on it were not colours the map ever
+    # painted. It now asserts the ramp is sampled discretely and tick-labelled instead.
+    assert '<rect' in r.text
+    assert 'linearGradient' not in r.text, (
+        "a gradient legend cannot represent a discrete ramp; the cells are coloured per "
+        "cell from _temp_color and the bar has to be sampled from the same function")
+    # Ticks every 10 C across the fixed 0-40 scale, so the bar is readable as a scale
+    # rather than as two labelled endpoints.
+    for tick in (0, 10, 20, 30, 40):
+        assert f">{tick}°</text>" in r.text, f"legend is missing the {tick} C tick"
 
 
 def test_legal_pages_render_versioned_no_inventions(client):

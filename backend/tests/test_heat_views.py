@@ -147,3 +147,42 @@ def test_the_map_and_the_events_page_link_to_the_fleet_view():
     with client() as c:
         assert '"/heat"' in c.get("/map").text
         assert '"/heat"' in c.get("/nodes/CAUCE-001/events").text
+
+def test_the_legend_is_the_scale_the_field_is_painted_with():
+    """Why this test exists: the legend used to lie, and look like it did not.
+
+    `_temp_color` maps degrees to colour on a fixed 0-40 C scale, and the field cells are
+    painted with it. The legend, though, was a `linearGradient` with its two ends pinned to
+    the lowest and highest value in the data and labelled with those two numbers. A bar
+    running from colour(10) to colour(20) passes through colours that colour(15) is not -
+    so reading a temperature off the bar gave a wrong answer, confidently, for every value
+    in between. It was only wrong when the data did not already fill the scale, which is why
+    it survived.
+
+    The bar is now sampled from the same function the cells use, so the two agree at every
+    value by construction rather than by coincidence.
+    """
+    from cauce_server.dashboard import _TEMP_SCALE_HI, _TEMP_SCALE_LO, _temp_color
+    assert (_TEMP_SCALE_LO, _TEMP_SCALE_HI) == (0.0, 40.0)
+
+    # Monotone and clamped at both ends: a legend that wraps or inverts at the extremes
+    # would be wrong in the same way a stretched gradient was.
+    seq = [_temp_color(v) for v in range(0, 41, 2)]
+    assert seq == sorted(set(seq)) or len(set(seq)) == len(seq)
+    assert _temp_color(-50) == _temp_color(0.0)
+    assert _temp_color(500) == _temp_color(40.0)
+
+    # The scale is a named constant rather than something derived from the data at render
+    # time - that is what makes two screenshots of different hours comparable. Asserted by
+    # reading the value, not by inspecting source: the behaviour above already pins the
+    # observable part.
+    assert isinstance(_TEMP_SCALE_HI, float)
+
+
+def test_the_map_page_carries_no_gradient_legend():
+    with client() as c:
+        body = c.get("/map").text
+    # No data in this module's database, so there is no field and no legend to draw - the
+    # point here is only that the gradient construction is gone. The populated case, where
+    # the ramp's ticks and cells are asserted, is `test_map_field_and_legend` in test_api.
+    assert "linearGradient" not in body

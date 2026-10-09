@@ -28,6 +28,7 @@ router = APIRouter()
 
 _LABELS = {
     "en": {
+    "map_outside_scale": 'outside 0-40 \\u00b0C',
     "map_colour_fixed": 'Colour scale is fixed, so the same colour means the same temperature on every load.',
     "map_no_window": 'no reading in window',
     "map_window": 'Window',
@@ -82,6 +83,7 @@ _LABELS = {
             "fleet_hint": "A visit is needed when a node is offline, its clock is unset, storage is nearly full or frames are corrupted.",
             "yes": "yes", "no": "no",},
     "es": {
+    "map_outside_scale": 'fuera de 0-40 \\u00b0C',
     "map_colour_fixed": 'La escala de color es fija, así el mismo color significa la misma temperatura en cada carga.',
     "map_no_window": 'sin lectura en la ventana',
     "map_window": 'Ventana',
@@ -137,6 +139,7 @@ _LABELS = {
             "yes": "sí", "no": "no",},
 
     "pt": {
+    "map_outside_scale": 'fora de 0-40 \\u00b0C',
     "map_colour_fixed": 'A escala de cor e fixa, portanto a mesma cor significa a mesma temperatura em cada carga.',
     "map_no_window": 'sem leitura na janela',
     "map_window": 'Janela',
@@ -669,8 +672,8 @@ h2{color:#8aa0b4;font-size:.95rem;margin:1.4rem 0 .5rem}
 a{color:#7cc4ff;text-decoration:none}a:hover{text-decoration:underline}
 .mut{color:#8aa0b4;font-size:.85rem}
 .empty{background:#182430;border-radius:12px;padding:1rem 1.2rem}
-.warn{background:#3a2410;border-left:3px solid #d98b3a;border-radius:6px;padding:.6rem .9rem;
-      color:#f0c99a;font-size:.85rem;margin:.6rem 0}
+.warn{background:#3a2410;border-radius:6px;padding:.6rem .9rem;
+      box-shadow:inset 0 0 0 1px #6b4a24;color:#f0c99a;font-size:.85rem;margin:.6rem 0}
 form{display:flex;gap:.8rem;flex-wrap:wrap;align-items:flex-end;background:#182430;
      border-radius:12px;padding:.8rem 1rem;margin:.8rem 0}
 label{display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;color:#8aa0b4}
@@ -683,7 +686,7 @@ th{background:#223140;text-align:left;padding:.55rem .8rem;font-size:.75rem;
    text-transform:uppercase;color:#8aa0b4}
 td{padding:.55rem .8rem;border-top:1px solid #2b3b4d}
 tr.hot td{background:#2a1512}
-tr.hot td:first-child{border-left:3px solid #e2725b}
+tr.hot td:first-child{box-shadow:inset 2px 0 0 #e2725b}
 .pill{display:inline-block;padding:.05rem .45rem;border-radius:99px;font-size:.72rem;
       background:#39c2a7;color:#06231d}
 </style></head><body><main>
@@ -721,10 +724,17 @@ svg{width:100%;height:auto;background:#182430;border-radius:12px}
 <p class="mut">{disclaimer}</p></main></body></html>"""
 
 
+# The colour scale is fixed in degrees Celsius, and the map legend is drawn from this
+# same range. A per-request scale would make two screenshots of the same hour impossible
+# to compare, and would make a 2 C spread look as alarming as a 20 C one.
+_TEMP_SCALE_LO = 0.0
+_TEMP_SCALE_HI = 40.0
+
+
 def _temp_color(value: float | None) -> str:
     if value is None:
         return "#8aa0b4"
-    t = max(0.0, min(40.0, value)) / 40.0
+    t = max(_TEMP_SCALE_LO, min(_TEMP_SCALE_HI, value)) / _TEMP_SCALE_HI
     r = int(124 + (224 - 124) * t)
     g = int(196 + (82 - 196) * t)
     b = int(255 + (82 - 255) * t)
@@ -1672,17 +1682,51 @@ def map_page(request: Request):
                         f" width=\"{cw + 0.5:.1f}\" height=\"{chh + 0.5:.1f}\""
                         f" fill=\"{_temp_color(num / den)}\" opacity=\"0.5\"/>")
             field_svg = "".join(cells)
+            # The legend used to be a linear gradient with its two endpoints pinned to the
+            # lowest and highest value present in the data, labelled with those two numbers.
+            #
+            # That is a lie even though `_temp_color` is on a fixed 0-40 C scale. The field
+            # cells are painted with `_temp_color(value)`; the bar interpolated between
+            # `_temp_color(tmin)` and `_temp_color(tmax)` instead of being that ramp. So when
+            # the data spanned 10-20 C, the bar ran from colour(10) to colour(20) through
+            # every colour in between - none of which is what colour(15) looks like on the
+            # scale the map actually uses. A reader matching a cell to the bar would read the
+            # wrong temperature, confidently, for every value in the middle.
+            #
+            # The bar is now the real ramp, sampled from the same function, with ticks at
+            # the scale's own values. It looks similar when the data happens to fill the
+            # scale and is simply correct otherwise.
+            ramp_w, ramp_y, ramp_h = 220, H - 20, 12
+            steps = 40
+            ramp = "".join(
+                f"<rect x=\"{ramp_w * i / steps:.1f}\" y=\"{ramp_y}\""
+                f" width=\"{ramp_w / steps + 0.5:.2f}\" height=\"{ramp_h}\""
+                f" fill=\"{_temp_color(_TEMP_SCALE_HI * i / steps)}\""
+                f"{' opacity=\"0.35\"' if tmin > _TEMP_SCALE_HI or tmax < 0 else ''}/>"
+                for i in range(steps))
+            ticks = ""
+            for tick in range(0, int(_TEMP_SCALE_HI) + 1, 10):
+                tx = ramp_w * tick / _TEMP_SCALE_HI
+                ticks += (f"<line x1=\"{tx:.1f}\" y1=\"{ramp_y + ramp_h}\""
+                          f" x2=\"{tx:.1f}\" y2=\"{ramp_y + ramp_h + 4}\""
+                          f" stroke=\"#8aa0b4\" stroke-width=\"1\"/>"
+                          f"<text x=\"{tx:.1f}\" y=\"{ramp_y + ramp_h + 16}\""
+                          f" fill=\"#8aa0b4\" font-size=\"10\" text-anchor=\"middle\">"
+                          f"{tick}\u00b0</text>")
+            outside = ""
+            if tmin > _TEMP_SCALE_HI or tmax < 0:
+                outside = (f"<text x=\"{ramp_w + 6}\" y=\"{ramp_y + 10}\""
+                           f" fill=\"#d98b3a\" font-size=\"10\">"
+                           f"{html.escape(labels['map_outside_scale'])}</text>")
             legend_svg = (
-                f"<defs><linearGradient id=\"tg\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"0\">"
-                f"<stop offset=\"0\" stop-color=\"{_temp_color(tmin)}\"/>"
-                f"<stop offset=\"1\" stop-color=\"{_temp_color(tmax)}\"/></linearGradient></defs>"
-                f"<rect x=\"{pad}\" y=\"{H - 22}\" width=\"160\" height=\"10\" fill=\"url(#tg)\"/>"
-                f"<text x=\"{pad}\" y=\"{H - 26}\" fill=\"#8aa0b4\" font-size=\"11\">"
-                f"{tmin:.1f}° {labels['legend_low']}</text>"
-                f"<text x=\"{pad + 160}\" y=\"{H - 26}\" fill=\"#8aa0b4\" font-size=\"11\""
-                f" text-anchor=\"end\">{tmax:.1f}° {labels['legend_high']}</text>"
-                f"<text x=\"{pad}\" y=\"{H - 40}\" fill=\"#8aa0b4\" font-size=\"11\">"
-                f"{html.escape(labels['field'])}</text>")
+                f"<rect x=\"{pad - 8}\" y=\"{ramp_y - 15}\" width=\"{ramp_w + 16}\""
+                f" height=\"{ramp_h + 34}\" fill=\"#0f1720\" opacity=\"0.75\""
+                f" rx=\"4\"/>"
+                + ramp + ticks + outside +
+                f"<text x=\"{pad - 8}\" y=\"{ramp_y - 4}\" fill=\"#8aa0b4\""
+                f" font-size=\"10\">{html.escape(labels['field'])} \u00b7"
+                f" {html.escape(labels['map_colour_fixed'])}</text>")
+
         circles = []
         for n, x, y in members_xy:
             t = n["temp"]

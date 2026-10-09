@@ -158,7 +158,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-461 firmware + 593 backend tests + build ESP32 + E2E = **1054 chequeos
+461 firmware + 595 backend tests + build ESP32 + E2E = **1056 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 
