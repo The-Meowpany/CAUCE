@@ -83,6 +83,28 @@ pio run -e esp32dev --project-dir (Join-Path $root "firmware")
 if ($LASTEXITCODE -ne 0) { $fail = $true }
 
 Write-Host $T.step3 -ForegroundColor Cyan
+# ruff runs here, and for the same reason CI runs it: it is the only check that sees the
+# whole backend tree at once. It was missing from this script, so a lint error could pass a
+# local `verify-all` and stop the pipeline - which is exactly what happened with an unused
+# variable in a test. The version is pinned to CI's on purpose: a newer ruff finds more and a
+# different version finds different things, so "it passed locally" has to mean something.
+Write-Host "== 3a/4 RUFF ==" -ForegroundColor Cyan
+# The console script, not `python -m ruff`: ruff is installed as a standalone executable and
+# the module form does not exist, so a check that looked for the module reported "not
+# installed" on a machine where ruff was present and working.
+$ruffVer = "0.16.7"
+$ruff = Get-Command ruff -ErrorAction SilentlyContinue
+if (-not $ruff) {
+    Write-Host "  ruff is not on PATH; install it with: pip install ruff==$ruffVer" -ForegroundColor Yellow
+    $fail = $true
+} else {
+    & ruff --version | ForEach-Object { Write-Host "  $_" }
+    Push-Location $root
+    & ruff check backend simulator
+    if ($LASTEXITCODE -ne 0) { $fail = $true }
+    Pop-Location
+}
+
 Push-Location (Join-Path $root "backend")
 $beOut = python -m pytest tests -q 2>&1
 $beOut | ForEach-Object { Write-Host $_ }

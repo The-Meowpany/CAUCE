@@ -16,8 +16,10 @@ for one of them.
 
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -91,27 +93,55 @@ def test_one_day_of_data_ends_close_to_now():
 
 @pytest.mark.parametrize("days", [1, 3])
 def test_no_generated_row_is_in_the_future(days, tmp_path):
-    """The whole generator, run for real, writing real CSV.
+    """The generator, run for real, and the CSV read back off disk.
 
-    The anchor tests above reason about arithmetic; this one runs the code and reads the
-    timestamps back out of the files, which is where a different units error would show up.
+    The anchor tests above reason about arithmetic and would agree with each other even if the
+    units were wrong twice. This one does not: it runs every scenario, writes the files the
+    tool actually writes, and reads the timestamps back out of them. A milliseconds/seconds
+    slip survives the first test and dies here.
+
+    Which is why the file is written rather than the rows inspected in memory - the CSV
+    carries both `timestamp_utc_ms` and a derived `timestamp_iso`, and only the round trip
+    proves the two agree.
     """
+    out = tmp_path / "sim"
+    out.mkdir(parents=True, exist_ok=True)
+
     out = tmp_path / "sim"
     rows = 0
     future = 0
     worst = 0
+    seen_iso = 0
     for index in range(1, 4):
         series = gen.Series(f"CAUCE-TEST-{index:03d}", f"TEST-{index}", 42 + index)
-        for _name, fn in gen.SCENARIOS.items():
+        for name, fn in gen.SCENARIOS.items():
             produced = fn(series, days)
             rows += len(produced)
+            path = str(out / f"{index}-{name}.csv")
+            # The generator's own writer, not a reimplementation. The first version of this
+            # test built the CSV by hand and got the header wrong, which is the kind of thing
+            # that makes an end-to-end test stop testing the real thing.
+            gen.write_csv(path, produced)
+
             now = _now_ms()
-            for row in produced:
-                ts = row[3]
-                worst = max(worst, ts)
-                if ts > now:
-                    future += 1
+            with open(path, encoding="utf-8", newline="") as fh:
+                for record in csv.DictReader(fh):
+                    ts = int(record["timestamp_utc_ms"])
+                    worst = max(worst, ts)
+                    if ts > now:
+                        future += 1
+                    # The ISO column is derived from the millisecond one. If they drift apart
+                    # the CSV tells two stories about when a reading happened.
+                    iso = record["timestamp_iso"]
+                    expected = dt.datetime.fromtimestamp(ts / 1000, dt.UTC).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ")
+                    assert iso == expected, (
+                        f"{os.path.basename(path)}: {iso} does not match {ts} ms, which is "
+                        f"{expected}")
+                    seen_iso += 1
+
     assert rows > 0, "the generator produced nothing, so this test proved nothing"
+    assert seen_iso == rows, f"read back {seen_iso} rows for {rows} written"
     assert future == 0, f"{future} of {rows} rows are dated in the future"
     assert worst <= _now_ms()
 
