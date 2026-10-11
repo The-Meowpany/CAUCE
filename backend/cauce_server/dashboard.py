@@ -24,6 +24,7 @@ from .config import settings
 from .db import engine, query
 from .ratelimit import check_rate
 from .security import require_bearer_token
+from .uncertainty import budget_for
 
 router = APIRouter()
 
@@ -56,6 +57,7 @@ _LABELS = {
            "events": "heat events", "compare": "Compare nodes →", "range": "Range",
            "variables": "Variables", "apply": "Apply", "stat_min": "Min", "stat_max": "Max",
            "stat_mean": "Mean", "stat_n": "N", "qbreak": "Quality breakdown",
+        "uncertainty": "Uncertainty",
            "node_a": "Node A", "node_b": "Node B", "node_c": "Node C", "days": "Days", "mean_diff": "Mean difference",
            "d1": "24h", "d7": "7d", "d30": "30d", "nodes": "Nodes", "stats": "Statistics",
            "alerts": "Alerts", "map": "Map", "coloc": "Co-location", "report": "Evidence report",
@@ -114,6 +116,7 @@ _LABELS = {
            "events": "eventos de calor", "compare": "Comparar nodos →", "range": "Rango",
            "variables": "Variables", "apply": "Aplicar", "stat_min": "Mín", "stat_max": "Máx",
            "stat_mean": "Media", "stat_n": "N", "qbreak": "Calidades",
+        "uncertainty": "Incertidumbre",
            "node_a": "Nodo A", "node_b": "Nodo B", "node_c": "Nodo C", "days": "Días", "mean_diff": "Diferencia media",
            "d1": "24h", "d7": "7d", "d30": "30d", "nodes": "Nodos", "stats": "Estadísticas",
            "alerts": "Alertas", "map": "Mapa", "coloc": "Co-localización", "report": "Reporte de evidencia",
@@ -924,7 +927,7 @@ select,button,input{font:inherit;background:#223140;color:#e8eef4;border:1px sol
 <p class="mut">{gen}: {gentime} · {h_range}: {wfrom} → {wto}</p>
 <h2>{h_stats}</h2>
   <p class="mut">{cal_note}</p>
-<div class="tbl"><table><tr><th>{h_var}</th><th>{h_min}</th><th>{h_max}</th><th>{h_mean}</th><th>{h_n}</th><th>{h_cal_min}</th><th>{h_cal_max}</th><th>{h_cal_mean}</th></tr>
+<div class="tbl"><table><tr><th>{h_var}</th><th>{h_min}</th><th>{h_max}</th><th>{h_mean}</th><th>{h_n}</th><th>{h_cal_min}</th><th>{h_cal_max}</th><th>{h_cal_mean}</th><th>{h_unc}</th></tr>
 {statrows}
 </table></div>
 <h2>{h_qbreak}</h2>
@@ -1307,10 +1310,26 @@ def node_page(node_id: str, request: Request, days: int = 1,
                        "pts": [[p["timestamp_utc_ms"], p["value"]]
                                for p in thin]})
         st = summary_stats([p["value"] for p in thin])
+        # The channel's own uncertainty, shown next to the statistics it applies to.
+        #
+        # The budgets existed and were still invisible: they reached exactly one endpoint, the
+        # calibration API, so a wind reading on a node report carried no indication that an
+        # uncalibrated cup anemometer is a relative instrument. That is the same failure as a
+        # channel that stores correctly and renders nowhere, one level up - and this project's
+        # entire claim is that the uncertainty is shown rather than implied.
+        budget = budget_for(v)
+        if budget is None:
+            unc = ("<span class=\"mut\">\u2014</span>"
+                   "<span class=\"mut unc-note\">no budget</span>")
+        else:
+            spread = budget.combined_for_reading(st["mean"])
+            unc = (f"\u00b1{_fmt_num(spread)} {html.escape(variables.unit_for(v))}"
+                   f"<span class=\"mut unc-note\" "
+                   f"title=\"{html.escape(budget.assumption)}\">what this means</span>")
         statrows.append(
-            f"<tr><td>{html.escape(_human_var(v))}</td>"
+            f"<tr><td>{html.escape(variables.label_for(v, code))}</td>"
             f"<td>{st['min']}</td><td>{st['max']}</td>"
-            f"<td>{st['mean']}</td><td>{st['count']}</td></tr>")
+            f"<td>{st['mean']}</td><td>{st['count']}</td><td>{unc}</td></tr>")
     qbreak = query(
         "SELECT quality, COUNT(*) AS c FROM measurements WHERE node_id=?"
         " AND timestamp_utc_ms>=? AND timestamp_utc_ms<=?"
@@ -2252,6 +2271,7 @@ def node_report(node_id: str, request: Request,
             .replace("{h_cal_min}", labels["stat_min"] + " (cal)")
             .replace("{h_cal_max}", labels["stat_max"] + " (cal)")
             .replace("{h_cal_mean}", labels["stat_mean"] + " (cal)")
+            .replace("{h_unc}", labels.get("uncertainty", "±"))
             .replace("{statrows}", "\n".join(statrows))
             .replace("{h_qbreak}", labels["qbreak"])
             .replace("{h_q}", labels["quality"])
