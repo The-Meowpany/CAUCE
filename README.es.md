@@ -30,7 +30,7 @@ pio test -e native          # 461 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 540 tests
+python -m pytest tests -q   # 679 tests
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ..\scripts\verify-all.ps1   # todo lo anterior en un gate
 ```
@@ -158,7 +158,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-461 firmware + 674 backend tests + build ESP32 + E2E = **1135 chequeos
+461 firmware + 679 backend tests + build ESP32 + E2E = **1140 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 
