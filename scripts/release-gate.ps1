@@ -429,6 +429,40 @@ if ($points -match 'edd3f55c') {
     Fail "kGroupOrder lost its verified hex"
 }
 
+Step "every test module passes on its own"
+# A module that only passes in the full suite is reporting a green it did not earn. The whole
+# suite shares one database file, and `db.reset_for_tests()` is what keeps modules from
+# reading each other's state - so a module that forgets to call it inherits whatever node
+# another module left behind.
+#
+# `test_heat_views.py` was one: three of its tests opened pages for a node it never created,
+# passed in CI because `test_api.py` ran first and seeded it, and answered 404 when the file
+# was run alone. Nothing in the gate could see it, because the gate always runs the whole suite
+# in the same order.
+#
+# This runs each module on its own. It costs a couple of minutes, which is why it lives here
+# rather than in the per-run suite: this is a release question, not a unit-test question.
+$modules = Get-ChildItem backend\tests\test_*.py | Sort-Object Name
+$orderDependent = @()
+# From inside backend/: pytest is invoked with a `tests/...` path, and from the repository
+# root that path does not exist. Without this every module fails to collect and the check
+# reports all of them - a check that cries wolf on the first run is not a check, it is noise.
+Push-Location backend
+try {
+    foreach ($m in $modules) {
+        $null = & python -m pytest "tests/$($m.Name)" -q --no-header -p no:cacheprovider 2>&1
+        if ($LASTEXITCODE -ne 0) { $orderDependent += $m.Name }
+    }
+} finally {
+    Pop-Location
+}
+if ($orderDependent.Count -eq 0) {
+    Ok "each of the $($modules.Count) modules passes alone"
+} else {
+    Fail "these modules only pass inside the full suite:"
+    $orderDependent | ForEach-Object { Write-Host "          $_" }
+}
+
 Step "no unregistered failing test is hiding in the tree"
 $unregistered = Select-String -Path firmware\test\*.cpp -Pattern "NOT REGISTERED" |
     Select-Object -ExpandProperty Path -Unique
