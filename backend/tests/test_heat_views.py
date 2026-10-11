@@ -56,6 +56,36 @@ def client() -> TestClient:
     return _SHARED
 
 
+# These three tests below open pages for CAUCE-001 without seeding it, and they passed in the
+# full run only because some earlier module had left that node in the shared database. Run
+# this file on its own and all three answer 404. Nothing here calls `db.reset_for_tests()` -
+# 29 other modules do - so this one inherited whatever happened to be there.
+#
+# An order-dependent test is worse than a failing one: it reports green in CI, where the order
+# is stable, and breaks the first time someone runs a single file. The seed below makes the
+# dependency explicit and local.
+_NODE_SEEDED = False
+
+
+def _ensure_node(c: TestClient) -> None:
+    """Give CAUCE-001 a temperature series this module owns."""
+    global _NODE_SEEDED
+    if _NODE_SEEDED:
+        return
+    for i in range(12):
+        r = c.post("/v1/sync", json={
+            "protocol_version": 1, "node_id": "CAUCE-001",
+            "measurements": [{
+                "node_id": "CAUCE-001", "sensor_id": "BME280-1", "sequence": 900 + i,
+                "timestamp_utc_ms": 1_787_350_000_000 + i * 900_000,
+                "variable": "air_temperature", "value": 20.0 + i, "unit": "C",
+                "quality": "VALID", "reason_bits": 0, "time_uncertain": False,
+            }],
+        })
+        assert r.status_code == 200, r.text
+    _NODE_SEEDED = True
+
+
 # --------------------------------------------------------------- the pure detector
 
 
@@ -127,12 +157,14 @@ def test_an_empty_input_is_no_events_not_an_error():
 def test_the_per_node_events_page_opens_without_a_credential():
     """The regression. No token in the client, and the page must still answer."""
     c = client()
+    _ensure_node(c)
     r = c.get("/nodes/CAUCE-001/events")
     assert r.status_code == 200, f"unauthenticated heat page -> {r.status_code}"
 
 
 def test_the_fleet_page_renders_and_reports_a_count_per_node():
     c = client()
+    _ensure_node(c)
     r = c.get("/heat")
     assert r.status_code == 200
     # The count and the list must not have collided again. A page that renders the word
@@ -406,3 +438,23 @@ def test_a_printed_report_keeps_its_small_text_legible():
     assert ".mut" in block, (
         "print block sets a white background but never restyles .mut, so the muted text "
         "stays dark-theme blue-grey on paper")
+
+
+def test_these_tests_do_not_depend_on_another_module_having_run_first():
+    """The order-dependence itself, asserted.
+
+    Three tests in this file open pages for CAUCE-001. Before this module seeded the node
+    itself they passed only because an earlier module had left it in the shared database, and
+    they answered 404 when the file was run on its own. This module never called
+    `db.reset_for_tests()` while 29 others did, so it inherited whatever happened to be there.
+
+    Checking that the node exists after seeding catches the regression. Checking that the
+    *fixture* seeds it is what stops it coming back: a future test that opens a page for a node
+    nobody created in this file will fail here rather than pass on someone else's leftovers.
+    """
+    c = client()
+    _ensure_node(c)
+    r = c.get("/nodes/CAUCE-001/events")
+    assert r.status_code == 200, (
+        "the per-node events page needs a node; if this fails, the seed stopped running and "
+        "the three page tests above are passing on another module's leftovers again")

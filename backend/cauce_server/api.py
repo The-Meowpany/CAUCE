@@ -1264,12 +1264,33 @@ def analytics_heat_events(
 
     events = detect_heat_events(rows, threshold, min_duration_min)
 
+    # An empty result means two very different things, and the caller cannot tell them apart
+    # from the list alone.
+    #
+    # "No heat events" is a finding: we looked at this node's temperature over this window and
+    # nothing crossed the threshold. "This node reports no air_temperature at all" is the
+    # absence of a finding - a node carrying only wind answers this endpoint with an empty
+    # array, and a caller reads that as a cool day. A node with anemometer and nothing else is
+    # not a node we know the temperature of.
+    #
+    # So the empty case is stated rather than inferred. `evaluated: false` with a list of what
+    # the node does carry is the honest answer, and it costs one extra query only on the path
+    # that is about to return nothing.
+    evaluated = bool(rows)
+    available: list[str] = []
+    if not evaluated:
+        available = [r["variable"] for r in query(
+            "SELECT DISTINCT variable FROM measurements WHERE node_id=? ORDER BY variable",
+            (node_id,))]
+
     return {
         "node_id": node_id,
         "variable": variable,
         "threshold": threshold,
         "min_duration_min": min_duration_min,
         "metric_type": "derived",
+        "evaluated": evaluated,
+        "available_variables": available,
         "note": "duration estimated between consecutive above-threshold samples; not causality",
         "calibration": calibration_summary(calibration),
         "events": events,

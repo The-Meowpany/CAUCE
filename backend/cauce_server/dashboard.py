@@ -53,6 +53,7 @@ _LABELS = {
            "records": "Measurements", "latest": "Latest readings", "recent": "Recent measurements",
            "time": "Time (UTC)", "chart": "Last hours: temperature (°C) and humidity (%RH)",
            "view_json": "view raw JSON", "export_node": "export node CSV", "no_data": "No measurements yet.",
+    "no_heat_data": "No temperature recorded, so no heat events were evaluated:",
            "readings": "Readings", "last_sync": "Last sync (UTC)", "hottest": "Hottest 7d",
            "events": "heat events", "compare": "Compare nodes →", "range": "Range",
            "variables": "Variables", "apply": "Apply", "stat_min": "Min", "stat_max": "Max",
@@ -112,6 +113,7 @@ _LABELS = {
            "records": "Mediciones", "latest": "Últimas lecturas", "recent": "Mediciones recientes",
            "time": "Hora (UTC)", "chart": "Últimas horas: temperatura (°C) y humedad (%HR)",
            "view_json": "ver JSON crudo", "export_node": "exportar CSV del nodo", "no_data": "Aún sin mediciones.",
+        "no_heat_data": "Sin temperatura registrada, no se evaluaron eventos de calor:",
            "readings": "Lecturas", "last_sync": "Último sync (UTC)", "hottest": "Máxima 7d",
            "events": "eventos de calor", "compare": "Comparar nodos →", "range": "Rango",
            "variables": "Variables", "apply": "Aplicar", "stat_min": "Mín", "stat_max": "Máx",
@@ -1907,11 +1909,18 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
         # `events`, and a later `**` silently overwrites the list with an int - which
         # failed at the first `max()` rather than at the assignment.
         per_node.append({"node_id": nid, "event_list": events, "variable": event_var,
+                        "evaluated": event_var == "air_temperature",
                         **summary, "last_utc_ms": last})
 
-    with_events = [p for p in per_node if p["events"] > 0]
+    # A node carrying only an anemometer has no temperature, so there is no heat event to
+    # count - and "0 events" on a page about heat reads as a cool day rather than as a node
+    # nobody has measured. Those nodes are counted separately and said out loud, the same
+    # distinction the API now makes in `evaluated`.
+    evaluated_nodes = [p for p in per_node if p["evaluated"]]
+    unevaluated_nodes = [p for p in per_node if not p["evaluated"]]
+    with_events = [p for p in evaluated_nodes if p["events"] > 0]
     rows_html = ""
-    for p in sorted(per_node, key=lambda x: (-x["events"], x["node_id"])):
+    for p in sorted(evaluated_nodes, key=lambda x: (-x["events"], x["node_id"])):
         if p["events"]:
             recent = max(p["event_list"], key=lambda e: e["end_utc_ms"])
             last_ev = (f"<a href=\"/nodes/{html.escape(p['node_id'])}/events"
@@ -1930,6 +1939,14 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
             f"<td>{p['longest_min']}</td>"
             f"<td>{peak_txt}</td>"
             f"<td>{last_ev}</td></tr>")
+
+    if unevaluated_nodes:
+        # Said out loud rather than left as a silently smaller table: a reader counting the
+        # rows needs to know whether a node is missing from this page or absent from it.
+        skipped = ", ".join(sorted(p["node_id"] for p in unevaluated_nodes))
+        rows_html += (
+            f"<tr><td colspan=\"6\" class=\"mut\">{labels['no_heat_data']}"
+            f" ({html.escape(skipped)})</td></tr>")
 
     if with_events:
         hottest = max(with_events, key=lambda x: x["peak_value"] or -99)
