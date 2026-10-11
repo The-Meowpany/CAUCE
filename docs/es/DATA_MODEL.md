@@ -47,9 +47,36 @@ Tres reglas sin excepciones:
 | pressure | 300..1100 hPa | ±2 |
 | illuminance | 0..200000 lx | ±120000 |
 | battery_voltage | 2.5..4.5 V | ±0.2 |
+| wind_speed | 0..60 m/s | ±25 |
+| tvoc | 0..65000 ppb | ±20000 |
 
 Detección de stuck: 6 o más lecturas idénticas dentro de epsilon 0.01 —
 eso es un sensor muerto haciéndose el vivo.
+
+### Qué añaden los sensores opcionales, y qué no
+
+Tres canales más allá del BME280, cada uno desactivado por defecto y habilitado por nodo
+porque el hardware varía:
+
+| Canal | Pieza | Por qué está aquí |
+|---|---|---|
+| `illuminance` | BH1750 | El canal estaba en este modelo desde el principio sin driver detrás. La precisión del datasheet es ±20 %, y el procedimiento de campo lo presupone. |
+| `wind_speed` | Interruptor Hall sobre rotor de cúpulas | Convierte la co-localización en algo verificable en vez de supuesto. Dos nodos a 300 m solo miden el mismo aire si el aire se mueve poco; sin un dato de viento esa suposición no se puede comprobar. |
+| `tvoc` | CCS811 | La pieza mide VOC. También publica una cifra de CO2 *estimada* derivada de esa respuesta, y esta red no la reporta - ver abajo. |
+
+**No hay canal de CO2, y es una decisión, no una carencia.** El CCS811 estima `eCO2`
+a partir de la respuesta de un sensor de óxido metálico a compuestos orgánicos
+volátiles; no mide dióxido de carbono. La estimación deriva con la humedad y la
+temperatura, lee alto junto a vegetación o cualquier disolvente, y se mueve durante sus
+propios diez minutos de calentamiento. Publicarla como medición de CO2 metería en la red
+un valor que no se puede calibrar ni defender, en un proyecto cuya única pretensión son
+datos comparables con la incertidumbre mostrada. Una lectura real de CO2 requiere un
+sensor NDIR - SCD4x o MH-Z19 - que es otra pieza con otra historia de calibración.
+
+Los umbrales de subida de viento y VOC son deliberadamente amplias. Una racha es
+dato real, y alguien que pasa por la entrada es dato real; un límite estrecho
+marcaría ambos como SUSPECT y descartaría justo la señal que se añadió el sensor
+para capturar.
 
 ## Calibración y mantenimiento (central)
 

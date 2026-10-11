@@ -9,6 +9,9 @@
 #include "cauce/core/Metrics.h"
 #include "cauce/core/Types.h"
 #include "cauce/drivers/Bme280Driver.h"
+#include "cauce/drivers/Bh1750Driver.h"
+#include "cauce/drivers/Ccs811Driver.h"
+#include "cauce/drivers/HallAnemometerDriver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
 #include "cauce/app/Esp32Sleeper.h"
 #include "cauce/hal/MemoryFileSystem.h"
@@ -59,11 +62,46 @@ static cauce::hal::Esp32LittleFs g_fs;
 static cauce::hal::Esp32Clock g_clock;
 static cauce::hal::Esp32WireBus* g_bus = nullptr;
 static cauce::app::SerialLogSink* g_sink = nullptr;
+#ifdef ARDUINO
+// Hall-effect switch on the anemometer rotor. GPIO4 with the internal pull-up matches the
+// reference build; a node wired differently overrides this in platformio.ini rather than
+// editing the firmware, because a pin that differs between nodes is a deployment fact.
+static constexpr uint8_t ANEMOMETER_PIN = 4;
+#endif
+
 static cauce::Logger* g_logger = nullptr;
 static cauce::ValidationEngine* g_validator = nullptr;
 static cauce::LogStorageRepository* g_store = nullptr;
 static cauce::app::MeasurementScheduler* g_scheduler = nullptr;
 static cauce::drivers::Bme280Driver* g_bme = nullptr;
+static cauce::drivers::Bh1750Driver* g_light = nullptr;
+static cauce::drivers::Ccs811Driver* g_voc = nullptr;
+static cauce::drivers::HallAnemometerDriver* g_wind = nullptr;
+// Host build: there is no GPIO edge, so the accumulator is fed by nothing. The driver still
+// runs its interval logic, which is the part worth testing off-silicon.
+static cauce::drivers::IPulseSource* g_noPulseSource = nullptr;
+#ifdef ARDUINO
+// The anemometer's Hall switch is a GPIO edge, and an edge that arrives while the radio is
+// mid-transmit still has to be counted or the speed reads low with nothing wrong. The ISR
+// therefore does the counting and nothing else - it pushes into the accumulator and returns,
+// which is the only thing it is safe to do from interrupt context here.
+static cauce::drivers::IPulseSource* g_pulseSource = nullptr;
+
+class Esp32PulseSource final : public cauce::drivers::IPulseSource {
+ public:
+  void attachPulseSink(cauce::drivers::WindPulseAccumulator* sink) override {
+    sink_ = sink;
+  }
+  void onEdge() {
+    if (sink_) sink_->addPulse(micros() / 1000u);
+  }
+
+ private:
+  cauce::drivers::WindPulseAccumulator* sink_{nullptr};
+};
+static Esp32PulseSource g_esp32PulseSource{};
+static void IRAM_ATTR onAnemometerEdge() { g_esp32PulseSource.onEdge(); }
+#endif
 static cauce::ConfigManager* g_configManager = nullptr;
 static cauce::app::SystemHealth g_health{};
 static cauce::app::DeepSleepController g_sleepController{};
@@ -402,6 +440,45 @@ void setup() {
     g_bus->begin();
     g_bme = new cauce::drivers::Bme280Driver(*g_bus, g_clock, "BME280-1");
     g_scheduler->addSensor(g_bme);
+    // Optional I2C sensors are constructed and registered only when the node is configured for
+    // them. Each one that is absent leaves the node working with the BME280 alone rather than
+    // refusing to start, because a node with fewer sensors is still a working node and a node
+    // that will not boot is not.
+    if (g_configManager->current().lightEnabled) {
+      g_light = new cauce::drivers::Bh1750Driver(*g_bus, g_clock, "BH1750-1");
+      if (g_light->begin()) {
+        g_scheduler->addSensor(g_light);
+      } else {
+        delete g_light;
+        g_light = nullptr;
+      }
+    }
+    if (g_configManager->current().vocEnabled) {
+      g_voc = new cauce::drivers::Ccs811Driver(*g_bus, g_clock, "CCS811-1");
+      if (g_voc->begin()) {
+        g_scheduler->addSensor(g_voc);
+      } else {
+        delete g_voc;
+        g_voc = nullptr;
+      }
+    }
+    if (g_configManager->current().windEnabled) {
+#ifdef ARDUINO
+      const uint8_t pin = ANEMOMETER_PIN;
+      pinMode(pin, INPUT_PULLUP);
+      attachInterrupt(digitalPinToInterrupt(pin), onAnemometerEdge, FALLING);
+      g_pulseSource = &g_esp32PulseSource;
+      g_wind = new cauce::drivers::HallAnemometerDriver(
+          g_clock, "WIND-1", g_esp32PulseSource,
+          g_configManager->current().windDiameterMetres,
+          g_configManager->current().windPulsesPerRevolution);
+#else
+      g_wind = new cauce::drivers::HallAnemometerDriver(g_clock, "WIND-1", g_noPulseSource,
+                                                        0.15f, 3);
+#endif
+      g_wind->begin();
+      g_scheduler->addSensor(g_wind);
+    }
     g_scheduler->beginAllSensors();
   }
 

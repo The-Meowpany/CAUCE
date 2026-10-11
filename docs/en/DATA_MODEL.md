@@ -48,9 +48,35 @@ Three rules with no exceptions:
 | pressure | 300..1100 hPa | ±2 |
 | illuminance | 0..200000 lx | ±120000 |
 | battery_voltage | 2.5..4.5 V | ±0.2 |
+| wind_speed | 0..60 m/s | ±25 |
+| tvoc | 0..65000 ppb | ±20000 |
 
 Stuck detection: 6 or more identical readings within epsilon 0.01 —
 that's a dead sensor pretending to work.
+
+### What the optional sensors add, and what they do not
+
+Three channels beyond the BME280's temperature, humidity and pressure, each off by
+default and enabled per node because the hardware differs:
+
+| Channel | Part | Why it is here |
+|---|---|---|
+| `illuminance` | BH1750 | The channel has been in this model since the beginning with no driver behind it. Datasheet accuracy is +/-20 %, and the field procedure budgets for that. |
+| `wind_speed` | Hall switch on a cup rotor | Makes co-location checkable instead of assumed. Two nodes 300 m apart only measure the same air if the air is moving slowly; without a wind reading that assumption is untestable. |
+| `tvoc` | CCS811 | The part senses VOC. It also publishes an *estimated* CO2 figure derived from that response, and this network does not report it - see below. |
+
+**There is no CO2 channel, and that is a decision rather than a gap.** The CCS811
+estimates `eCO2` from the response of a metal-oxide sensor to volatile compounds; it
+does not measure carbon dioxide. The estimate drifts with humidity and temperature,
+reads high next to vegetation or any solvent, and moves during its own ten-minute
+warm-up. Publishing it as a CO2 measurement would put a value in the network that
+cannot be calibrated and cannot be defended, in a project whose entire claim is
+comparable data with the uncertainty shown. A real CO2 reading needs an NDIR sensor -
+SCD4x or MH-Z19 - which is a different part with a different calibration story.
+
+The rise thresholds for wind and VOC are deliberately loose. A gust is real data and a
+person walking past the inlet is real data; a tight limit would mark both SUSPECT and
+discard exactly the signal the sensor was added to capture.
 
 ## Calibration and maintenance (central)
 

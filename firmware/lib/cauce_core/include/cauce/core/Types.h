@@ -11,10 +11,12 @@ enum class Variable : uint8_t {
   Pressure = 2,
   Light = 3,
   BatteryVoltage = 4,
+  WindSpeed = 5,
+  Tvoc = 6,
   Unknown = 255,
 };
 
-static constexpr uint8_t kVariableCount = 5;
+static constexpr uint8_t kVariableCount = 7;
 
 enum class Quality : uint8_t {
   Valid = 0,

@@ -14,6 +14,10 @@ const char* variableName(Variable v) {
       return "illuminance";
     case Variable::BatteryVoltage:
       return "battery_voltage";
+    case Variable::WindSpeed:
+      return "wind_speed";
+    case Variable::Tvoc:
+      return "tvoc";
     default:
       return "unknown";
   }
@@ -31,6 +35,10 @@ const char* variableUnit(Variable v) {
       return "lx";
     case Variable::BatteryVoltage:
       return "V";
+    case Variable::WindSpeed:
+      return "m/s";
+    case Variable::Tvoc:
+      return "ppb";
     default:
       return "?";
   }
@@ -48,6 +56,8 @@ Variable parseVariable(const char* name) {
       {"pressure", Variable::Pressure},
       {"illuminance", Variable::Light},
       {"battery_voltage", Variable::BatteryVoltage},
+      {"wind_speed", Variable::WindSpeed},
+      {"tvoc", Variable::Tvoc},
   };
   for (const auto& e : kEntries) {
     if (strcmp(name, e.name) == 0) return e.var;

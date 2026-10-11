@@ -57,6 +57,19 @@ struct NodeConfig {
   char otaManifestKey[65]{};
   char otaManifestUrl[160]{};
   bool loraEnabled{false};
+  // Optional environmental sensors. All off by default, for the same reason peerEnabled is: a
+  // node should not announce a channel it was not asked to publish, and a sensor that is wired
+  // in but disabled leaves the node measuring exactly what it measured before. Each is enabled
+  // per node because the hardware differs - a rooftop node wants wind and light, a sheltered
+  // one wants VOC, and a bench node wants none of them.
+  bool lightEnabled{false};
+  bool vocEnabled{false};
+  bool windEnabled{false};
+  // Sweep diameter of the anemometer rotor in metres, and pulses per revolution. The default is
+  // the common three-cup hobby rotor; a node with a different rotor must say so, because the
+  // speed conversion is wrong by the ratio between the two diameters otherwise.
+  float windDiameterMetres{0.15f};
+  uint8_t windPulsesPerRevolution{3};
   // Peer-to-peer over ESP-NOW. Off by default, like deep sleep, because a node that
   // announces itself onto a radio segment it was not asked to join is a deployment
   // decision rather than a default. The channel is explicit for the same reason the

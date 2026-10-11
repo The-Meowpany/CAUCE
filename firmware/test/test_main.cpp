@@ -8,6 +8,7 @@ void registerStorageTests();
 void registerConfigTests();
 void registerSecurityTests();
 void registerBme280Tests();
+void registerWeatherSensorsTests();
 void registerSchedulerTests();
 void registerExportTests();
 void registerMetricsTests();
@@ -53,6 +54,7 @@ int main() {
   registerConfigTests();
   registerSecurityTests();
   registerBme280Tests();
+  registerWeatherSensorsTests();
   registerSchedulerTests();
   registerExportTests();
   registerMetricsTests();

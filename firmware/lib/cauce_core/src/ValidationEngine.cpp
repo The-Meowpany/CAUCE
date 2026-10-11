@@ -37,6 +37,24 @@ Thresholds defaultThresholds() {
   t.maxRisePerMinute[static_cast<uint8_t>(Variable::BatteryVoltage)] = 0.2f;
   t.maxDropPerMinute[static_cast<uint8_t>(Variable::BatteryVoltage)] = 0.2f;
 
+  // Wind: the ceiling is above the ~50 m/0 s a well-built cup anemometer reports before it is
+  // physically overspeeding, and the rise budget is deliberately loose because a gust is real
+  // data. A tight limit here would mark every gusty afternoon SUSPECT, which is worse than
+  // letting a brief spike through for the outlier rule to catch.
+  t.rangeMin[static_cast<uint8_t>(Variable::WindSpeed)] = 0.0f;
+  t.rangeMax[static_cast<uint8_t>(Variable::WindSpeed)] = 60.0f;
+  t.maxRisePerMinute[static_cast<uint8_t>(Variable::WindSpeed)] = 25.0f;
+  t.maxDropPerMinute[static_cast<uint8_t>(Variable::WindSpeed)] = 25.0f;
+
+  // TVOC: an estimated value, and a noisy one. The ceiling is the CCS811's own full scale with
+  // headroom, and the rise budget is loose on purpose - VOC concentrations jump when someone
+  // walks past the inlet, and calling that a fault would discard the signal the node exists to
+  // capture.
+  t.rangeMin[static_cast<uint8_t>(Variable::Tvoc)] = 0.0f;
+  t.rangeMax[static_cast<uint8_t>(Variable::Tvoc)] = 65000.0f;
+  t.maxRisePerMinute[static_cast<uint8_t>(Variable::Tvoc)] = 20000.0f;
+  t.maxDropPerMinute[static_cast<uint8_t>(Variable::Tvoc)] = 20000.0f;
+
   t.stuckCountLimit = 6;
   t.stuckEpsilon = 0.01f;
   t.maxFutureSkewMs = 120000;

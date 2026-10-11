@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from . import variables
 from .analytics import detect_heat_events, heat_summary, summary_stats
 from .api import analytics_heat_events
 from .calibration import (
@@ -662,10 +663,11 @@ _STAT = ("<div class=\"stat\"><div class=\"u\">{label}</div>"
 
 _NODE_CARD = ("""<div class="card"><h3><a href="/nodes/{nid}">{nid}</a></h3>
 <div class="mut">{site} · {last}</div>
-<div class="big">{temp} <span class="u">°C</span> · {hum} <span class="u">%RH</span></div>
+<div class="big">{lead}</div>
+<div class="chips">{extra}</div>
 <div class="mut">{qline}</div>
 <canvas class="spark" data-pts='{spark}'></canvas>
-<div class="mut">{hottest}: {hot} °C · <a href="/nodes/{nid}/events">{events}</a></div>
+<div class="mut">{peak}</div>
 </div>""")
 
 
@@ -1070,6 +1072,25 @@ select,button{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39
 <p class="mut">{disclaimer}</p></main></body></html>"""
 
 
+def _fmt_num(value) -> str:
+    """One decimal, or a dash.
+
+    One decimal is what the node card has always shown for temperature and humidity, and a test
+    pins it. A shorter `%g` was tried here and quietly turned 60.0 %RH into "60", which is a
+    worse readout for a sensor and a silent change to output two other tests had accepted.
+    """
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return "—"
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _human_var(var: str | None) -> str:
     return (var or "").replace("_", " ") or "—"
 
@@ -1109,10 +1130,32 @@ def dashboard(request: Request):
                  ON m.variable=t.v AND m.sequence=t.s AND m.node_id=?
                ORDER BY m.variable""", (nid, nid))
         by_var = {row["variable"]: dict(row) for row in latest}
-        temp = by_var.get("air_temperature", {})
-        hum = by_var.get("relative_humidity", {})
-        tval = "—" if temp.get("value") is None else f"{temp['value']:.1f}"
-        hval = "—" if hum.get("value") is None else f"{hum['value']:.1f}"
+        # The card leads with one channel and lists the rest, both drawn from the registry
+        # rather than from two hardcoded names. A node carrying wind and light but no
+        # temperature used to render "— °C · — %RH" as its entire reading; now it leads
+        # with whatever it actually measures.
+        present = [v for v in by_var
+                   if by_var[v].get("value") is not None
+                   and variables.is_environmental(v)]
+        order = [x.name for x in variables.VARIABLES]
+        present.sort(key=lambda v: order.index(v) if v in order else 99)
+        if present:
+            lead_var = present[0]
+            rest = present[1:]
+            info = variables.BY_NAME.get(lead_var)
+            lead_html = (f"{html.escape(variables.label_for(lead_var))} "
+                         f"{_fmt_num(by_var[lead_var]['value'])} "
+                         f"<span class=\"u\">{html.escape(variables.unit_for(lead_var))}</span>")
+        else:
+            lead_var = "air_temperature"
+            rest = []
+            info = None
+            lead_html = labels["none"]
+        extra_html = "".join(
+            f"<span class=\"chip\"><b>{html.escape(variables.label_for(v))}</b>"
+            f" {_fmt_num(by_var[v]['value'])}"
+            f"<i>{html.escape(variables.unit_for(v))}</i></span>"
+            for v in rest)
         quals = sorted({row["quality"] for row in latest if row["quality"]})
         qline = (" · ".join(
             f"<span class=\"q-{html.escape(q)}\">{html.escape(q)}</span>"
@@ -1120,24 +1163,26 @@ def dashboard(request: Request):
                  or labels["none"])
         pts = query(
             "SELECT timestamp_utc_ms, value FROM measurements"
-            " WHERE node_id=? AND variable='air_temperature'"
+            " WHERE node_id=? AND variable=?"
             " AND value IS NOT NULL ORDER BY sequence DESC LIMIT 120",
-            (nid,))
+            (nid, lead_var))
         spark = _json_for_script([[p["timestamp_utc_ms"], p["value"]]
                             for p in reversed(pts)])
         hot = query(
             "SELECT MAX(value) AS m FROM measurements WHERE node_id=?"
-            " AND variable='air_temperature' AND value IS NOT NULL"
+            " AND variable=? AND value IS NOT NULL"
             " AND timestamp_utc_ms>=?",
-            (nid, (r["ts"] or 0) - 7 * 86400000))
+            (nid, lead_var, (r["ts"] or 0) - 7 * 86400000))
         hotv = hot[0]["m"] if hot and hot[0]["m"] is not None else None
+        hottest = labels.get("hottest") or "Hottest 7d"
+        events = labels.get("events") or "events"
         cards.append(_NODE_CARD.format(
             nid=html.escape(nid),
             site=html.escape(r["site_id"] or labels["none"]),
-            last=_fmt_utc(r["ts"]), temp=tval, hum=hval, qline=qline,
-            spark=spark, hottest=labels["hottest"],
-            hot=("—" if hotv is None else f"{hotv:.1f}"),
-            events=labels["events"]))
+            last=_fmt_utc(r["ts"]), lead=lead_html, extra=extra_html, qline=qline,
+            spark=spark,
+            peak=f"{hottest}: {_fmt_num(hotv)} {info.unit if info else ''} · "
+                 f"<a href=\"/nodes/{html.escape(nid)}/events\">{events}</a>"))
     switcher = "".join(
         f"<strong aria-current=\"true\">{label}</strong>" if lang_code == code
         else f"<a href=\"/?lang={lang_code}\">{label}</a>"
@@ -1223,9 +1268,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
     if requested_vars:
         selected = [v for v in requested_vars if v in all_vars] or all_vars
     else:
-        preferred = [v for v in ("air_temperature", "relative_humidity")
-                     if v in all_vars]
-        selected = preferred or all_vars
+        selected = variables.default_selection(all_vars)
     max_ts = query("SELECT MAX(timestamp_utc_ms) AS m FROM measurements"
                    " WHERE node_id=?", (node_id,))[0]["m"] or 0
     flo, fhi = _parse_local(from_s), _parse_local(to_s)
@@ -1233,8 +1276,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
         since, until = flo, fhi
     else:
         since, until = max_ts - days * 86400000, max_ts
-    colors = {"air_temperature": "#39c2a7", "relative_humidity": "#7cc4ff",
-              "pressure": "#e6b455"}
+
     series = []
     statrows = []
     for v in selected:
@@ -1246,7 +1288,7 @@ def node_page(node_id: str, request: Request, days: int = 1,
         step = max(1, len(pts) // 400)
         thin = pts[::step]
         series.append({"label": _human_var(v),
-                       "color": colors.get(v, "#b0b0b0"),
+                       "color": variables.color_for(v),
                        "pts": [[p["timestamp_utc_ms"], p["value"]]
                                for p in thin]})
         st = summary_stats([p["value"] for p in thin])
