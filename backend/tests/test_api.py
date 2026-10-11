@@ -915,10 +915,56 @@ def test_map_field_and_legend(client):
     assert 'linearGradient' not in r.text, (
         "a gradient legend cannot represent a discrete ramp; the cells are coloured per "
         "cell from _temp_color and the bar has to be sampled from the same function")
-    # Ticks every 10 C across the fixed 0-40 scale, so the bar is readable as a scale
-    # rather than as two labelled endpoints.
-    for tick in (0, 10, 20, 30, 40):
-        assert f">{tick}°</text>" in r.text, f"legend is missing the {tick} C tick"
+    # The ramp is labelled across the channel's declared range rather than at two endpoints.
+    # This used to assert ticks at 0/10/20/30/40 C, which was correct only while the scale was
+    # fixed at 0-40 for every channel - and it would have kept passing if a wind or VOC map had
+    # drawn a 0-40 degree ramp full of readings below 1. The ticks now come from the registry,
+    # so the assertion follows them.
+    for tick in ("0°C", "8°C", "16°C", "24°C", "32°C", "40°C"):
+        assert f">{tick}</text>" in r.text, f"legend is missing the {tick} tick"
+    # The page answers in Spanish by default, and the legend names the channel in the page's
+    # language rather than in the registry's English. Both are checked because the failure mode
+    # is silent: an English label on a Spanish map reads as a bug to a Spanish reader and as
+    # nothing at all to the test that wrote it.
+    assert "Temperatura del aire (°C)" in r.text, (
+        "the legend has to name the channel it is scaling, in the page's language")
+    en = client.get('/map', headers={'Accept-Language': 'en'})
+    assert "Air temperature (°C)" in en.text
+
+
+def test_the_map_can_be_asked_for_another_channel(client):
+    from cauce_server import db as _db
+    client.post('/v1/sites', json={'site_id': 's-f'})
+    client.put('/v1/sites/s-f/location', json={'lat': -34.9, 'lon': -56.1})
+    # Two nodes, both carrying both channels. The legend is drawn alongside the interpolation
+    # and only appears once there is something to interpolate between, so a one-node map has no
+    # legend at all - which is a property of the page, not of the channel selection.
+    for node, seq_temp, seq_wind in (('CAUCE-A', 21.5, 8.4), ('CAUCE-B', 19.0, 6.1)):
+        client.post('/v1/sync', json=sync_payload(
+            [make_record(1, BASE_TS, seq_temp)], node_id=node))
+        wind = make_record(2, BASE_TS, seq_wind)
+        wind['variable'] = 'wind_speed'
+        wind['unit'] = 'm/s'
+        client.post('/v1/sync', json=sync_payload([wind], node_id=node))
+    with _db.transaction() as conn:
+        conn.execute("UPDATE nodes SET site_id='s-f'")
+
+    temp = client.get('/map')
+    assert temp.status_code == 200
+    assert "Temperatura del aire (°C)" in temp.text
+
+    windy = client.get('/map?variable=wind_speed')
+    assert windy.status_code == 200
+    assert "Velocidad del viento (m/s)" in windy.text, (
+        "the map refused to draw a channel it has data for")
+    assert "m/s</text>" in windy.text, "wind ticks carry the wind unit"
+    assert "°C)" not in windy.text, (
+        "the legend still labels the wind ramp in degrees")
+
+    # A channel nothing reports falls back rather than drawing an empty map.
+    unknown = client.get('/map?variable=pressure')
+    assert unknown.status_code == 200
+    assert "Temperatura del aire (°C)" in unknown.text
 
 
 def test_legal_pages_render_versioned_no_inventions(client):

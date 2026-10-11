@@ -78,7 +78,7 @@ def test_a_node_card_shows_a_channel_it_did_not_used_to_know(client, variable):
     assert r.status_code == 200
     # The value, and the name that tells a reader what they are looking at.
     assert f"{VALUES[variable]:.1f}" in r.text
-    assert variables.label_for(variable) in r.text
+    assert variables.label_for(variable, "es") in r.text
 
 
 @pytest.mark.parametrize("variable", NEW_CHANNELS)
@@ -114,7 +114,8 @@ def test_the_registry_is_the_single_place_a_channel_is_declared():
         "order, and moving it changes what every node report leads with")
     for info in variables.VARIABLES:
         assert variables.color_for(info.name) == info.color
-        assert variables.label_for(info.name) == info.label
+        assert variables.label_for(info.name, "en") == info.label
+        assert variables.label_for(info.name, "es") == info.label_es
         assert variables.unit_for(info.name) == info.unit
 
 

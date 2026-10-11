@@ -999,10 +999,13 @@ _TEMP_SCALE_LO = 0.0
 _TEMP_SCALE_HI = 40.0
 
 
-def _temp_color(value: float | None) -> str:
+def _temp_color(value: float | None, lo: float = _TEMP_SCALE_LO,
+                hi: float = _TEMP_SCALE_HI) -> str:
     if value is None:
         return "#8aa0b4"
-    t = max(_TEMP_SCALE_LO, min(_TEMP_SCALE_HI, value)) / _TEMP_SCALE_HI
+    if hi <= lo:
+        return "#8aa0b4"
+    t = (max(lo, min(hi, value)) - lo) / (hi - lo)
     r = int(124 + (224 - 124) * t)
     g = int(196 + (82 - 196) * t)
     b = int(255 + (82 - 255) * t)
@@ -1070,6 +1073,18 @@ select,button{font:inherit;background:#223140;color:#e8eef4;border:1px solid #39
 <button type="submit">{apply}</button></form>
 {results}
 <p class="mut">{disclaimer}</p></main></body></html>"""
+
+
+def _node_variables(node_id: str) -> list[str]:
+    """Which channels this node has ever reported, in one query.
+
+    Used wherever a page needs a single channel and would otherwise hardcode temperature. The
+    alternative - one query per node to discover what it carries - turned a page that was one
+    query per node into two, and this is called in a loop.
+    """
+    return [r["variable"] for r in query(
+        "SELECT DISTINCT variable FROM measurements WHERE node_id=?"
+        " ORDER BY variable", (node_id,))]
 
 
 def _fmt_num(value) -> str:
@@ -1143,7 +1158,7 @@ def dashboard(request: Request):
             lead_var = present[0]
             rest = present[1:]
             info = variables.BY_NAME.get(lead_var)
-            lead_html = (f"{html.escape(variables.label_for(lead_var))} "
+            lead_html = (f"{html.escape(variables.label_for(lead_var, code))} "
                          f"{_fmt_num(by_var[lead_var]['value'])} "
                          f"<span class=\"u\">{html.escape(variables.unit_for(lead_var))}</span>")
         else:
@@ -1152,7 +1167,7 @@ def dashboard(request: Request):
             info = None
             lead_html = labels["none"]
         extra_html = "".join(
-            f"<span class=\"chip\"><b>{html.escape(variables.label_for(v))}</b>"
+            f"<span class=\"chip\"><b>{html.escape(variables.label_for(v, code))}</b>"
             f" {_fmt_num(by_var[v]['value'])}"
             f"<i>{html.escape(variables.unit_for(v))}</i></span>"
             for v in rest)
@@ -1832,17 +1847,21 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
     per_node = []
     for r in query("SELECT node_id FROM nodes ORDER BY node_id"):
         nid = r["node_id"]
-        events = detect_heat_events(_heat_rows(nid, "air_temperature", from_ms, to_ms),
+        # Whichever channel this node actually reports. Asking for temperature on a node
+        # carrying only wind returned an empty event list and a NULL last-reading, which
+        # rendered as a node that had never reported rather than one reporting something else.
+        event_var = variables.resolve(_node_variables(nid)) or "air_temperature"
+        events = detect_heat_events(_heat_rows(nid, event_var, from_ms, to_ms),
                                     threshold, min_duration_min)
         summary = heat_summary(events)
         last = query("SELECT MAX(timestamp_utc_ms) AS m FROM measurements"
-                     " WHERE node_id=? AND variable='air_temperature'"
-                     " AND value IS NOT NULL", (nid,))[0]["m"]
+                     " WHERE node_id=? AND variable=?"
+                     " AND value IS NOT NULL", (nid, event_var))[0]["m"]
         # `event_list`, not `events`: `heat_summary` returns a count under the key
         # `events`, and a later `**` silently overwrites the list with an int - which
         # failed at the first `max()` rather than at the assignment.
-        per_node.append({"node_id": nid, "event_list": events, **summary,
-                        "last_utc_ms": last})
+        per_node.append({"node_id": nid, "event_list": events, "variable": event_var,
+                        **summary, "last_utc_ms": last})
 
     with_events = [p for p in per_node if p["events"] > 0]
     rows_html = ""
@@ -1914,12 +1933,24 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
     return HTMLResponse(_with_legal(page, labels, code))
 
 @router.get("/map", response_class=HTMLResponse)
-def map_page(request: Request, hours: int = 24):
+def map_page(request: Request, hours: int = 24, variable: str = ""):
     check_rate(request)
     code, labels = _pick(request)
     # Clamped: this page reloads itself, and an unbounded window means re-scanning the
     # whole measurements table on every refresh.
     hours = max(1, min(int(hours), 24 * 30))
+    # Which channel the map colours. Temperature by default, but a caller can ask for any
+    # channel the network carries, and asking for one nothing reports falls back to what a node
+    # does have rather than drawing an empty map.
+    available = [r["variable"] for r in query(
+        "SELECT DISTINCT variable FROM measurements ORDER BY variable")]
+    channel = variable if variable in available else (
+        variables.resolve(available) or "air_temperature")
+    # The ramp follows the channel's own range. Temperature's 0..40 C is a presentation choice
+    # and it is a bad one for wind or VOC: every ordinary reading would collapse onto one end of
+    # the gradient and the map would say "extreme" about a calm afternoon.
+    chan_lo, chan_hi = variables.scale_for(channel)
+    chan_unit = variables.unit_for(channel)
     sites = query(
         "SELECT site_id, name, lat, lon FROM sites"
         " WHERE lat IS NOT NULL AND lon IS NOT NULL")
@@ -1932,12 +1963,12 @@ def map_page(request: Request, hours: int = 24):
     nodes = query(
         """SELECT n.node_id, n.site_id,
                   (SELECT value FROM measurements m WHERE m.node_id=n.node_id
-                   AND variable='air_temperature' AND value IS NOT NULL
+                   AND variable=? AND value IS NOT NULL
                    ORDER BY sequence DESC LIMIT 1) AS temp,
                   (SELECT timestamp_utc_ms FROM measurements m WHERE m.node_id=n.node_id
-                   AND variable='air_temperature' AND value IS NOT NULL
+                   AND variable=? AND value IS NOT NULL
                    ORDER BY sequence DESC LIMIT 1) AS temp_at
-           FROM nodes n ORDER BY n.node_id""")
+           FROM nodes n ORDER BY n.node_id""", (channel, channel))
     placed = [n for n in nodes
               if any(s["site_id"] == n["site_id"] for s in sites)]
     if not placed:
@@ -1999,14 +2030,14 @@ def map_page(request: Request, hours: int = 24):
                     cells.append(
                         f"<rect x=\"{px - cw / 2:.1f}\" y=\"{py - chh / 2:.1f}\""
                         f" width=\"{cw + 0.5:.1f}\" height=\"{chh + 0.5:.1f}\""
-                        f" fill=\"{_temp_color(num / den)}\" opacity=\"0.5\"/>")
+                        f" fill=\"{_temp_color(num / den, chan_lo, chan_hi)}\" opacity=\"0.5\"/>")
             field_svg = "".join(cells)
             # The legend used to be a linear gradient with its two endpoints pinned to the
             # lowest and highest value present in the data, labelled with those two numbers.
             #
             # That is a lie even though `_temp_color` is on a fixed 0-40 C scale. The field
-            # cells are painted with `_temp_color(value)`; the bar interpolated between
-            # `_temp_color(tmin)` and `_temp_color(tmax)` instead of being that ramp. So when
+            # cells are painted with `_temp_color(value, chan_lo, chan_hi)`; the bar interpolated between
+            # `_temp_color(tmin, chan_lo, chan_hi)` and `_temp_color(tmax, chan_lo, chan_hi)` instead of being that ramp. So when
             # the data spanned 10-20 C, the bar ran from colour(10) to colour(20) through
             # every colour in between - none of which is what colour(15) looks like on the
             # scale the map actually uses. A reader matching a cell to the bar would read the
@@ -2020,20 +2051,24 @@ def map_page(request: Request, hours: int = 24):
             ramp = "".join(
                 f"<rect x=\"{ramp_w * i / steps:.1f}\" y=\"{ramp_y}\""
                 f" width=\"{ramp_w / steps + 0.5:.2f}\" height=\"{ramp_h}\""
-                f" fill=\"{_temp_color(_TEMP_SCALE_HI * i / steps)}\""
-                f"{' opacity=\"0.35\"' if tmin > _TEMP_SCALE_HI or tmax < 0 else ''}/>"
+                f" fill=\"{_temp_color(chan_lo + (chan_hi - chan_lo) * i / steps, chan_lo, chan_hi)}\""
+                f"{' opacity=\"0.35\"' if tmax < chan_lo or tmin > chan_hi else ''}/>"
                 for i in range(steps))
             ticks = ""
-            for tick in range(0, int(_TEMP_SCALE_HI) + 1, 10):
-                tx = ramp_w * tick / _TEMP_SCALE_HI
+            # Five ticks whatever the channel's range. A 0..20000 lx ramp labelled every
+            # 10 units would need two thousand of them, and a 3.0..4.2 V ramp would need
+            # none at that step.
+            for tick in [chan_lo + (chan_hi - chan_lo) * i / 5.0 for i in range(6)]:
+                tx = ramp_w * (tick - chan_lo) / (chan_hi - chan_lo)
+                label = f"{tick:.4g}"
                 ticks += (f"<line x1=\"{tx:.1f}\" y1=\"{ramp_y + ramp_h}\""
                           f" x2=\"{tx:.1f}\" y2=\"{ramp_y + ramp_h + 4}\""
                           f" stroke=\"#8aa0b4\" stroke-width=\"1\"/>"
                           f"<text x=\"{tx:.1f}\" y=\"{ramp_y + ramp_h + 16}\""
                           f" fill=\"#8aa0b4\" font-size=\"10\" text-anchor=\"middle\">"
-                          f"{tick}\u00b0</text>")
+                          f"{html.escape(label)}{html.escape(chan_unit)}</text>")
             outside = ""
-            if tmin > _TEMP_SCALE_HI or tmax < 0:
+            if tmax < chan_lo or tmin > chan_hi:
                 outside = (f"<text x=\"{ramp_w + 6}\" y=\"{ramp_y + 10}\""
                            f" fill=\"#d98b3a\" font-size=\"10\">"
                            f"{html.escape(labels['map_outside_scale'])}</text>")
@@ -2043,7 +2078,8 @@ def map_page(request: Request, hours: int = 24):
                 f" rx=\"4\"/>"
                 + ramp + ticks + outside +
                 f"<text x=\"{pad - 8}\" y=\"{ramp_y - 4}\" fill=\"#8aa0b4\""
-                f" font-size=\"10\">{html.escape(labels['field'])} \u00b7"
+                f" font-size=\"10\">{html.escape(variables.label_for(channel, code))}"
+                f" ({html.escape(chan_unit)}) \u00b7"
                 f" {html.escape(labels['map_colour_fixed'])}</text>")
 
         circles = []
@@ -2069,7 +2105,7 @@ def map_page(request: Request, hours: int = 24):
             # A stale node keeps its colour but loses its fill: hollow reads as "this value
             # is old" without inventing a second colour, which would then need its own
             # legend entry and would imply the hue means something it does not.
-            fill = 'fill="none"' if stale else f'fill="{_temp_color(t)}"'
+            fill = 'fill="none"' if stale else f'fill="{_temp_color(t, chan_lo, chan_hi)}"'
             dash = ('stroke-dasharray="4 3"' if stale else "")
             label_fill = "#8aa0b4" if stale else "#e8eef4"
             circles.append(
@@ -2450,7 +2486,8 @@ def system_page(request: Request):
             f"<td>{flags}</td><td>{visit}</td></tr>"
         )
         cov = node_coverage(
-            nid, "air_temperature", window_from, now_ms, DEFAULT_INTERVAL_MS
+            nid, variables.resolve(_node_variables(nid)) or "air_temperature",
+            window_from, now_ms, DEFAULT_INTERVAL_MS
         )
         pct = "—" if cov["coverage_pct"] is None else f"{cov['coverage_pct']}%"
         gap_ms = cov["longest_gap_ms"]
