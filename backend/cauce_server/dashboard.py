@@ -555,12 +555,28 @@ _POLL_JS = """
  * what the user asked for.
  */
 (function () {
-  /* First, before anything else: disarm the meta refresh. It carries the honest interval as
-     its no-JavaScript fallback, and we are about to become the thing that keeps the figures
-     current. Removing the tag here means the fallback still holds for a browser that never
-     runs this, and does not fire for one that does. */
+  /* Addressed by name, never by position. The three live figures carry data-live="nodes",
+     "records" and "last_sync". The first version of this reached for `stats[0]`, `stats[1]`
+     and `stats[2]` - the first three `.stat .v` on the page - which is only correct on the
+     page they were written for. /system renders five tiles in the same class and the third of
+     those is the database size, so polling that page replaced "Base 0.2 MB" with a timestamp
+     and left it there. A tile that is not the one being updated must never be addressed at
+     all, and that is a naming problem rather than a counting one. */
+  var live = {};
+  ['nodes', 'records', 'last_sync'].forEach(function (k) {
+    live[k] = document.querySelector('[data-live="' + k + '"] .v');
+  });
+
+  /* Disarm the meta refresh only when this page is one we can actually keep current.
+     Removing it unconditionally meant every other page - the map, the heat events, the node
+     report, co-location, compare - stopped reloading and had nothing to replace it: five
+     pages that used to refresh themselves every interval became static, and nothing about
+     them had changed to justify it. A page with nothing to patch keeps its fallback. */
   var fallback = document.getElementById('cauce-fallback-refresh');
-  if (fallback && fallback.parentNode) { fallback.parentNode.removeChild(fallback); }
+  var haveTargets = !!(live.nodes || live.records || live.last_sync);
+  if (haveTargets && fallback && fallback.parentNode) {
+    fallback.parentNode.removeChild(fallback);
+  }
 
   function fmtUtc(ms) {
     if (!ms) return '—';
@@ -576,20 +592,21 @@ _POLL_JS = """
   }
 
   function tick() {
+    if (!haveTargets) return;
     fetch('/v1/live', { headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (!d || d.unchanged) return;
-        var stats = document.querySelectorAll('.stat .v');
-        setText(stats[0], String(d.nodes));
-        setText(stats[1], d.records.toLocaleString('en-US'));
-        setText(stats[2], fmtUtc(d.last_sync_utc_ms));
-        /* The flash is the whole point: it marks the figure as one that moved, without
-           animating the number itself. */
-        stats.forEach(function (el) { el.classList.remove('cauce-changed'); void el.offsetWidth; });
-        setTimeout(function () {
-          stats.forEach(function (el) { el.classList.add('cauce-changed'); });
-        }, 20);
+        var moved = [];
+        if (setText(live.nodes, String(d.nodes))) moved.push(live.nodes);
+        if (setText(live.records, d.records.toLocaleString('en-US'))) moved.push(live.records);
+        if (setText(live.last_sync, fmtUtc(d.last_sync_utc_ms))) moved.push(live.last_sync);
+        /* Flash only the figures that actually moved. The earlier version flashed all three
+           every poll regardless, which is the flicker the comparison above exists to avoid. */
+        moved.forEach(function (el) {
+          el.classList.remove('cauce-changed'); void el.offsetWidth;
+          setTimeout(function () { el.classList.add('cauce-changed'); }, 20);
+        });
       })
       .catch(function () { /* offline or restarting: the next tick tries again */ });
   }
@@ -663,6 +680,15 @@ document.querySelectorAll("canvas.spark").forEach(function(cv){
 
 _STAT = ("<div class=\"stat\"><div class=\"u\">{label}</div>"
          "<div class=\"v\">{value}</div></div>")
+
+# The three figures the live poller updates, each carrying the name of the quantity it
+# holds. The poller used to address them positionally - `stats[0]`, `stats[1]`, `stats[2]` -
+# which is only correct on the page they were written for. /system renders five tiles in
+# the same class, and the third of those is the database size, so a poll on /system replaced
+# "Base 0.2 MB" with a timestamp and left it there. An address is part of the contract, not
+# an implementation detail.
+_STAT_LIVE = ("<div class=\"stat\" data-live=\"{key}\"><div class=\"u\">{label}</div>"
+              "<div class=\"v\">{value}</div></div>")
 
 _NODE_CARD = ("""<div class="card"><h3><a href="/nodes/{nid}">{nid}</a></h3>
 <div class="mut">{site} · {last}</div>
@@ -1133,9 +1159,10 @@ def dashboard(request: Request):
     total = sum(r["cnt"] or 0 for r in info)
     last_sync = max((r["seen"] or 0 for r in info), default=0)
     stats = [
-        _STAT.format(label=labels["nodes"], value=len(info)),
-        _STAT.format(label=labels["records"], value=f"{total}"),
-        _STAT.format(label=labels["last_sync"], value=_fmt_utc(last_sync)),
+        _STAT_LIVE.format(key="nodes", label=labels["nodes"], value=len(info)),
+        _STAT_LIVE.format(key="records", label=labels["records"], value=f"{total}"),
+        _STAT_LIVE.format(key="last_sync", label=labels["last_sync"],
+                         value=_fmt_utc(last_sync)),
     ]
     cards = []
     for r in info:
