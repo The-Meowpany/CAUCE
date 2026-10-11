@@ -63,6 +63,27 @@ docker buildx imagetools inspect python:3.12-slim --format '{{.Manifest.Digest}}
 The digest is recorded in both the Dockerfile and the release gate, so the two cannot drift
 apart without failing a release.
 
+## Generating the credentials
+
+The three credentials can be written for you, with the value of each one checked before you
+start the central:
+
+```powershell
+python backend/tools/init_env.py                      # writes deployment/.env
+python backend/tools/init_env.py --check deployment/.env
+docker compose -f deployment/docker-compose.yml --env-file deployment/.env up -d --build
+```
+
+It refuses to overwrite an existing file without `--force`, because regenerating changes the
+admin token, the node secret and the CA seed at once, and every node already provisioned would
+be locked out.
+
+The check is worth running on a file you wrote by hand. Each failure is quiet in a different
+way: an empty admin token makes every write answer `503 admin_api_not_configured` and looks
+like a fault, a value pasted with its quotes produces a 401 that reads like a client bug, and
+setting `CAUCE_CA_KEY` equal to `CAUCE_API_TOKEN` means one compromise mints a certificate for
+any node. None of them announce themselves.
+
 ## 1. Verify the environment from zero
 
 ```powershell

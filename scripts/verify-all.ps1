@@ -105,6 +105,25 @@ if (-not $ruff) {
     Pop-Location
 }
 
+# The deployment secrets generator, run so its self-check is part of every verification.
+# A tool that is never executed is a tool nobody knows is broken.
+Write-Host "== 3b/4 ENV INIT ==" -ForegroundColor Cyan
+$envProbe = Join-Path ([System.IO.Path]::GetTempPath()) ("cauce-env-" + [guid]::NewGuid().ToString("N") + ".env")
+& python (Join-Path $root "backend/tools/init_env.py") --out $envProbe | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  init_env.py could not write an environment file" -ForegroundColor Red
+    $fail = $true
+} else {
+    & python (Join-Path $root "backend/tools/init_env.py") --check $envProbe | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  init_env.py wrote a file its own check rejects" -ForegroundColor Red
+        $fail = $true
+    } else {
+        Write-Host "  a generated environment file passes its own check"
+    }
+}
+Remove-Item $envProbe -Force -ErrorAction SilentlyContinue
+
 Push-Location (Join-Path $root "backend")
 $beOut = python -m pytest tests -q 2>&1
 $beOut | ForEach-Object { Write-Host $_ }
