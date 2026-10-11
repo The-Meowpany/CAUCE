@@ -118,9 +118,15 @@ de dominio quedan como códigos neutrales.
 curl http://192.168.4.1/api/v1/status
 curl "http://192.168.4.1/api/v1/export?format=json" > node.json
 curl -X POST http://192.168.4.1/api/v1/config \
-     -H "Authorization: Bearer $CAUCE_TOKEN" \
+     -H "Authorization: Bearer $NODE_ADMIN_TOKEN" \
      --data-binary @new-config.conf
 ```
+
+`NODE_ADMIN_TOKEN` es el token de admin **del propio nodo** — el que su
+SHA-256 queda guardado en `adminTokenSha256`. No es el `CAUCE_API_TOKEN` de
+la central, que es otro secreto guardando otro servicio, y el nodo no lo lee
+de una variable de entorno: se provisiona en la configuración del
+dispositivo. Defínelo en tu shell antes de correr el comando.
 
 Ejemplo 422:
 

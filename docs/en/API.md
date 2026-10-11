@@ -116,9 +116,15 @@ codes.
 curl http://192.168.4.1/api/v1/status
 curl "http://192.168.4.1/api/v1/export?format=json" > node.json
 curl -X POST http://192.168.4.1/api/v1/config \
-     -H "Authorization: Bearer $CAUCE_TOKEN" \
+     -H "Authorization: Bearer $NODE_ADMIN_TOKEN" \
      --data-binary @new-config.conf
 ```
+
+`NODE_ADMIN_TOKEN` is the node's **own** admin token - the one whose SHA-256 the
+node stores in `adminTokenSha256`. It is not the central's `CAUCE_API_TOKEN`,
+which is a different secret guarding a different service, and it is not read
+from an environment variable on the node at all: it is provisioned into the
+device config. Set it in your shell before running the command.
 
 422 example:
 

@@ -19,12 +19,15 @@ pasar, pero el papel aguanta todo.
 | [BACKEND.md](BACKEND.md) | Central: endpoints, garantías de ingesta, límites | Estable |
 | [SECURITY.md](SECURITY.md) | Lo que hacemos, lo que abiertamente no | Estable |
 | [CALIBRATION.md](CALIBRATION.md) | Modelo offset/scale, límites honestos, plan de co-localización | Modelo definido, runtime pendiente |
+| [CALIBRATION_PROCEDURE.md](CALIBRATION_PROCEDURE.md) | El procedimiento de campo: co-localización, umbrales de aceptación, cuándo recalibrar | Completo |
+| [RELEASE_ENGINEERING.md](RELEASE_ENGINEERING.md) | Qué prueba la puerta, qué no prueba, y la política de versionado | Completo |
+| [..\..\backend\tools\pki.py](../../backend/tools/pki.py) | Emisión X.509 para el TLS propio del central. No para identidad de nodo | Completo, testeado |
 | [OTA.md](OTA.md) | FSM de decisión, reglas anti-brick, contrato de manifiesto | Decisión entregada, flasheo pendiente |
 | [DASHBOARD.md](DASHBOARD.md) | SPA local + captive portal, y por qué sin dependencias | Estable |
 | [BENCH_PLAN.md](BENCH_PLAN.md) | Validación física B1–B5 con criterios de salida | Plan, no ejecutado |
+| [RUNBOOK.md](RUNBOOK.md) | Síntomas en campo, qué comprobar, qué hacer | Borrador |
 | [ROADMAP.md](ROADMAP.md) | Secuenciación M0–M5, principios, no-objetivos | Estable |
 | [RELEASE_READINESS.md](RELEASE_READINESS.md) | Fases 0-6 hasta una baseline congelada, y la lista de la puerta | Borrador |
-| [RUNBOOK.md](RUNBOOK.md) | Síntomas en campo, qué comprobar, qué hacer | Borrador |
 | [PILOT_SPEC.md](PILOT_SPEC.md) | Piloto congelado: nodos, presupuesto, gate de aceptación | Congelado |
 | [I18N.md](I18N.md) | Código en inglés; superficies y docs localizados | Estable |
 
