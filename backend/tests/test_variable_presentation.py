@@ -1,4 +1,4 @@
-"""A sensor that reports a channel must be visible, not merely stored.
+"""A sensor that reports a variable must be visible, not merely stored.
 
 Storage has been generic for a long time: a measurement is a `(node, variable, value, unit)`
 row, so a node could report wind speed, the central would accept it, the value would be in the
@@ -6,11 +6,11 @@ database, and the dashboard would show nothing. Twenty-three references to `air_
 in `dashboard.py` is what that costs - the same outcome as never building the feature, except
 it looks like it works.
 
-These tests are about the second half. Each one posts a channel the card, the map legend or the
+These tests are about the second half. Each one posts a variable the card, the map legend or the
 node report did not know about before, and asserts it reaches the page. That is the property
 that was missing, so it is the one that has to hold.
 
-`variables.py` is the registry that makes it hold: one declaration per channel, and the legend,
+`variables.py` is the registry that makes it hold: one declaration per variable, and the legend,
 the default selection, the colour and the display name all read from it rather than from four
 places that have to be found by hand.
 """
@@ -93,7 +93,7 @@ def test_a_node_with_no_temperature_still_leads_with_something_real(client):
     """The card used to render "— °C · — %RH" as its whole reading for such a node.
 
     That is the failure this file exists for: a node with a working sensor and nothing to show
-    for it. It must lead with a channel it actually has.
+    for it. It must lead with a variable it actually has.
     """
     rec = make_record(1, BASE_TS, 4.7)
     rec["variable"] = "wind_speed"
@@ -120,7 +120,7 @@ def test_the_registry_is_the_single_place_a_channel_is_declared():
 
 
 def test_every_channel_the_firmware_can_emit_is_in_the_registry():
-    """A channel the firmware reports but the registry omits renders with no legend entry."""
+    """A variable the firmware reports but the registry omits renders with no legend entry."""
     import re
     from pathlib import Path
 

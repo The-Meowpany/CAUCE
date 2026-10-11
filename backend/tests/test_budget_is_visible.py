@@ -1,17 +1,17 @@
 """A budget nobody can see is not a budget.
 
 The uncertainty budgets were correct, complete and invisible. `budget_for` returned a real
-budget for every published channel, and the only thing in the codebase that read it was
+budget for every published variable, and the only thing in the codebase that read it was
 `calibration.py` - so a wind reading on a node report carried no indication that an uncalibrated
 cup anemometer is a relative instrument.
 
-That is the same failure as a channel that stores correctly and renders nowhere, one level up,
-and this project has now hit it twice: first the `illuminance` channel with no driver, then the
+That is the same failure as a variable that stores correctly and renders nowhere, one level up,
+and this project has now hit it twice: first the `illuminance` variable with no driver, then the
 node card hardcoded to temperature. The third instance is the subtlest of the three, because
 the code was right - the budget existed, was tested, and still reached no reader.
 
 So the property asserted here is reachability, not correctness: every published channel's
-budget must appear on the page that shows that channel's readings. A budget that exists and is
+budget must appear on the page that shows that variable's readings. A budget that exists and is
 rendered nowhere is indistinguishable, to the person reading the number, from having no budget.
 """
 
@@ -70,9 +70,9 @@ def test_the_node_report_shows_the_uncertainty_of_the_channel_it_reports(client,
     assert r.status_code == 200
 
     budget = budget_for(variable)
-    assert budget is not None, "precondition: this channel is supposed to have a budget"
+    assert budget is not None, "precondition: this variable is supposed to have a budget"
 
-    # The rendered figure has to be the budget's own arithmetic on this channel's own mean,
+    # The rendered figure has to be the budget's own arithmetic on this variable's own mean,
     # not a placeholder. Recomputing it here means the test fails if the page ever shows a
     # number that came from anywhere else.
     expected = budget.combined_for_reading(value)
@@ -104,7 +104,7 @@ def test_every_published_channel_would_survive_this_test(client):
     """The general property, checked against the registry rather than a hand-written list.
 
     A hand-written list is exactly how the four channels above could all have been added while
-    something outside it stayed broken. This iterates the registry, so a channel added later
+    something outside it stayed broken. This iterates the registry, so a variable added later
     cannot skip the check by not being mentioned here.
     """
     for info in variables.VARIABLES:

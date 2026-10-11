@@ -1,4 +1,4 @@
-"""Every channel the network publishes has to say how much it trusts itself.
+"""Every variable the network publishes has to say how much it trusts itself.
 
 Adding wind, light and VOC without adding their budgets would have left `budget_for` returning
 None for all three - which is honest in the narrow sense that nothing false is claimed, and
@@ -123,10 +123,10 @@ def test_illuminance_carries_the_housing_term_not_only_the_datasheet_one():
 
 @pytest.mark.parametrize("variable", variables.BY_NAME)
 def test_no_published_channel_lacks_a_budget(variable):
-    """The general property, so the next channel added cannot skip this step.
+    """The general property, so the next variable added cannot skip this step.
 
     Battery voltage is a property of the hardware rather than a measurement of the air, but
-    it is published on a node report like any other channel, so it is not exempt. The failure
+    it is published on a node report like any other variable, so it is not exempt. The failure
     this prevents is exactly the one the last three channels would have hit.
     """
     budget = budget_for(variable)

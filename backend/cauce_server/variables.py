@@ -1,7 +1,7 @@
 """What a measurement variable means, in one place.
 
 The storage layer is generic - a measurement is a `(node, variable, value, unit)` row and any
-channel can be written to it without a schema change. Presentation was not: the map coloured
+variable can be written to it without a schema change. Presentation was not: the map coloured
 only `air_temperature`, the legend was fixed, and the node report preferred two hardcoded names.
 Twenty-three references to `air_temperature` in `dashboard.py` meant a sensor could report
 something real, be stored correctly, and be invisible - which is the same failure as a feature
@@ -9,11 +9,11 @@ that was never built, except it looks like it works.
 
 So the presentation vocabulary lives here instead, and it is derived rather than duplicated.
 `VARIABLES` is the single declaration of what exists; the legend, the default selection, the
-colour and the display name all read from it. Adding a channel is now one entry rather than
+colour and the display name all read from it. Adding a variable is now one entry rather than
 four scattered edits that have to be found by hand.
 
 The colour choices are not decoration. Temperature keeps the teal it has always had so existing
-screenshots and the heat map do not change meaning under anyone; the new channels get colours
+screenshots and the heat map do not change meaning under anyone; the new variables get colours
 chosen to stay apart from it in the common low-light case a node actually sits in.
 """
 
@@ -34,7 +34,7 @@ class VariableInfo:
     label_es: str = ""
     #: Variables that describe the atmosphere itself rather than the hardware or its placement.
     environmental: bool = True
-    #: The range the map's colour ramp covers for this channel. A ramp has to be pinned to
+    #: The range the map's colour ramp covers for this variable. A ramp has to be pinned to
     #: something: temperature's 0..40 C is a choice, and reusing it for wind or VOC would make
     #: every reading of those collapse onto one end of the gradient and read as "extreme" when
     #: it is ordinary. These are the full-scale-ish ranges the parts actually work in, so the
@@ -68,11 +68,11 @@ VARIABLES: tuple[VariableInfo, ...] = (
 
 BY_NAME: dict[str, VariableInfo] = {v.name: v for v in VARIABLES}
 
-#: Shown when a node reports nothing, so the reader knows the channel exists and is empty
+#: Shown when a node reports nothing, so the reader knows the variable exists and is empty
 #: rather than not existing at all.
 PREFERRED_FIRST: tuple[str, ...] = ("air_temperature", "relative_humidity")
 
-#: Fallback colour for a channel a node reports that predates this table. A variable the
+#: Fallback colour for a variable a node reports that predates this table. A variable the
 #: database knows and this file does not still has to render.
 FALLBACK_COLOR = "#b0b0b0"
 
@@ -92,7 +92,7 @@ def label_for(variable: str, lang: str = "es") -> str:
 
 
 def scale_for(variable: str) -> tuple[float, float]:
-    """The colour ramp's range for a channel, falling back to temperature's."""
+    """The colour ramp's range for a variable, falling back to temperature's."""
     info = BY_NAME.get(variable)
     return (info.scale_lo, info.scale_hi) if info else (0.0, 40.0)
 
@@ -108,7 +108,7 @@ def is_environmental(variable: str) -> bool:
 
 
 def default_selection(available: list[str]) -> list[str]:
-    """Which channels a node report shows when the caller does not ask for specific ones.
+    """Which variables a node report shows when the caller names none.
 
     Falls back to everything the node actually reports rather than to a fixed list: a node
     carrying wind and nothing else should still show wind, not an empty report.
@@ -118,14 +118,14 @@ def default_selection(available: list[str]) -> list[str]:
 
 
 def resolve(available: list[str] | None) -> str | None:
-    """The one channel to use when a caller names a single variable.
+    """The one variable to use when a caller needs a single series.
 
     Several pages - the node events page, the heat summary, the alert rule evaluation - take a
     variable parameter whose default is `air_temperature`. A default is the right shape for an
     API, but a *hardcoded* default leaks into the query when the node has no temperature, and
     the result is an empty page on a node that is reporting perfectly well. This is the
     fallback those call sites share: temperature when the node has it, otherwise the first
-    environmental channel it does have, otherwise the first of anything.
+    environmental variable it does have, otherwise the first of anything.
 
     Returns None for no data at all, so the caller can tell "nothing to show" from "show
     temperature" - a distinction a bare default cannot express.
@@ -142,13 +142,13 @@ def resolve(available: list[str] | None) -> str | None:
 
 
 def legend(available: list[str]) -> list[dict[str, str]]:
-    """The legend entries for the channels a node actually reports."""
+    """The legend entries for the variables a node actually reports."""
     entries = []
     for info in VARIABLES:
         if info.name in available:
             entries.append({"variable": info.name, "label": info.label,
                             "unit": info.unit, "color": info.color})
-    # Channels this table has never heard of still have to appear, or a node reporting one
+    # Variables this table has never heard of still have to appear, or a node reporting one
     # renders a series with no legend entry explaining it.
     for name in available:
         if name not in BY_NAME:
