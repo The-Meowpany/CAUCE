@@ -858,6 +858,19 @@ void loop() {
   g_networkManager->tick();
   g_health.netState = g_networkManager->state();
   g_health.rssiDbm = g_netController->rssiDbm();
+  // The sync manager is configured in setup() and can be triggered by a command from
+  // `requestSyncNow()`, but nothing ever drove it: `loop()` talked to it and never asked it
+  // to do its work. The whole LoRa/Wi-Fi sync path - batching, signing, transport, acks -
+  // was built, tested and never ran, which is the "tests and no caller" shape recorded in
+  // STATUS row 12s.
+  //
+  // It is ticked after the network so `onNetworkConnected()` has already fired this pass,
+  // and after the scheduler so a measurement taken now is a candidate for this tick rather
+  // than the next one. `tick()` is itself interval-aware: calling it every loop is cheap and
+  // it only does work when the interval has elapsed or a sync was requested.
+  if (g_syncManager != nullptr) {
+    g_syncManager->tick();
+  }
   g_scheduler->tick();
   const auto& counters = g_scheduler->counters();
   g_health.uptimeMs = g_clock.monotonicMs();
