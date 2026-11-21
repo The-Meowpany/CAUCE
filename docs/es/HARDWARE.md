@@ -31,6 +31,7 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 | soil_water_potential | bloque de yeso + divisor | ADC GPIO33 | `soil_potential_enabled` | `AnalogSensorDriver` |
 | battery_voltage | divisor resistivo | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (reloj) | RTC DS3231 | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
+| (archivo) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
 | tvoc | CCS811 (opcional, fuera del BOM del piloto) | I2C 0x5A | `voc_enabled` | `Ccs811Driver` |
 
 Notas que cambian cómo se pueden leer los números:
@@ -61,6 +62,7 @@ Notas que cambian cómo se pueden leer los números:
 | 5, 18, 19, 23 | SX1276 NSS, SCK, MISO, MOSI (VSPI) |
 | 13 | 1-Wire (DS18B20) |
 | 14 | SX1276 RESET |
+| 15 | chip select de la microSD |
 | 16, 17 | UART2 RX/TX (MH-Z19C) |
 | 21, 22 | I2C SDA/SCL, 100 kHz |
 | 25 | IRQ del AS3935 |
@@ -70,7 +72,9 @@ Notas que cambian cómo se pueden leer los números:
 
 Las entradas analógicas usan **solo ADC1**. ADC2 se comparte con la radio Wi-Fi y devuelve
 errores mientras el Wi-Fi está activo; por eso `Esp32AnalogInput` rechaza cualquier pin fuera
-de 32..39. Los GPIO 0, 2, 12 y 15 son pines de arranque y quedan libres.
+de 32..39. Los GPIO 0, 2 y 12 son pines de arranque y quedan libres. El GPIO15 también lo es, pero solo
+elige la salida del log de arranque y se lee en alto, que es también el reposo del chip select de
+la SD.
 
 ## Módulo LoRa SX1276 - pines que usa el firmware
 
@@ -135,12 +139,20 @@ completa); esta tabla lista los componentes y el motivo de cada elección.
 | Suelo | sonda capacitiva, bloque de yeso, DS18B20 | humedad, succión y temperatura |
 | Mojado foliar | sensor de rejilla | |
 | Rayos | módulo AS3935 | |
-| Reloj / archivo | DS3231, microSD 16 GB high-endurance | hora confiable sin red; archivo (driver pendiente) |
+| Reloj / archivo | DS3231, microSD 16 GB high-endurance | hora confiable sin red; historial CSV junto a LittleFS |
 | Energía | panel 20 W, batería 12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS | |
 | Mecánica | caja IP65, escudo de radiación impreso en PETG, mástil | mismo escudo y altura en todos los nodos |
 
-**Aún no implementado:** el archivo en microSD. LittleFS sigue siendo el único almacenamiento;
-la SD está en el BOM para que el hardware no tenga que cambiar cuando llegue el driver.
+## Almacenamiento
+
+LittleFS en la flash interna es el almacenamiento operativo (unos 7.700 registros en 512 KiB) y la
+fuente de toda sincronización. Con `sd_archive_enabled=1` la tarjeta es el historial:
+`ArchiveManager` copia los registros de este nodo a `/archive/AAAA-MM-DD.csv` (días UTC; los
+registros sin reloj confiable van a `/archive/untimed.csv`) y guarda su avance en
+`/archive/watermark` dentro de la tarjeta. Una tarjeta ausente o fallando nunca frena la medición:
+`/api/v1/health` muestra `archive_state: degraded`, el archivo reintenta con backoff y se pone al
+día desde LittleFS cuando la tarjeta vuelve a funcionar. Los registros que la retención de LittleFS
+borró antes de archivarse se cuentan en `archive_gap_records`. Las tarjetas van en FAT32.
 
 ## Cableado de referencia (ESP32 DevKit → BME280)
 

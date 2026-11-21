@@ -30,6 +30,7 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 | soil_water_potential | gypsum block + divider | ADC GPIO33 | `soil_potential_enabled` | `AnalogSensorDriver` |
 | battery_voltage | resistor divider | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (clock) | DS3231 RTC | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
+| (archive) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
 | tvoc | CCS811 (optional, not in the pilot BOM) | I2C 0x5A | `voc_enabled` | `Ccs811Driver` |
 
 Notes that change how the numbers may be read:
@@ -58,6 +59,7 @@ Notes that change how the numbers may be read:
 | 5, 18, 19, 23 | SX1276 NSS, SCK, MISO, MOSI (VSPI) |
 | 13 | 1-Wire (DS18B20) |
 | 14 | SX1276 RESET |
+| 15 | microSD chip select |
 | 16, 17 | UART2 RX/TX (MH-Z19C) |
 | 21, 22 | I2C SDA/SCL, 100 kHz |
 | 25 | AS3935 IRQ |
@@ -67,7 +69,8 @@ Notes that change how the numbers may be read:
 
 Analogue inputs use **ADC1 only**. ADC2 is shared with the Wi-Fi radio and returns errors
 whenever Wi-Fi is up; `Esp32AnalogInput` refuses any pin outside 32..39 for that reason.
-GPIO 0, 2, 12 and 15 are strapping pins and are left free.
+GPIO 0, 2 and 12 are strapping pins and are left free. GPIO15 is one too, but it only selects
+boot-log output and is sampled high, which is also the idle level of the SD chip select.
 
 ## SX1276 LoRa module - the pins the firmware uses
 
@@ -131,12 +134,20 @@ this table lists the parts and the reason for each choice.
 | Soil | capacitive probe, gypsum block, DS18B20 | moisture, suction and temperature |
 | Leaf wetness | grid sensor | |
 | Lightning | AS3935 module | |
-| Clock / archive | DS3231, microSD 16 GB high-endurance | trustworthy time offline; archive (driver pending) |
+| Clock / archive | DS3231, microSD 16 GB high-endurance | trustworthy time offline; CSV history beside LittleFS |
 | Power | 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse, TVS | |
 | Mechanics | IP65 box, printed PETG radiation shield, mast | same shield and height on every node |
 
-**Not implemented yet:** the microSD archive. LittleFS remains the only store; the SD is in
-the BOM so the hardware does not have to change when the driver arrives.
+## Storage
+
+LittleFS on the internal flash is the operational store (about 7,700 records in 512 KiB) and the
+source of every sync. With `sd_archive_enabled=1` the card is the history: `ArchiveManager` copies
+this node's records to `/archive/YYYY-MM-DD.csv` (UTC days; records without a trusted clock go to
+`/archive/untimed.csv`) and keeps its progress in `/archive/watermark` on the card. A missing or
+failing card never stops measurement: `/api/v1/health` shows `archive_state: degraded`, the archive
+retries with backoff, and catches up from LittleFS when the card works again. Records that
+LittleFS retention removed before they were archived are counted in `archive_gap_records`. Cards
+are FAT32.
 
 ## Reference wiring (ESP32 DevKit → BME280)
 

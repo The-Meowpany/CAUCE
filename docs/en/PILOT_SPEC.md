@@ -85,8 +85,7 @@ and distance) · cup anemometer + resistor-ladder vane + tipping-bucket
 rain gauge (one kit validated before buying seven) · capacitive soil
 moisture probe, gypsum block (soil water potential) and DS18B20 (soil
 temperature) · leaf wetness grid · DS3231 (±2 ppm; NTP > DS3231 >
-internal hierarchy) · microSD 16 GB high-endurance (archive; driver
-pending) · 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse,
+internal hierarchy) · microSD 16 GB high-endurance (CSV archive) · 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse,
 TVS · IP65 box with cable glands · 915 MHz antenna + pigtail · printed
 PETG radiation screen + mast (2 m installation protocol, WMO practice).
 

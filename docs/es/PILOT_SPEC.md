@@ -87,7 +87,7 @@ veleta de resistencias + pluviómetro de balancín (un kit validado antes
 de comprar siete) · sonda capacitiva de humedad de suelo, bloque de yeso
 (potencial hídrico) y DS18B20 (temperatura de suelo) · sensor de mojado
 foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD
-16 GB high-endurance (archivo; driver pendiente) · panel 20 W, batería
+16 GB high-endurance (archivo CSV) · panel 20 W, batería
 12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS · caja IP65 con
 prensaestopas · antena 915 MHz + pigtail · pantalla de radiación impresa
 en PETG + mástil (protocolo de instalación a 2 m, práctica OMM).
