@@ -216,6 +216,13 @@ bool Sx1276Radio::send(const uint8_t* data, size_t length) {
   return true;
 }
 
+bool Sx1276Radio::startReceive() {
+  if (!ready_) return false;
+  writeRegister(kRegIrqFlags, static_cast<uint8_t>(kIrqRxDone | kIrqPayloadCrcError));
+  setMode(kModeReceiveContinuous);
+  return true;
+}
+
 int Sx1276Radio::receive(uint8_t* buffer, size_t capacity) {
   if (!ready_ || !buffer) return -1;
   lastCrcError_ = false;

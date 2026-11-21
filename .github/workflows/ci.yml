@@ -49,6 +49,9 @@ jobs:
       - name: Build ESP32
         run: pio run -e esp32dev
         working-directory: firmware
+      - name: Build LoRa gateway bridge
+        run: pio run -e gateway
+        working-directory: firmware
 
   lint:
     runs-on: ubuntu-latest

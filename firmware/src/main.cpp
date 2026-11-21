@@ -35,6 +35,7 @@
 #include <time.h>
 
 #include "cauce/hal/Esp32Peripherals.h"
+#include "cauce/hal/LoRaRegion.h"
 
 #include "cauce/app/ApiRouter.h"
 #include "cauce/app/CommandExecutor.h"
@@ -344,38 +345,6 @@ void reportBootSerialLine(void* context, const char* line) {
 // one, and reading it early is how the two get confused.
 static uint32_t currentResetReason() {
   return static_cast<uint32_t>(esp_reset_reason());
-}
-
-// The band a region implies, and the modulation this project uses everywhere else.
-//
-// A region name mapped to a frequency here rather than a number in the config file, because a
-// *frequency* in a text config is one typo away from putting a node on a band it must not use,
-// and there is no safe default for that: 868 MHz and 915 MHz differ enough that a wrong value
-// is silent - the radio transmits, and nobody nearby hears it.
-//
-// Returns false for a region this build does not know, and the caller reports it rather than
-// falling back. Falling back to 868 MHz for an unrecognised region would put an AU node on the
-// European band, which is the exact failure this refuses.
-bool kLoRaDefaultsFor(const char* region, cauce::hal::Sx1276Config& out) {
-  out = cauce::hal::Sx1276Config{};
-  if (region == nullptr || region[0] == '\0') return false;
-  if (std::strcmp(region, "EU868") == 0 || std::strcmp(region, "EU433") == 0) {
-    out.frequencyHz = 868100000u;  // EU868 only; EU433 is 434 and is not supported here
-    return std::strcmp(region, "EU868") == 0;
-  }
-  if (std::strcmp(region, "US915") == 0) {
-    out.frequencyHz = 915000000u;
-    return true;
-  }
-  if (std::strcmp(region, "AU915") == 0) {
-    out.frequencyHz = 915200000u;
-    return true;
-  }
-  if (std::strcmp(region, "AS923") == 0) {
-    out.frequencyHz = 923200000u;
-    return true;
-  }
-  return false;
 }
 
 void setup() {
@@ -775,7 +744,7 @@ void setup() {
                                                  cauce::hal::Sx1276Radio::kPinNotWired,
                                                  cauce::hal::Sx1276Radio::kPinNotWired);
       cauce::hal::Sx1276Config loraConfig{};
-      const bool regionKnown = kLoRaDefaultsFor(config.loraRegion, loraConfig);
+      const bool regionKnown = cauce::hal::loraDefaultsFor(config.loraRegion, loraConfig);
       const bool radioUp = regionKnown && spiUp && g_loraRadio->begin(loraConfig);
       if (!regionKnown) {
         // Said by name, because "the radio did not come up" and "the region is not one this

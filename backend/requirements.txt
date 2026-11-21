@@ -5,3 +5,5 @@ pytest>=8.0
 # Ed25519 frame signatures (RFC 8032). The central verifies, so the
 # implementation is a maintained library rather than curve arithmetic of our own.
 cryptography>=42.0
+# USB serial link to the LoRa gateway bridge (cauce_server.gateway_runner only).
+pyserial>=3.5

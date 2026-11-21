@@ -585,7 +585,17 @@ void test_chip_select_stays_balanced_across_a_full_cycle() {
   TEST_ASSERT_EQUAL_INT(0, rig.spi.selectBalance);
 }
 
+void test_start_receive_puts_a_configured_radio_into_continuous_receive() {
+  Rig rig;
+  TEST_ASSERT_FALSE(rig.radio.startReceive());  // nothing configured yet
+  beginSuccessfully(rig);
+  TEST_ASSERT_TRUE(rig.radio.startReceive());
+  TEST_ASSERT_EQUAL_HEX8(cauce::hal::kModeReceiveContinuous,
+                         rig.spi.registers[cauce::hal::kRegOpMode] & cauce::hal::kModeFieldMask);
+}
+
 void registerSx1276Tests() {
+  RUN_TEST(test_start_receive_puts_a_configured_radio_into_continuous_receive);
   RUN_TEST(test_begin_refuses_an_impossible_spreading_factor);
   RUN_TEST(test_begin_refuses_sf6_and_sf7);
   RUN_TEST(test_begin_refuses_an_unknown_bandwidth_code);

@@ -43,8 +43,9 @@
 # pip resolves for platforms whose wheel is not self-contained. Deriving the closure by
 # walking importlib.metadata misses them, which is why this file was generated with pip.
 #
-# The six direct dependencies, the ones requirements.txt names directly rather than as
-# something's dependency, are: cryptography, fastapi, httpx, pydantic, pytest, uvicorn.
+# The seven direct dependencies, the ones requirements.txt names directly rather than as
+# something's dependency, are: cryptography, fastapi, httpx, pydantic, pyserial, pytest,
+# uvicorn. pyserial is a single pure-Python wheel, the same file on every platform.
 #
 # Do not annotate those lines with a trailing comment. A comment on a requirement line
 # swallows the backslash that continues it, so pip stops reading the hashes below and then
@@ -101,6 +102,8 @@ pydantic-core==2.46.4 \
     --hash=sha256:e9c26f834c65f5752f3f06cb08cb86a913ceb7274d0db6e267808a708b46bc89
 pygments==2.20.0 \
     --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+pyserial==3.5 \
+    --hash=sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0
 pytest==9.0.3 \
     --hash=sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9
 python-dotenv==1.2.2 \

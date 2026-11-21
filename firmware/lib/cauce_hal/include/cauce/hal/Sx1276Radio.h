@@ -191,6 +191,10 @@ class Sx1276Radio final : public ILoRaRadio {
   // when the configuration is not one the radio supports, which is a programming
   // error rather than a hardware fault and must not be retried forever.
   bool begin(const Sx1276Config& config);
+  // Puts a configured radio into continuous receive. begin() leaves it in standby, which is
+  // right for a node (it talks first) and wrong for a gateway, which must be listening before
+  // anything is sent to it. send() already returns to receive on its own.
+  bool startReceive();
 
   bool canSendNow() override;
   bool send(const uint8_t* data, size_t length) override;
