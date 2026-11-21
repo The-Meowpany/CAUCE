@@ -51,9 +51,13 @@ class FakeRadio final : public hal::ILoRaRadio {
     if (inbox.empty()) return 0;
     const std::vector<uint8_t>& frame = inbox.front();
     if (frame.size() > capacity) return -1;
-    std::memcpy(buffer, frame.data(), frame.size());
+    const size_t size = frame.size();
+    std::memcpy(buffer, frame.data(), size);
+    // Read the size before popping: `frame` refers into the deque, and after pop_front() it
+    // is freed memory. glibc happened to leave the old size there, which is why this passed
+    // on Linux and returned 0 - "no frame" - elsewhere.
     inbox.pop_front();
-    return static_cast<int>(frame.size());
+    return static_cast<int>(size);
   }
   int16_t lastRssiDbm() const override { return rssi; }
 
