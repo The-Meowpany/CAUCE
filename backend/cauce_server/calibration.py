@@ -90,7 +90,18 @@ def transform_stats(stats: dict, calibration: dict | None) -> dict:
         if out.get(key) is not None:
             out[key] = round(out[key] * scale + offset, 6)
     if scale < 0:
+        # A negative scale reverses order, so every pair of order statistics swaps, not only
+        # the extremes: the calibrated 5th percentile is what was the 95th.
         out["min"], out["max"] = out["max"], out["min"]
+        if "p05" in out and "p95" in out:
+            out["p05"], out["p95"] = out["p95"], out["p05"]
+        if "p25" in out and "p75" in out:
+            out["p25"], out["p75"] = out["p75"], out["p25"]
+    if out.get("mean_stderr") is not None:
+        out["mean_stderr"] = round(out["mean_stderr"] * abs(scale), 6)
+    if out.get("mean_ci95"):
+        lo, hi = (round(v * scale + offset, 6) for v in out["mean_ci95"])
+        out["mean_ci95"] = [min(lo, hi), max(lo, hi)]
     if out.get("stddev") is not None:
         out["stddev"] = round(out["stddev"] * abs(scale), 6)
     if out.get("stddev_pop") is not None:

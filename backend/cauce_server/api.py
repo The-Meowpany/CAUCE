@@ -1388,7 +1388,7 @@ def _agg_stats(rows, granularity: str = "hourly") -> dict:
     variance = max(0.0, total_sumsq / cnt - mean * mean)
     mins = [r["min_v"] for r in rows if r["min_v"] is not None]
     maxs = [r["max_v"] for r in rows if r["max_v"] is not None]
-    return {
+    stats = {
         "count": cnt,
         "min": round(min(mins), 3) if mins else None,
         "max": round(max(maxs), 3) if maxs else None,
@@ -1396,6 +1396,39 @@ def _agg_stats(rows, granularity: str = "hourly") -> dict:
         "stddev_pop": round(math.sqrt(variance), 3),
         "buckets": len(rows),
         "granularity": granularity,
+    }
+    stats.update(_mean_uncertainty(rows, cnt, mean, variance))
+    return stats
+
+
+def _mean_uncertainty(rows, cnt: int, mean: float, variance_pop: float) -> dict:
+    """Standard error of the aggregated mean, and a 95 % interval around it.
+
+    Two estimates, and the larger one is reported. The textbook s/sqrt(n) treats every sample
+    as independent, which consecutive readings of the same air are not: a minute-by-minute
+    series has far fewer independent values than rows, so that figure is optimistic. The
+    spread of the bucket means, over the square root of the number of buckets, is much less
+    affected because buckets are minutes to days apart. Neither is a metrological uncertainty;
+    the calibration budget covers that separately.
+    """
+    import math
+    import statistics
+
+    if cnt < 2:
+        return {"mean_stderr": None, "mean_ci95": None, "mean_stderr_method": None}
+    sample_sd = math.sqrt(variance_pop * cnt / (cnt - 1))
+    naive = sample_sd / math.sqrt(cnt)
+    bucket_means = [r["sum"] / r["cnt"] for r in rows if r["cnt"]]
+    between = (statistics.stdev(bucket_means) / math.sqrt(len(bucket_means))
+               if len(bucket_means) >= 2 else None)
+    if between is not None and between > naive:
+        stderr, method = between, "between_buckets"
+    else:
+        stderr, method = naive, "independent_samples"
+    return {
+        "mean_stderr": round(stderr, 4),
+        "mean_ci95": [round(mean - 1.96 * stderr, 3), round(mean + 1.96 * stderr, 3)],
+        "mean_stderr_method": method,
     }
 
 
