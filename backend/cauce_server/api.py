@@ -1426,6 +1426,81 @@ def analytics_summary_fast(
     }
 
 
+_SERIES_TABLES = {
+    "15min": ("agg_15min", "bucket_ts", 15 * 60_000),
+    "hourly": ("agg_hourly", "hour_ts", 3_600_000),
+    "daily": ("agg_daily", "day_ts", 86_400_000),
+}
+SERIES_MAX_BUCKETS = 5000
+
+
+@router.get("/analytics/series")
+def analytics_series(
+    node_id: str,
+    variable: str,
+    request: Request,
+    granularity: str = "15min",
+    from_utc_ms: int | None = None,
+    to_utc_ms: int | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """One row per materialized bucket, for charts.
+
+    The summary endpoints collapse a window to one set of statistics; this one keeps the
+    buckets, which is what a chart over the last few hours needs without reading every raw
+    row. Buckets with no valid sample are absent rather than zero, so a gap stays a gap.
+    """
+    _check_rate(request)
+    require_node_read(authorization, node_id)
+    if granularity not in _SERIES_TABLES:
+        raise HTTPException(status_code=422, detail="invalid_granularity")
+    table, column, width = _SERIES_TABLES[granularity]
+    sql = (f"SELECT {column} AS bucket_ts, cnt, sum, min_v, max_v FROM {table}"
+           " WHERE node_id=? AND variable=?")
+    params: list = [node_id, variable]
+    if from_utc_ms is not None:
+        sql += f" AND {column}>=?"
+        params.append((from_utc_ms // width) * width)
+    if to_utc_ms is not None:
+        sql += f" AND {column}<=?"
+        params.append((to_utc_ms // width) * width)
+    sql += f" ORDER BY {column} LIMIT ?"
+    params.append(SERIES_MAX_BUCKETS + 1)
+    rows = query(sql, tuple(params))
+    truncated = len(rows) > SERIES_MAX_BUCKETS
+    rows = rows[:SERIES_MAX_BUCKETS]
+
+    calibration = calibration_for(node_id, variable)
+    buckets = []
+    for r in rows:
+        if not r["cnt"]:
+            continue
+        mean, lo, hi = r["sum"] / r["cnt"], r["min_v"], r["max_v"]
+        if calibration:
+            mean, lo, hi = (apply_value(v, calibration) for v in (mean, lo, hi))
+            # A negative calibration scale swaps which end is the minimum.
+            if lo is not None and hi is not None and lo > hi:
+                lo, hi = hi, lo
+        buckets.append({
+            "bucket_ts": r["bucket_ts"],
+            "count": r["cnt"],
+            "mean": round(mean, 4),
+            "min": lo,
+            "max": hi,
+        })
+    return {
+        "node_id": node_id,
+        "variable": variable,
+        "metric_type": "derived",
+        "granularity": granularity,
+        "bucket_ms": width,
+        "source": f"materialized_{granularity}",
+        "calibration": calibration_summary(calibration),
+        "truncated": truncated,
+        "buckets": buckets,
+    }
+
+
 @router.post("/nodes/{node_id}/time-reconstruct")
 def time_reconstruct(
     node_id: str,
