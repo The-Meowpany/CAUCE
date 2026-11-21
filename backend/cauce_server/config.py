@@ -26,6 +26,10 @@ class Settings:
             os.environ.get("CAUCE_DASHBOARD_REFRESH_S", "60")
         )
         self.vacuum_interval_h = int(os.environ.get("CAUCE_VACUUM_INTERVAL_H", "24"))
+        # With CAUCE_API_TOKEN set the HTML dashboard asks for it too (HTTP Basic, the token as
+        # the password). "1" keeps the pages open anyway, for a wall screen on a network that
+        # is trusted; the /v1 API stays closed either way.
+        self.dashboard_public = os.environ.get("CAUCE_DASHBOARD_PUBLIC", "") == "1"
         # The Ed25519 private key that signs node certificates. Empty means "no CA", and
         # every certificate endpoint then refuses rather than falling back to the admin
         # token - see `certs_endpoint`'s note. A fallback would mean the CA was silently

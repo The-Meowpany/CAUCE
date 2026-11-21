@@ -17,6 +17,7 @@ import pytest
 from cauce_server.config import settings
 from cauce_server.dashboard import _refresh_meta
 from cauce_server.main import app
+from conftest import ADMIN_HEADERS
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def test_the_interval_reaches_the_rendered_page(fast_restore):
     from fastapi.testclient import TestClient
 
     settings.dashboard_refresh_s = 5
-    with TestClient(app) as client:
+    with TestClient(app, headers=ADMIN_HEADERS) as client:
         body = client.get("/").text
     # The tag is the no-JavaScript fallback and carries the honest interval. It is NOT set to
     # zero: `content="0"` with no URL reloads immediately and forever, and `url=self` is not a
@@ -63,7 +64,7 @@ def test_the_fallback_names_no_url_at_all(fast_restore):
     from fastapi.testclient import TestClient
 
     settings.dashboard_refresh_s = 5
-    with TestClient(app) as client:
+    with TestClient(app, headers=ADMIN_HEADERS) as client:
         body = client.get("/?lang=es&from=x").text
     tag = body.split('id="cauce-fallback-refresh"')[1].split(">")[0]
     assert "url" not in tag, f"the refresh names a URL: {tag!r}"
@@ -90,7 +91,7 @@ def test_every_page_carries_the_token_so_no_page_is_frozen(fast_restore):
 
     # And with the interval off, no page may emit a tag at all.
     settings.dashboard_refresh_s = 0
-    with TestClient(app) as client:
+    with TestClient(app, headers=ADMIN_HEADERS) as client:
         for path in ("/", "/map", "/alerts", "/colocation"):
             body = client.get(path).text
             # The string appears in the script, which always tries to remove the tag. What
@@ -103,7 +104,7 @@ def test_every_page_carries_the_token_and_none_is_left_unresolved(fast_restore):
     from fastapi.testclient import TestClient
 
     settings.dashboard_refresh_s = 7
-    with TestClient(app) as client:
+    with TestClient(app, headers=ADMIN_HEADERS) as client:
         for path in ("/", "/nodes/does-not-exist", "/alerts"):
             body = client.get(path).text
             # The token is resolved in `_with_legal`, which every render path funnels
@@ -116,7 +117,7 @@ def test_zero_removes_the_tag_instead_of_asking_for_an_instant_reload(fast_resto
     from fastapi.testclient import TestClient
 
     settings.dashboard_refresh_s = 0
-    with TestClient(app) as client:
+    with TestClient(app, headers=ADMIN_HEADERS) as client:
         body = client.get("/").text
     tags = _refresh_tags(body)
     assert tags == [], f"0 must emit no refresh tag, emitted {tags}"

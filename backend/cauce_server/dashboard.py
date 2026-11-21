@@ -23,7 +23,13 @@ from .calibration import (
 from .config import settings
 from .db import engine, query
 from .ratelimit import check_rate
-from .security import principal_site, require_node_read, require_scope
+from .security import (
+    principal_site,
+    require_dashboard,
+    require_fleet_dashboard,
+    require_node_read,
+    require_scope,
+)
 from .uncertainty import budget_for
 
 router = APIRouter()
@@ -916,14 +922,14 @@ document.getElementById("newrule").addEventListener("submit", function(ev){
   var fd = new FormData(ev.target), body = {};
   ["node_id", "kind", "channel", "target"].forEach(function(k){ body[k] = fd.get(k); });
   ["threshold", "stale_min", "cooldown_min"].forEach(function(k){ var v = parseFloat(fd.get(k)); if (!isNaN(v)) body[k] = v; });
-  fetch("/v1/alerts/rules", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+  fetch("/v1/alerts/rules", {method: "POST", headers: {"Content-Type": "application/json", "X-Requested-With": "cauce"}, body: JSON.stringify(body)})
     .then(function(r){ if (r.ok) location.reload(); });
 });
 function delRule(id){
-  fetch("/v1/alerts/rules/" + id, {method: "DELETE"}).then(function(r){ if (r.ok) location.reload(); });
+  fetch("/v1/alerts/rules/" + id, {method: "DELETE", headers: {"X-Requested-With": "cauce"}}).then(function(r){ if (r.ok) location.reload(); });
 }
 document.getElementById("checkbtn").addEventListener("click", function(){
-  fetch("/v1/alerts/check", {method: "POST"}).then(function(r){ return r.json(); }).then(function(j){
+  fetch("/v1/alerts/check", {method: "POST", headers: {"X-Requested-With": "cauce"}}).then(function(r){ return r.json(); }).then(function(j){
     document.getElementById("checkres").textContent = JSON.stringify(j.fired || []);
   });
 });
@@ -1150,6 +1156,7 @@ def _fmt_utc(ms):
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     check_rate(request)
+    site = principal_site(require_dashboard(request))
     code, labels = _pick(request)
     info = query(
         """SELECT n.node_id, n.site_id, n.last_seen_utc_ms AS seen,
@@ -1157,7 +1164,7 @@ def dashboard(request: Request):
                    WHERE m.node_id=n.node_id) AS cnt,
                   (SELECT MAX(timestamp_utc_ms) FROM measurements m
                    WHERE m.node_id=n.node_id) AS ts
-           FROM nodes n ORDER BY n.node_id""")
+           FROM nodes n WHERE (? IS NULL OR n.site_id=?) ORDER BY n.node_id""", (site, site))
     total = sum(r["cnt"] or 0 for r in info)
     last_sync = max((r["seen"] or 0 for r in info), default=0)
     stats = [
@@ -1269,6 +1276,7 @@ def _fmt_local(ms) -> str:
 def node_page(node_id: str, request: Request, days: int = 1,
               from_s: str | None = None, to_s: str | None = None):
     check_rate(request)
+    require_dashboard(request, node_id)
     code, labels = _pick(request)
     requested_vars = request.query_params.getlist("var")
     nodes = query(
@@ -1462,6 +1470,7 @@ def node_events_page(node_id: str, request: Request,
     # The credential bought nothing: every reading this page shows is already rendered
     # unauthenticated by `/`, `/map`, `/colocation` and `/nodes/{id}`.
     check_rate(request)
+    require_dashboard(request, node_id)
     code, labels = _pick(request)
     nodes = query("SELECT node_id FROM nodes WHERE node_id=?", (node_id,))
     if not nodes:
@@ -1719,6 +1728,7 @@ def export_node_coverage_csv(
 @router.get("/alerts", response_class=HTMLResponse)
 def alerts_page(request: Request):
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     rules = query("SELECT * FROM alert_rules ORDER BY rule_id")
     rulerows = []
@@ -1784,6 +1794,7 @@ _COLOC_COLORS = ["#39c2a7", "#7cc4ff", "#e6b455", "#e26d5a",
 def colocation_page(request: Request, variable: str = "air_temperature",
                     days: int = 7):
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     variables = [r["variable"] for r in query(
         "SELECT DISTINCT variable FROM measurements ORDER BY variable")]
@@ -1886,6 +1897,7 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
     on every refresh, and this page reloads itself.
     """
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     hours = max(1, min(int(hours), 24 * 365))
     threshold = max(-80.0, min(float(threshold), 80.0))
@@ -2000,6 +2012,7 @@ def heat_fleet_page(request: Request, hours: int = 168, threshold: float = 32.0,
 @router.get("/map", response_class=HTMLResponse)
 def map_page(request: Request, hours: int = 24, variable: str = ""):
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     # Clamped: this page reloads itself, and an unbounded window means re-scanning the
     # whole measurements table on every refresh.
@@ -2235,6 +2248,7 @@ def map_page(request: Request, hours: int = 24, variable: str = ""):
 def node_report(node_id: str, request: Request,
                 authorization: Annotated[str | None, Header()] = None):
     check_rate(request)
+    require_dashboard(request, node_id)
     code, labels = _pick(request)
     nodes = query("SELECT node_id, site_id FROM nodes WHERE node_id=?",
                   (node_id,))
@@ -2333,6 +2347,7 @@ def compare_page(request: Request, a: str | None = None,
                  b: str | None = None, c: str | None = None,
                  variable: str = "air_temperature", days: int = 7):
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     nodes = [r["node_id"] for r in query(
         "SELECT node_id FROM nodes ORDER BY node_id")]
@@ -2496,6 +2511,7 @@ _STAT2 = ("<div class=\"stat\"><div class=\"u\">{label}</div>"
 @router.get("/system", response_class=HTMLResponse)
 def system_page(request: Request):
     check_rate(request)
+    require_fleet_dashboard(request)
     code, labels = _pick(request)
     from .coverage import DEFAULT_INTERVAL_MS, node_coverage
     from .db import engine

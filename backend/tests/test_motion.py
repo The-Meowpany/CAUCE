@@ -17,6 +17,7 @@ import re
 
 import pytest
 from cauce_server.dashboard import _MOTION_CSS, _MOTION_JS
+from conftest import ADMIN_HEADERS
 
 
 def client():
@@ -287,7 +288,7 @@ def test_the_fallback_is_disarmed_by_the_script_before_it_fires():
     from cauce_server.main import app
     from fastapi.testclient import TestClient
 
-    with TestClient(app) as c:
+    with TestClient(app, headers=ADMIN_HEADERS) as c:
         body = c.get("/").text
     assert 'id="cauce-fallback-refresh"' in body, "the fallback tag needs an id to be found"
     assert 'cauce-fallback-refresh' in D._POLL_JS, "the script must remove it"

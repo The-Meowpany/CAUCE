@@ -143,6 +143,70 @@ def require_site_access(principal: dict | None, site_id: str | None) -> None:
         )
 
 
+BASIC_REALM = 'Basic realm="CAUCE", charset="UTF-8"'
+
+
+def basic_to_bearer(authorization: str | None, method: str, requested_with: str | None) -> str | None:
+    """An HTTP Basic credential rewritten as the bearer token it carries, or None.
+
+    A browser cannot attach a bearer header from the address bar, but it does answer a Basic
+    challenge and then repeats the credential on every request to the same origin. The token
+    goes in the password field; the user name is ignored.
+
+    Repeated automatically is also what makes Basic a CSRF risk, so on anything but a safe
+    method it is only honoured with `X-Requested-With`, a header a cross-site form cannot set
+    and a cross-site script cannot send without a CORS preflight this server never answers.
+    """
+    if not isinstance(authorization, str) or not authorization.startswith("Basic "):
+        return None
+    if method not in ("GET", "HEAD", "OPTIONS") and not requested_with:
+        return None
+    import base64
+    import binascii
+
+    try:
+        decoded = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    _, sep, password = decoded.partition(":")
+    if not sep or not password:
+        return None
+    return f"Bearer {password}"
+
+
+def require_dashboard(request, node_id: str | None = None) -> dict | None:
+    """The gate for the HTML pages.
+
+    Open while no admin token is configured, like every other read, or when the operator
+    asked for a public dashboard. Otherwise the same principal the API would accept, with a
+    Basic challenge on failure so a browser shows its login prompt instead of a JSON error.
+    A site-scoped principal may open its own nodes; the fleet-wide pages are refused, since
+    each of them shows every site at once.
+    """
+    from .config import settings
+
+    if not settings.api_token or settings.dashboard_public:
+        return None
+    try:
+        principal = require_scope(request.headers.get("authorization"), "read")
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": BASIC_REALM}) from None
+        raise
+    if node_id is not None:
+        require_node_access(principal, node_id)
+    return principal
+
+
+def require_fleet_dashboard(request) -> None:
+    principal = require_dashboard(request)
+    site = principal_site(principal)
+    if site:
+        raise HTTPException(status_code=403,
+                            detail={"error": "site_out_of_scope", "site_id": site})
+
+
 def principal_site(principal: dict | None) -> str | None:
     """The one site a principal is confined to, or None for a fleet-wide caller."""
     return principal.get("site_id") if principal else None

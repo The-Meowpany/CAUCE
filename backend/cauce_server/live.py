@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, Request
 
 from .api import _check_rate
 from .db import query
+from .security import principal_site, require_dashboard
 
 router = APIRouter(prefix="/v1", tags=["live"])
 
@@ -38,6 +39,7 @@ _last_call: dict[str, float] = {}
 def live(request: Request, authorization: str | None = Header(default=None)) -> dict:
     """The figures the index header shows, as JSON."""
     _check_rate(request)
+    site = principal_site(require_dashboard(request))
 
     # Per-client throttle keyed on the remote address. Not security - the data is already
     # public on the page - just so N open tabs do not mean N times the queries.
@@ -52,7 +54,7 @@ def live(request: Request, authorization: str | None = Header(default=None)) -> 
         """SELECT n.node_id,
                   (SELECT COUNT(*) FROM measurements m WHERE m.node_id=n.node_id) AS cnt,
                   (SELECT MAX(timestamp_utc_ms) FROM measurements m WHERE m.node_id=n.node_id) AS ts
-           FROM nodes n ORDER BY n.node_id""")
+           FROM nodes n WHERE (? IS NULL OR n.site_id=?) ORDER BY n.node_id""", (site, site))
     total = sum(r["cnt"] or 0 for r in info)
     last = max((r["ts"] or 0 for r in info), default=0)
 

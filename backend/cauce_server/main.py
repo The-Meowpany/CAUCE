@@ -42,6 +42,21 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def basic_credentials_as_bearer(request: Request, call_next):
+    # Rewritten before routing so every gate sees one credential shape; see
+    # security.basic_to_bearer for why unsafe methods need X-Requested-With.
+    from .security import basic_to_bearer
+
+    bearer = basic_to_bearer(request.headers.get("authorization"), request.method,
+                             request.headers.get("x-requested-with"))
+    if bearer is not None:
+        headers = [(k, v) for k, v in request.scope["headers"] if k != b"authorization"]
+        headers.append((b"authorization", bearer.encode("latin-1")))
+        request.scope["headers"] = headers
+    return await call_next(request)
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     from .db import engine, query
