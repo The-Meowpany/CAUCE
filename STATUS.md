@@ -3,9 +3,11 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (479 firmware + 748 backend tests, E2E green)
+## Implemented and verified (514 firmware + 801 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
+| **Pilot station sensor suite**: seventeen new variables (CO2, PM1/2.5/4/10, UV index with UVA and UVB, relative solar irradiance, wind direction, rainfall, soil moisture, soil water potential, soil temperature, leaf wetness, lightning count and distance) with drivers for SPS30 (I2C, CRC-checked frames, fan warm-up), MH-Z19C (UART, checksum, ABC off, stale-reply discard), VEML6075 (application-note conversion, ID check), AS3935 (IRQ flag + loop service, disturbers masked, no distance without a strike), DS18B20 (1-Wire, non-blocking conversion, CRC and power-on value rejected), tipping-bucket rain (debounced, ISR-safe counter), resistor-ladder vane (nearest heading, open cable refused, mounting offset) and a generic analogue probe (two-point percent or linear) for soil moisture, leaf wetness, irradiance, gypsum block and battery divider; DS3231 RTC seeds the clock at boot and is written back after a completed SNTP sync. New HAL interfaces `IUart`, `IAnalogInput` (ADC1 only), `IOneWire`, and raw I2C transfers. Every sensor has a config key and is off by default. Backend registry, LoRa decoder and uncertainty budgets cover every firmware variable | 35 firmware tests (`test_pilot_sensors.cpp`) and 36 backend tests (`test_pilot_channels.py`), including a cross-language check that reads the firmware enum and fails if the LoRa decoder, the registry or the budgets miss a variable |
+| **Fixes found while adding the suite**: `light_enabled`, `voc_enabled`, `wind_enabled` and the wind geometry keys were neither parsed nor written, so no node could turn those sensors on; the LoRa decoder did not know `wind_speed` or `tvoc`; the stuck-value rule marked every dark night, calm hour and dry day SUSPECT; `battery_voltage` rejected a 12 V pack; config files wrote every threshold including 40-digit "unbounded" ones; the SX1276 reserved two GPIOs (BUSY, DIO1) it never reads; the default region was EU868 for a Uruguayan pilot (now AU915); the ESP32 platform was unpinned and now resolves to the 3.x core, which does not compile this firmware (pinned to espressif32 6.9.0 / arduino-esp32 2.0.17) | Covered by the tests above plus the updated config, presentation and uncertainty suites |
 | **Repository hygiene is declared and enforced**: `.gitattributes` fixes line endings per file type, `.editorconfig` fixes indentation and final newlines for editors, and the tree is normalised to match — 262 files LF, only the three `.ps1` files CRLF, 44 files that had no final newline now have one. Without this, a whole-file change showed as every line changed on whichever machine produced it | Mechanical; `ruff check` enforces the Python half and the release gate's doc-list check proves its own lists match the tree |
 | **Device identity security**: admin-gated provisioning with a per-node HMAC key; batches signed over the raw body; OTA validates the manifest signature before downloading | 5 tests (firmware HMAC RFC4231 x2 + backend matrix valid/bad-signature/no-signature + device-secret signing x2) |
 | **Token administration over HTTP**: `POST/GET /v1/tokens` and `GET/DELETE /v1/tokens/{name}`, shared-admin only, plaintext returned once and never stored, SHA-256 digest with scopes and optional site | 14 backend tests |
@@ -98,8 +100,19 @@ not. It overrides any aspirational claim elsewhere.
   `Esp32OtaControl`. Policy is host-tested; the flash path is not.
 - Field diagnostics bundle (`GET /api/v1/diagnostics`, signed) and its
   central ingest at `POST /v1/nodes/{id}/diagnostics`.
+- Every pilot-suite driver (SPS30, MH-Z19C, VEML6075, AS3935, DS18B20, rain gauge, vane,
+  analogue probes, DS3231) and the ESP32 adapters under them (`Esp32Uart`,
+  `Esp32AnalogInput`, bit-banged `Esp32OneWire`). Host-tested against scripted buses and
+  cross-compiled; none has read a real part. The 1-Wire slot timing in particular is only
+  correct on paper until a scope or a probe confirms it.
 
 ## Not implemented yet
+
+- **microSD archive.** The pilot BOM carries a high-endurance card and the spec describes
+  LittleFS as the operational buffer with SD as the history, but there is no SD driver: LittleFS
+  is still the only store.
+- Gypsum-block AC excitation. The block is read as a DC divider with a per-soil linear fit,
+  which polarises the block over time; an alternating-polarity read needs two GPIOs per block.
 
 - Volumetric 3D viewer: discarded by design decision - the central keeps
   the dependency-free 2D schematic SVG map with IDW field and shared-scale

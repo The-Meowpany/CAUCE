@@ -1,10 +1,78 @@
 # CAUCE Hardware
 
-## SX1276 LoRa hat - the pins the firmware uses
+## Status
 
-`main.cpp` builds the radio when `lora_enabled=1`, with these pins. They are in code rather
-than in the config file on purpose: a *frequency* in a text config is one typo away from putting
-a node on a band it must not use, and there is no safe default for that.
+**No physical hardware bought yet.** Every driver below is covered by host tests against
+scripted buses (I2C, UART, ADC, 1-Wire) and the firmware cross-compiles for the ESP32, but none
+of it has been on a board. Datasheet figures are the manufacturers', not ours.
+
+## Pilot station (8 identical nodes)
+
+Every sensor is optional and **off by default**: a probe is enabled with its config key only
+where it is fitted, and a node missing one keeps measuring everything else. A probe that is
+enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
+
+| Variable(s) | Part | Bus / pin | Config key | Driver |
+|---|---|---|---|---|
+| air_temperature, relative_humidity, pressure | BME280 | I2C 0x76/0x77 | always on | `Bme280Driver` |
+| illuminance | BH1750 | I2C 0x23 | `light_enabled` | `Bh1750Driver` |
+| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
+| co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baud | `co2_enabled` | `Mhz19Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
+| wind_speed | cup anemometer (reed/Hall) | GPIO4, falling edge | `wind_enabled` | `HallAnemometerDriver` |
+| wind_direction | resistor-ladder vane, 10k pull-up | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
+| rainfall | tipping-bucket gauge | GPIO27, falling edge | `rain_enabled` | `RainGaugeDriver` |
+| soil_temperature | DS18B20, 4.7k pull-up | 1-Wire GPIO13 | `soil_temperature_enabled` | `Ds18b20Driver` |
+| soil_moisture | capacitive probe | ADC GPIO35 | `soil_moisture_enabled` | `AnalogSensorDriver` |
+| leaf_wetness | resistive/capacitive grid | ADC GPIO32 | `leaf_wetness_enabled` | `AnalogSensorDriver` |
+| solar_irradiance (relative) | BPW34 + transimpedance stage | ADC GPIO39 | `irradiance_enabled` | `AnalogSensorDriver` |
+| soil_water_potential | gypsum block + divider | ADC GPIO33 | `soil_potential_enabled` | `AnalogSensorDriver` |
+| battery_voltage | resistor divider | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
+| (clock) | DS3231 RTC | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
+| tvoc | CCS811 (optional, not in the pilot BOM) | I2C 0x5A | `voc_enabled` | `Ccs811Driver` |
+
+Notes that change how the numbers may be read:
+
+- **CO2** comes only from the NDIR cell. The CCS811's "eCO2" is an estimate derived from VOC
+  and is never published. Automatic baseline correction on the MH-Z19C is switched off at
+  boot: calibration is the co-location procedure, not a background job.
+- **PM**: the SPS30 needs 30 s of fan time before its first frame; readings before that are
+  reported as initialising, not stored.
+- **UV**: the VEML6075 conversion uses Vishay's open-air coefficients. Behind a window or
+  diffuser they must be refitted.
+- **Lightning**: a strike is an interrupt, counted in the loop (never in the ISR). An interval
+  with no strike reports a count of 0 and *no* distance - zero would mean "overhead".
+- **Irradiance** from a photodiode is relative until its gain is fitted against a pyranometer.
+- **Soil moisture / leaf wetness** are percentages between a dry and a wet reading, not
+  volumetric water content.
+- **Rain** is depth per sampling interval; daily totals are sums on the central.
+- **Validation**: zeros on rain, light, UV, irradiance, wind speed and lightning, and a vane
+  that holds its heading, are not flagged as a stuck sensor - they are the resting state.
+
+## Pin map (ESP32-WROOM-32)
+
+| GPIO | Use |
+|---|---|
+| 4 | anemometer pulses (internal pull-up) |
+| 5, 18, 19, 23 | SX1276 NSS, SCK, MISO, MOSI (VSPI) |
+| 13 | 1-Wire (DS18B20) |
+| 14 | SX1276 RESET |
+| 16, 17 | UART2 RX/TX (MH-Z19C) |
+| 21, 22 | I2C SDA/SCL, 100 kHz |
+| 25 | AS3935 IRQ |
+| 26 | SX1276 DIO0 |
+| 27 | rain gauge pulses (internal pull-up) |
+| 32, 33, 34, 35, 36, 39 | ADC1: leaf wetness, soil potential, vane, soil moisture, battery, irradiance |
+
+Analogue inputs use **ADC1 only**. ADC2 is shared with the Wi-Fi radio and returns errors
+whenever Wi-Fi is up; `Esp32AnalogInput` refuses any pin outside 32..39 for that reason.
+GPIO 0, 2, 12 and 15 are strapping pins and are left free.
+
+## SX1276 LoRa module - the pins the firmware uses
+
+`main.cpp` builds the radio when `lora_enabled=1`. Pins are in code rather than in the config
+file on purpose: a wrong pin set does not fail loudly, it talks to nothing.
 
 | Signal | GPIO | Notes |
 |---|---|---|
@@ -14,44 +82,61 @@ a node on a band it must not use, and there is no safe default for that.
 | NSS | 5 | chip select, active low |
 | RESET | 14 | held low briefly at `begin()` |
 | DIO0 | 26 | TxDone / RxDone |
-| DIO1 | 33 | optional, used for Fhss / timeout |
-| BUSY | 32 | input, polled while the radio is busy |
+| DIO1 | not wired | the driver polls IRQ flags |
+| BUSY | not wired | an SX126x signal; the SX1276 has none |
 
-SPI runs at **1 MHz**, which is the SX1276's own maximum for the modes this driver uses.
+SPI runs at **1 MHz**. Buy SX1276/RFM95W modules: SX1262-based boards (Heltec WiFi LoRa 32 V3
+and similar) need a different driver.
 
 The region comes from `lora_region` as a **name** - `EU868`, `US915`, `AU915`, `AS923` - and
-each maps to its frequency in `kLoRaDefaultsFor`. A region this build does not recognise is
-refused and reported as `LORA_REGION_UNKNOWN`; it does not fall back to 868 MHz, because
-putting an AU node on the European band is precisely the failure the refusal exists to prevent.
+each maps to its frequency in `kLoRaDefaultsFor`. The default is **AU915**, the band used in
+Uruguay. A region this build does not recognise is refused and reported as
+`LORA_REGION_UNKNOWN`; it does not fall back to another band. Check power, duty cycle and
+channel use with the national regulator (URSEC in Uruguay) before deployment.
 
-### What is not proven about this
+What is not proven: that the wiring is correct. `LORA_ENABLED` says the SPI peripheral
+initialised and the radio accepted its configuration writes, not that the air link works.
 
-That the wiring is correct. `LORA_ENABLED` says the SPI peripheral initialised and the radio
-accepted its configuration register writes - not that a register read returned a plausible
-value. The first real evidence is that read, and it needs a board.
+## Time
 
-## Status
+Hierarchy: **NTP > DS3231 > internal oscillator.** With `rtc_enabled=1` the node seeds its
+clock from the DS3231 at boot (unless its oscillator-stop flag says the battery was out, which
+is logged as `RTC_TIME_UNTRUSTED`), and writes NTP time back to it once SNTP reports a
+completed sync. Records taken before any trusted source carry `TIME_UNCERTAIN` and are repaired
+centrally by `time-reconstruct`.
 
-**No physical hardware bought yet.** Everything firmware-side is proven
-through simulation and tests. The BME280 is the reference pick because
-it's cheap, everywhere, speaks clean I2C, and brings pressure along
-with temperature and humidity (±0.5 °C, ±3 %RH — datasheet numbers, not
-ours).
+## Power
 
-## Bill of Materials (per node) — draft v0
+The pilot station runs from a 20 W panel, a 12 V 7 Ah battery and a 10 A charge controller,
+with a DC-DC stage for 5 V (SPS30, MH-Z19C) and 3.3 V. These are starting values, not a proven
+autonomy: the 14-day energy balance in `PILOT_SPEC.md` decides. The battery divider
+(`battery_divider_ratio`, 100k/22k by default) feeds `battery_voltage`, whose default valid
+range covers both a LiPo cell and a 12 V pack.
 
-| Component | Qty | Purpose | Minimum | Recommended | Alternatives | Est. cost USD |
-|---|---|---|---|---|---|---|
-| MCU board | 1 | Compute + Wi-Fi + flash | ESP32-WROOM-32, 4 MB flash | ESP32-DevKitC WROOM-32E | ESP32-S3 (future), ESP8266 (limited) | 4–7 |
-| Environmental sensor | 1 | T°, RH, pressure | BME280 I2C module 3.3 V | GY-BME280 with regulator | SHT31 (+BMP388), DHT22 (lower quality) | 3–6 |
-| Storage | — | Local log | Internal 4 MB flash (LittleFS) | same | microSD (later phase) | 0 |
-| Power supply | 1 | Stable power | USB 5 V / adapter ≥1A | charger + power bank | solar panel + LiPo + TP4056 (autonomy) | 3–10 |
-| Enclosure | 1 | IP protection + radiation | Ventilated IP54, no direct sun | mini Stevenson-type radiation screen (3D printed) | louvered PVC | 2–8 |
-| Wiring | — | I2C | short dupont/JST (<30 cm) | twisted cable, pull-ups already on module | — | 1 |
-| Total | | | | | | **13–32** |
+## Bill of materials (per node)
 
-Don't marry one vendor: generic BME280 modules are interchangeable,
-and the driver only assumes I2C address 0x76/0x77.
+The budget document of the pilot carries the priced BOM (about USD 255 per complete station);
+this table lists the parts and the reason for each choice.
+
+| Subsystem | Part | Why this one |
+|---|---|---|
+| MCU | ESP32-WROOM-32, 4 MB | the firmware's target (`esp32dev`) |
+| Radio | SX1276/RFM95W 915 MHz + antenna | matches the existing driver |
+| T/RH/P | BME280 | reference sensor, driver since v0 |
+| PM | SPS30 | measures PM4 directly |
+| CO2 | MH-Z19C | NDIR, not an estimate |
+| UV | VEML6075 | separate UVA and UVB channels |
+| Light / irradiance | BH1750 + BPW34 | lux and relative W/m2 are different quantities |
+| Wind / rain | cup anemometer, vane, tipping bucket | one kit, validated on one node before buying seven |
+| Soil | capacitive probe, gypsum block, DS18B20 | moisture, suction and temperature |
+| Leaf wetness | grid sensor | |
+| Lightning | AS3935 module | |
+| Clock / archive | DS3231, microSD 16 GB high-endurance | trustworthy time offline; archive (driver pending) |
+| Power | 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse, TVS | |
+| Mechanics | IP65 box, printed PETG radiation shield, mast | same shield and height on every node |
+
+**Not implemented yet:** the microSD archive. LittleFS remains the only store; the SD is in
+the BOM so the hardware does not have to change when the driver arrives.
 
 ## Reference wiring (ESP32 DevKit → BME280)
 
@@ -63,15 +148,17 @@ ESP32 GPIO22 (SCL) → BME280 SCK
 BME280 SDO → GND            (address 0x76; to 3V3 = 0x77)
 ```
 
-Wired in `main.cpp`: I2C at 100 kHz on pins 21/22.
+Every other I2C part shares the same two wires; addresses do not collide.
 
 ## Physical considerations (mandatory for scientific quality)
 
-- The sensor **never** sits in direct sun or next to a heat-radiating
-  wall; 1.5–2.5 m height works.
-- A radiation screen is mandatory if you want nodes to be comparable
-  at all. Same screen, same height, or don't compare.
-- Per node, write down: installation date/time, height, orientation,
-  dominant surrounding surface (context lives in `NodeConfig`).
-- No metrological certificate here: these numbers are for comparative
-  community analysis, not official meteorology (see CALIBRATION.md).
+- The T/RH sensor **never** sits in direct sun or next to a heat-radiating wall; 1.5–2.5 m
+  height works.
+- A radiation screen is mandatory if nodes are to be comparable at all. Same screen, same
+  height, or don't compare.
+- The SPS30 and MH-Z19C need airflow but not rain: mount them in the screen's lower tier,
+  inlet facing down.
+- Per node, write down: installation date/time, height, orientation, vane north offset,
+  soil probe depth, dominant surrounding surface (context lives in `NodeConfig`).
+- No metrological certificate here: these numbers are for comparative community analysis,
+  not official meteorology (see CALIBRATION.md).

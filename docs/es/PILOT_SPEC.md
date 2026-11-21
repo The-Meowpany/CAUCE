@@ -16,7 +16,7 @@ registros ambientales durante el período piloto.
 
 8 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
 de datos · 1 esquema de calibración · 1 sistema de almacenamiento local ·
-1 sistema LoRaWAN · 1 API central · 1 visor microclimático.
+1 enlace LoRa punto a punto · 1 API central · 1 visor microclimático.
 
 Regla de oro: **el nodo nunca depende del gateway para medir.**
 
@@ -51,7 +51,7 @@ compromete con estos fondos.
                             ↓
                          Gateway
                             ↓
-                       ChirpStack
+               lora_gateway → POST /v1/sync
                             ↓
                            API
                             ↓
@@ -76,45 +76,54 @@ primero.
 
 ## 4. Nodo (×8 idénticos)
 
-Heltec WiFi LoRa 32 V3 (868 MHz) · SHT35 (temperatura + humedad de
-referencia) · BME280 (presión) · SCD40 (CO₂, capa ambiental
-complementaria, calibración forzada FRC en co-localización) · BH1750
-(iluminancia ambiental — eso es lux, no irradiancia solar) ·
-anemómetro ultrasónico RS485 candidato, pendiente de validación ·
-pluviómetro de balancín · 18650 con protección · panel 5 V + manager de
-carga · carrier PCB CAUCE-Node (potencia, I²C, RS485 con TVS SM712 y
-terminación, SPI/SD, DS3231, corte de sensores por GPIO, protecciones) ·
-microSD industrial high-endurance 16 GB en FAT32 · DS3231 (±2 ppm;
-jerarquía NTP > LoRaWAN > DS3231 > interno) · caja IP65 con
-prensaestopas · antena 868 MHz + pigtail · pantalla Stevenson impresa +
-mástil (protocolo de instalación a 2 m, práctica OMM).
+ESP32-WROOM-32 + SX1276/RFM95W a 915 MHz (AU915, la banda de Uruguay) ·
+BME280 (temperatura, humedad, presión) · BH1750 (iluminancia — lux, no
+irradiancia solar) · fotodiodo BPW34 con etapa de transimpedancia
+(irradiancia solar relativa) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C
+(CO₂ NDIR, corrección automática de línea base apagada, cero en
+co-localización) · VEML6075 (índice UV con UVA y UVB separados) ·
+AS3935 (conteo y distancia de descargas) · anemómetro de cazoletas +
+veleta de resistencias + pluviómetro de balancín (un kit validado antes
+de comprar siete) · sonda capacitiva de humedad de suelo, bloque de yeso
+(potencial hídrico) y DS18B20 (temperatura de suelo) · sensor de mojado
+foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD
+16 GB high-endurance (archivo; driver pendiente) · panel 20 W, batería
+12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS · caja IP65 con
+prensaestopas · antena 915 MHz + pigtail · pantalla de radiación impresa
+en PETG + mástil (protocolo de instalación a 2 m, práctica OMM).
 
-## 5. BOM prototipo ×1 (~USD 280)
+Cada sensor tiene driver en el firmware y una clave de config que lo
+habilita; el mapa de pines está en `HARDWARE.md`. Los drivers están
+probados en host contra buses simulados y todavía no corrieron en placa.
 
-Heltec V3 20 · SHT35 + BME280 + BH1750 18 · SCD40 del mismo proveedor de
-la tanda final 45 · anemómetro ultrasónico RS485 candidato, pendiente de
-validación 60 · pluviómetro 18 · 18650 + panel + manager 23 · carrier
-(tanda prototipo, prorrateo) 40 · SD + RTC + RS485 + protecciones + caja
-+ antena + mástil 56.
+## 5. BOM prototipo ×1 (~USD 255)
+
+ESP32 3 · SX1276 + antena 7 · BME280 7 · SPS30 36,12 · MH-Z19C 24,99 ·
+VEML6075 6 · BH1750 1,50 · etapa BPW34 3 · kit viento/lluvia 34 · sondas
+de suelo 9 · mojado foliar 3 · AS3935 12 · DS3231 3 · microSD 6 · panel
+28 · batería 27 · controlador de carga 7,64 · regulación y protección 5 ·
+caja 7,39 · pantalla impresa 4 · PCB y conectores 12 · mástil 8.
+Total USD 254,64.
 
 ## 6. Presupuesto (USD 4.000)
 
 | Concepto | USD |
 |---|---|
-| Construcción de 8 estaciones: hasta | 1.920 |
-| Gateway e infraestructura LoRa | 200 |
-| Repuestos | 350 |
-| Protección e instalación | 300 |
-| Fabricación de carrier PCB | 150 |
-| Transporte y logística | 250 |
-| Comunicación y señalización | 200 |
-| Capacitación y participación | 200 |
-| Contingencia | 430 |
-| **Total** | **4.000** |
+| 8 estaciones completas | 2.037,12 |
+| Gateway LoRa punto a punto (ESP32 + SX1276) | 60,00 |
+| Servidor central | 90,00 |
+| Herramientas, fabricación y banco de pruebas | 603,00 |
+| Calibración y co-localización | 30,00 |
+| Talleres y jornadas educativas | 480,00 |
+| Instalación y logística local | 140,00 |
+| Transporte internacional e importación (provisión) | 400,00 |
+| Repuestos críticos | 78,11 |
+| Contingencia | 81,77 |
+| **Total** | **4.000,00** |
 
-"Hasta USD 1.920" es un techo con margen para deriva de precios,
-importación y sustitución por equivalentes (BOM de §4–5 como anexo:
-USD 235 + USD 5 de margen de fabricación por nodo). Sin línea de
+La provisión de importación cubre un costo efectivo de hasta ~30 % sobre
+unos USD 1.356 de mercadería importada; el documento de presupuesto
+lista las palancas de ajuste si la cifra real es mayor. Sin línea de
 intervenciones físicas: el proyecto genera evidencia para evaluar
 medidas, no las ejecuta.
 
@@ -147,9 +156,10 @@ mantenimiento, no dato silencioso.
 ## 9. Gestión de energía y fallos
 
 Dimensionado para operación autónoma con reserva; validado
-experimentalmente en campo, no en papel. El anemómetro (tensión de
-alimentación y consumo con boost) es la incógnita declarada del
-budget. Fallos cubiertos: SD, gateway, alimentación intermitente,
+experimentalmente en campo, no en papel. El ventilador del SPS30 y la
+lámpara del MH-Z19C (ambos a 5 V) son las incógnitas declaradas del
+balance energético; el divisor de batería reporta `battery_voltage`
+para que el balance se mida en lugar de suponerse. Fallos cubiertos: SD, gateway, alimentación intermitente,
 deriva de reloj (DS3231 + corrección posterior en servidor), sensor
 congelado/desconectado (ya manejados por el motor de validación del
 firmware).

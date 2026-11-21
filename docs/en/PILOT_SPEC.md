@@ -15,8 +15,8 @@ environmental records through the pilot period.
 ## 2. Frozen scope
 
 8 identical nodes · 1 gateway · 1 CAUCE-Node carrier PCB · 1 data
-protocol · 1 calibration scheme · 1 local storage system · 1 LoRaWAN
-system · 1 central API · 1 microclimate viewer.
+protocol · 1 calibration scheme · 1 local storage system · 1 LoRa
+point-to-point link · 1 central API · 1 microclimate viewer.
 
 Golden rule: **the node never depends on the gateway to measure.**
 
@@ -51,7 +51,7 @@ with these funds.
                             ↓
                          Gateway
                             ↓
-                       ChirpStack
+               lora_gateway → POST /v1/sync
                             ↓
                            API
                             ↓
@@ -75,47 +75,55 @@ earn its wording with node density first.
 
 ## 4. Node (×8 identical)
 
-Heltec WiFi LoRa 32 V3 (868 MHz) · SHT35 (reference temperature +
-humidity) · BME280 (pressure) · SCD40 (CO₂, complementary ambient
-layer, forced FRC calibration at co-location) · BH1750 (ambient
-illuminance — that is lux, not solar irradiance) · ultrasonic RS485
-anemometer, candidate pending validation · tipping-bucket rain gauge ·
-protected 18650 · 5 V panel + charge manager · CAUCE-Node carrier PCB
-(power, I²C, RS485 with SM712 TVS and termination, SPI/SD, DS3231,
-GPIO sensor power-cut, protections) · industrial high-endurance 16 GB
-microSD on FAT32 · DS3231 (±2 ppm; NTP > LoRaWAN > DS3231 > internal
-hierarchy) · IP65 box with cable glands · 868 MHz antenna + pigtail ·
-printed Stevenson screen + mast (2 m installation protocol, WMO
-practice).
+ESP32-WROOM-32 + SX1276/RFM95W at 915 MHz (AU915, the Uruguayan band) ·
+BME280 (temperature, humidity, pressure) · BH1750 (illuminance — lux,
+not solar irradiance) · BPW34 photodiode with transimpedance stage
+(relative solar irradiance) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C
+(NDIR CO₂, automatic baseline correction off, zeroed at co-location) ·
+VEML6075 (UV index with separate UVA and UVB) · AS3935 (lightning count
+and distance) · cup anemometer + resistor-ladder vane + tipping-bucket
+rain gauge (one kit validated before buying seven) · capacitive soil
+moisture probe, gypsum block (soil water potential) and DS18B20 (soil
+temperature) · leaf wetness grid · DS3231 (±2 ppm; NTP > DS3231 >
+internal hierarchy) · microSD 16 GB high-endurance (archive; driver
+pending) · 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse,
+TVS · IP65 box with cable glands · 915 MHz antenna + pigtail · printed
+PETG radiation screen + mast (2 m installation protocol, WMO practice).
 
-## 5. Prototype BOM ×1 (~USD 280)
+Every sensor has a driver in the firmware and a config key that enables
+it; the pin map is in `HARDWARE.md`. Drivers are host-tested against
+scripted buses and have not yet run on a board.
 
-Heltec V3 20 · SHT35 + BME280 + BH1750 18 · SCD40 from the same supplier
-as the final batch 45 · ultrasonic RS485 anemometer candidate pending
-validation 60 · rain gauge 18 · 18650 + panel + manager 23 · carrier
-(prototype batch, prorated) 40 · SD + RTC + RS485 + protections + box +
-antenna + mast 56.
+## 5. Prototype BOM ×1 (~USD 255)
+
+ESP32 3 · SX1276 + antenna 7 · BME280 7 · SPS30 36.12 · MH-Z19C 24.99 ·
+VEML6075 6 · BH1750 1.50 · BPW34 stage 3 · wind/rain kit 34 · soil
+probes 9 · leaf wetness 3 · AS3935 12 · DS3231 3 · microSD 6 · panel 28 ·
+battery 27 · charge controller 7.64 · regulation and protection 5 ·
+box 7.39 · printed screen 4 · PCB and connectors 12 · mast 8.
+Total USD 254.64.
 
 ## 6. Budget (USD 4,000)
 
 | Item | USD |
 |---|---|
-| Build of 8 stations: up to | 1,920 |
-| Gateway + LoRa infrastructure | 200 |
-| Spares | 350 |
-| Protection + installation | 300 |
-| Carrier PCB fabrication | 150 |
-| Transport + logistics | 250 |
-| Communication + signage | 200 |
-| Training + participation | 200 |
-| Contingency | 430 |
-| **Total** | **4,000** |
+| 8 complete stations | 2,037.12 |
+| LoRa point-to-point gateway (ESP32 + SX1276) | 60.00 |
+| Central server | 90.00 |
+| Tools, fabrication and bench rig | 603.00 |
+| Calibration and co-location | 30.00 |
+| Workshops and educational sessions | 480.00 |
+| Installation and local logistics | 140.00 |
+| International transport and import (provision) | 400.00 |
+| Critical spares | 78.11 |
+| Contingency | 81.77 |
+| **Total** | **4,000.00** |
 
-"Up to USD 1,920" is a ceiling with room for price drift, import
-costs, and equivalent substitutions (§4–5 BOM attached as annex:
-USD 235 + USD 5 manufacturing margin per node). No physical
-interventions line: the project generates evidence to evaluate
-measures, it doesn't execute them.
+The import provision covers an effective cost of up to ~30 % on roughly
+USD 1,356 of imported goods; the budget document lists the adjustment
+levers if the real figure is higher. No physical interventions line:
+the project generates evidence to evaluate measures, it doesn't execute
+them.
 
 What remains afterwards: hardware, firmware, protocol, data,
 calibration methodology, platform.
@@ -145,8 +153,10 @@ divergence = maintenance flag, not silent data.
 ## 9. Energy and failure management
 
 Sized for autonomous operation with reserve; validated experimentally
-in the field, not on paper. The anemometer (supply voltage and boost
-draw) is the declared unknown in the budget. Covered failures: SD,
+in the field, not on paper. The SPS30 fan and the MH-Z19C lamp (both
+on 5 V) are the declared unknowns in the energy budget; the battery
+divider reports `battery_voltage` so the balance is measured, not
+assumed. Covered failures: SD,
 gateway, flaky power, clock drift (DS3231 + later server-side
 correction), frozen/disconnected sensor (already handled by the
 firmware validation engine).
