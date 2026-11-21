@@ -14,7 +14,7 @@ bool NodeCertificateAuth::addAuthHeaders(const char* baseUrl, const char* nodeId
   // Cleared before anything else, so a caller that ignores the return value still has empty
   // buffers rather than a previous call's signature. A stale signature here would be re-sent
   // for a challenge the central has already spent.
-  std::memset(&buffers_, 0, sizeof(buffers_));
+  buffers_ = Buffers{};
 
   if (auth_ == nullptr || source_ == nullptr || !auth_->isConfigured()) {
     return false;
@@ -32,7 +32,7 @@ bool NodeCertificateAuth::addAuthHeaders(const char* baseUrl, const char* nodeId
                           buffers_.nonce, sizeof(buffers_.nonce), buffers_.signature,
                           sizeof(buffers_.signature));
   if (status != NodeAuthStatus::Ok) {
-    std::memset(&buffers_, 0, sizeof(buffers_));
+    buffers_ = Buffers{};
     return false;
   }
 

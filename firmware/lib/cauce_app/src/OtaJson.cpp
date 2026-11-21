@@ -73,9 +73,9 @@ bool parseOtaManifestJson(const char* json, OtaRelease& out) {
   if (!isHttpUrl(tmp.url)) return false;
   if (!findValue(json, "total_size", val, quoted) || quoted) return false;
   char* endPtr = nullptr;
-  const unsigned long size = std::strtoul(val, &endPtr, 10);
-  // `ULL`, not `UL`: on Windows `unsigned long` is 32-bit, so a `UL` bound is vacuously
-  // never exceeded and the guard protects nothing while reading as though it does.
+  // Read 64-bit wide. `unsigned long` is 32-bit on the ESP32 and on Windows, where strtoul
+  // saturates an oversized value to 0xFFFFFFFF and the bound below could never reject it.
+  const unsigned long long size = std::strtoull(val, &endPtr, 10);
   if (endPtr == val || size == 0 || size > 0xFFFFFFFFULL) return false;
   tmp.totalSize = static_cast<uint32_t>(size);
   tmp.manifestHmacHex[0] = '\0';

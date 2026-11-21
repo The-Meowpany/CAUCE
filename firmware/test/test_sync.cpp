@@ -179,6 +179,8 @@ void test_resume_without_duplicates_after_interruption() {
     syncClock.advanceMs(1000);
   }
 
+  // Recovery means new uploads, not a replay of the ones that already went out.
+  TEST_ASSERT_TRUE(rig.transport.calls.size() > callsBefore);
   const auto sentAll = rig.transport.allSequences();
   for (size_t i = 0; i < sentBefore.size(); ++i) {
     TEST_ASSERT_EQUAL_UINT32(sentBefore[i], sentAll[i]);

@@ -68,7 +68,6 @@ class CommandExecutor {
   void persist() const;
 
   hal::IFileSystem& fs_;
-  Logger& logger_;
   char statePath_[64];
   Slot slots_[kMaxHandlers];
   uint32_t history_[kHistoryDepth]{};
@@ -76,7 +75,6 @@ class CommandExecutor {
   size_t historyNext_{0};
   CommandReceipt pending_[kMaxReceipts];
   size_t pendingCount_{0};
-  uint8_t nodeIdSeed_{0};
   size_t unknownKinds_{0};
 };
 

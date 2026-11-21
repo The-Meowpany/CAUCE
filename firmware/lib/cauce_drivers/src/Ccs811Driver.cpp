@@ -5,10 +5,9 @@
 namespace cauce::drivers {
 
 namespace {
-constexpr uint8_t kModeIdle = 0x00;
-constexpr uint8_t kModePeriodic1s = 0x01;
+// The part also has idle (0x00), 1 s (0x01) and 250 ms (0x04) modes; the 10 s one is the
+// only one the driver uses, because the scheduler never samples faster than that.
 constexpr uint8_t kModePeriodic10s = 0x02;
-constexpr uint8_t kModeSingle = 0x04;
 
 constexpr uint8_t kStatusDataReady = 0x08;
 constexpr uint8_t kStatusAppValid = 0x10;

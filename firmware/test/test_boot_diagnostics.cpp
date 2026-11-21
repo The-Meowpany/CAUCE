@@ -40,7 +40,6 @@ struct FakeRtc {
   uint8_t bytes[64];
 };
 
-FakeRtc g_rtc;
 
 // A boot that walks the given steps and returns whether it completed.
 bool runBoot(const char* const* steps, size_t count, Capture* capture, FakeRtc* rtc) {

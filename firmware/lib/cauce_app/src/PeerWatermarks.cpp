@@ -45,7 +45,7 @@ bool PeerWatermarks::advance(const char* nodeId, uint32_t sequence) {
 
   for (size_t i = 0; i < kMaxPeers; ++i) {
     if (entries_[i].inUse) continue;
-    std::memset(&entries_[i], 0, sizeof(entries_[i]));
+    entries_[i] = Entry{};
     std::memcpy(entries_[i].nodeId, nodeId, std::strlen(nodeId));
     entries_[i].sequence = sequence;
     entries_[i].inUse = true;
@@ -130,7 +130,7 @@ void PeerWatermarks::load() {
     if (end == cursor) break;  // no number
     cursor = end;
 
-    std::memset(&entries_[count_], 0, sizeof(entries_[count_]));
+    entries_[count_] = Entry{};
     std::memcpy(entries_[count_].nodeId, id, idLen);
     entries_[count_].sequence = static_cast<uint32_t>(value);
     entries_[count_].inUse = true;

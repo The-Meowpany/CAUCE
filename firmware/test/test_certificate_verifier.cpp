@@ -274,9 +274,14 @@ void test_a_long_site_id_is_refused_rather_than_overflowing() {
   TEST_ASSERT_TRUE(v.verify(json, "CAUCE-001", kNow) != CertVerifyStatus::Ok);
 }
 
+void test_the_signature_matches_the_pinned_value() {
+  TEST_ASSERT_EQUAL_STRING(kSignatureHex, CAUCE_CERT_SIGNATURE_HEX);
+}
+
 }  // namespace
 
 void registerCertificateVerifierTests() {
+  RUN_TEST(test_the_signature_matches_the_pinned_value);
   RUN_TEST(test_a_real_certificate_verifies);
   RUN_TEST(test_the_bound_public_key_is_the_node_s_key);
   RUN_TEST(test_the_canonical_body_the_backend_signed_is_pinned_here);

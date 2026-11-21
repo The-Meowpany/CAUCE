@@ -74,10 +74,6 @@ struct LoggerAndSink {
 
 constexpr const char* kPath = "/state/settings";
 
-std::string detail(char* buffer) {
-  return std::string(buffer ? buffer : "");
-}
-
 }  // namespace
 
 // --- the settings that ship ---------------------------------------------

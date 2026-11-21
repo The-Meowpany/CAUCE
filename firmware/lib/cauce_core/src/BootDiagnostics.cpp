@@ -124,8 +124,6 @@ void BootDiagnostics::endStep(uint16_t ordinal, bool ok) {
   // previous boot end", and the last step *entered* is the answer even when it completed.
   // Clearing it here would make a clean boot look identical to a boot that never started, and
   // the two are the whole distinction this component exists to preserve.
-  record_.lastStep = record_.lastStep == kBootDiagnosticsNone ? kBootDiagnosticsNone
-                                                             : record_.lastStep;
 }
 
 void BootDiagnostics::complete(uint32_t resetReason) {

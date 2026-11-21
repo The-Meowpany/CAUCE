@@ -125,7 +125,7 @@ void setup() {
 
   stage("begin");
 
-  snprintf(detail, sizeof(detail), "flash=%u MB heap=%u",
+  snprintf(detail, sizeof(detail), "flash=%u MB heap=%lu",
            static_cast<unsigned>(ESP.getFlashChipSize() / (1024u * 1024u)),
            static_cast<unsigned long>(ESP.getFreeHeap()));
   // 4 MB is the floor, because the two-slot OTA table needs it. A board with less
@@ -230,7 +230,9 @@ void setup() {
     if (config.syncDeviceKey[0] == '\0') {
       skip("provisioned", "no sync_device_key in /config/cauce.conf");
     } else {
-      snprintf(detail, sizeof(detail), "node=%s endpoint=%s", config.nodeId,
+      // The endpoint is cut to what fits the 96-byte line; this is a bench report, and a URL
+      // longer than that is still recognisable from its first 64 characters.
+      snprintf(detail, sizeof(detail), "node=%s endpoint=%.64s", config.nodeId,
                config.syncServerUrl[0] ? config.syncServerUrl : "(unset)");
       say("provisioned", status == cauce::ConfigLoadStatus::Loaded, detail);
     }
@@ -256,7 +258,7 @@ void setup() {
       // server accepted the batch is a question about the server, and claiming otherwise
       // from a bench would be a test that passes when the network is unplugged.
       sync.tick();
-      snprintf(detail, sizeof(detail), "endpoint=%s store=%s", config.syncServerUrl,
+      snprintf(detail, sizeof(detail), "endpoint=%.72s store=%s", config.syncServerUrl,
                opened ? "open" : "closed");
       say("signed batch built", opened, detail);
     }

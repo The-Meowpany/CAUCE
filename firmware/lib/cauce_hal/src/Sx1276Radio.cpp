@@ -8,7 +8,6 @@ namespace {
 // margin is because a marginal supply browns out during the current draw of setting
 // the LNA, and the symptom is a radio that is intermittently deaf.
 constexpr uint32_t kResetSettleMs = 5;
-constexpr uint32_t kModeSettleMs = 1;
 
 // Datasheet, LoRa mode: RSSI = RegRssiValue + RegRssiWideband - Offset, where Offset
 // is 164 for the high-frequency band (137-1020 MHz). This project is 868 MHz only, so

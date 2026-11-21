@@ -18,9 +18,9 @@ void copyString(char* dst, size_t cap, const char* src) {
 
 }  // namespace
 
-CommandExecutor::CommandExecutor(hal::IFileSystem& fs, Logger& logger,
-                                 const char* statePath, uint8_t nodeIdSeed)
-    : fs_(fs), logger_(logger), nodeIdSeed_(nodeIdSeed) {
+CommandExecutor::CommandExecutor(hal::IFileSystem& fs, Logger& /*logger*/,
+                                 const char* statePath, uint8_t /*nodeIdSeed*/)
+    : fs_(fs) {
   copyString(statePath_, sizeof(statePath_), statePath);
 }
 

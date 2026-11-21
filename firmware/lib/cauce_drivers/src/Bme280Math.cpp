@@ -56,17 +56,16 @@ uint32_t bme280CompensateHumidity(const Bme280Trim& trim, uint32_t adcHumidity,
   const int64_t h4 = trim.digH4;
   const int64_t h5 = trim.digH5;
   int64_t v1 = tFine - 76800;
-  v1 =
-      ((((static_cast<int64_t>(adcHumidity) << 14) - (h4 << 20) - (h5 * v1)) +
-        16384) >>
-       15) *
-      ((((((v1 * static_cast<int64_t>(trim.digH6)) >> 10) *
-          (((v1 * static_cast<int64_t>(trim.digH3)) >> 11) + 32768))) >>
-        10) +
-       2097152) *
-          static_cast<int64_t>(trim.digH2) +
-      8192 >>
-      14;
+  // Bosch's reference groups this as offset * ((scale * H2 + 8192) >> 14). Without the
+  // parentheses, precedence applied the rounding and the shift after multiplying by the offset,
+  // which drifted the result by up to one LSB (1/1024 %RH).
+  const int64_t offset =
+      (((static_cast<int64_t>(adcHumidity) << 14) - (h4 << 20) - (h5 * v1)) + 16384) >> 15;
+  const int64_t scale = ((((v1 * static_cast<int64_t>(trim.digH6)) >> 10) *
+                          (((v1 * static_cast<int64_t>(trim.digH3)) >> 11) + 32768)) >>
+                         10) +
+                        2097152;
+  v1 = offset * ((scale * static_cast<int64_t>(trim.digH2) + 8192) >> 14);
   v1 = v1 -
        (((((v1 >> 15) * (v1 >> 15)) >> 7) * static_cast<int64_t>(trim.digH1)) >> 4);
   if (v1 < 0) v1 = 0;

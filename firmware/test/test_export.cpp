@@ -123,7 +123,8 @@ void test_every_formula_prefix_is_neutralised() {
   const char* payloads[] = {"=1+1", "+1+1", "-1+1", "@SUM(A1)"};
   uint32_t seq = 20;
   for (const char* p : payloads) {
-    Measurement m = makeM(seq++, 1787356900000ULL + seq * 1000ULL,
+    const uint32_t s = seq++;
+    Measurement m = makeM(s, 1787356900000ULL + s * 1000ULL,
                          Variable::Pressure, 1013.2f, Quality::Valid);
     copyString(m.nodeId, sizeof(m.nodeId), p);
     TEST_ASSERT_TRUE(store.append(m));

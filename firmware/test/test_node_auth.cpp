@@ -11,7 +11,6 @@ using namespace cauce::app;
 
 namespace {
 
-constexpr size_t kSeed = 32;
 constexpr uint8_t kSeedValue = 7;
 
 // A real seed, and a real Ed25519 key from it, so the signature this module produces is
