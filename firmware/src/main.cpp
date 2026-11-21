@@ -18,6 +18,7 @@
 #include "cauce/drivers/As3935Driver.h"
 #include "cauce/drivers/Ds18b20Driver.h"
 #include "cauce/drivers/Ds3231Rtc.h"
+#include "cauce/drivers/GypsumAcDriver.h"
 #include "cauce/drivers/HallAnemometerDriver.h"
 #include "cauce/drivers/Mhz19Driver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
@@ -621,7 +622,11 @@ void setup() {
           adc, IRRADIANCE_ADC_PIN, "IRR-1", "BPW34-TIA", cauce::Variable::SolarIrradiance,
           Mapping::Linear, sensors.irradianceWm2PerMv, 0.0f));
     }
-    if (sensors.soilPotentialEnabled) {
+    if (sensors.soilPotentialEnabled && sensors.soilPotentialAc) {
+      addIfPresent(new cauce::drivers::GypsumAcDriver(
+          *g_bus, adc, SOIL_POTENTIAL_ADC_PIN, "GYPSUM-1", sensors.soilPotentialKpaPerMv,
+          sensors.soilPotentialOffsetKpa));
+    } else if (sensors.soilPotentialEnabled) {
       addIfPresent(new cauce::drivers::AnalogSensorDriver(
           adc, SOIL_POTENTIAL_ADC_PIN, "GYPSUM-1", "GYPSUM-BLOCK",
           cauce::Variable::SoilWaterPotential, Mapping::Linear, sensors.soilPotentialKpaPerMv,

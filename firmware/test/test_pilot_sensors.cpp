@@ -10,6 +10,7 @@
 #include "cauce/drivers/As3935Driver.h"
 #include "cauce/drivers/Ds18b20Driver.h"
 #include "cauce/drivers/Ds3231Rtc.h"
+#include "cauce/drivers/GypsumAcDriver.h"
 #include "cauce/drivers/Mhz19Driver.h"
 #include "cauce/drivers/Sps30Driver.h"
 #include "cauce/drivers/Veml6075Driver.h"
@@ -602,6 +603,116 @@ void test_pilot_rtc_refuses_an_impossible_date() {
   TEST_ASSERT_FALSE(rtc.readUtcMs(out));
 }
 
+// An MCP23008 driving the two ends of a divider made of R_ref and the block, with the ADC on the
+// midpoint. The voltage the ADC sees follows whatever the expander is driving, as on the board.
+class FakeGypsumBoard final : public hal::ScriptedI2cDevice, public hal::IAnalogInput {
+ public:
+  FakeGypsumBoard(float refOhms, float blockOhms) : ref_(refOhms), block_(blockOhms) {}
+
+  void writeRegister(uint8_t reg, const uint8_t* data, size_t length) override {
+    if (length != 1) return;
+    writes.push_back({reg, data[0]});
+    if (reg == GypsumAcDriver::kRegIodir) iodir = data[0];
+    if (reg == GypsumAcDriver::kRegOlat) olat = data[0];
+  }
+  bool readRegister(uint8_t, uint8_t*, size_t) override { return false; }
+
+  bool readMillivolts(uint8_t, float& out) override {
+    const bool a = (olat & GypsumAcDriver::kPinA) && !(iodir & GypsumAcDriver::kPinA);
+    const bool b = (olat & GypsumAcDriver::kPinB) && !(iodir & GypsumAcDriver::kPinB) &&
+                   !farEndOpen;
+    const float va = a ? 3300.0f : 0.0f;
+    const float vb = b ? 3300.0f : 0.0f;
+    out = vb + (va - vb) * block_ / (ref_ + block_);
+    return true;
+  }
+
+  struct Write {
+    uint8_t reg;
+    uint8_t value;
+  };
+  std::vector<Write> writes;
+  uint8_t iodir{0xFF};  // MCP23008 power-on: every pin an input
+  uint8_t olat{0x00};
+  bool farEndOpen{false};
+
+ private:
+  float ref_;
+  float block_;
+};
+
+void test_pilot_gypsum_ac_latches_low_before_enabling_outputs() {
+  hal::ScriptedI2cBus bus;
+  FakeGypsumBoard board(10000.0f, 5000.0f);
+  bus.attach(GypsumAcDriver::kDefaultAddress, &board);
+  GypsumAcDriver gypsum(bus, board, 33, "GYPSUM-1", 0.6f, 0.0f);
+  TEST_ASSERT_TRUE(gypsum.begin());
+  TEST_ASSERT_EQUAL(2u, board.writes.size());
+  TEST_ASSERT_EQUAL_HEX8(GypsumAcDriver::kRegOlat, board.writes[0].reg);
+  TEST_ASSERT_EQUAL_HEX8(0x00, board.writes[0].value);
+  TEST_ASSERT_EQUAL_HEX8(GypsumAcDriver::kRegIodir, board.writes[1].reg);
+  TEST_ASSERT_EQUAL_HEX8(0xFC, board.writes[1].value);  // GP0 and GP1 out, the rest untouched
+}
+
+void test_pilot_gypsum_ac_matches_the_dc_reading_with_zero_net_current() {
+  hal::ScriptedI2cBus bus;
+  FakeGypsumBoard board(10000.0f, 5000.0f);
+  bus.attach(GypsumAcDriver::kDefaultAddress, &board);
+  GypsumAcDriver gypsum(bus, board, 33, "GYPSUM-1", 0.6f, 0.0f);
+  TEST_ASSERT_TRUE(gypsum.begin());
+  board.writes.clear();
+
+  Reading r;
+  TEST_ASSERT_TRUE(gypsum.read(Variable::SoilWaterPotential, r));
+  // A DC divider from 3V3 through 10k into a 5k block reads 1100 mV.
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, 1100.0f, gypsum.lastEquivalentMv());
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, 660.0f, r.value);
+  // One phase each way and then both ends low: no net charge through the block.
+  TEST_ASSERT_EQUAL(3u, board.writes.size());
+  TEST_ASSERT_EQUAL_HEX8(GypsumAcDriver::kPinA, board.writes[0].value);
+  TEST_ASSERT_EQUAL_HEX8(GypsumAcDriver::kPinB, board.writes[1].value);
+  TEST_ASSERT_EQUAL_HEX8(0x00, board.writes[2].value);
+  TEST_ASSERT_EQUAL_HEX8(0x00, board.olat);
+}
+
+void test_pilot_gypsum_ac_refuses_an_undriven_end_and_a_missing_expander() {
+  hal::ScriptedI2cBus bus;
+  FakeGypsumBoard board(10000.0f, 5000.0f);
+  GypsumAcDriver absent(bus, board, 33, "GYPSUM-1", 0.6f, 0.0f);
+  TEST_ASSERT_FALSE(absent.begin());
+  TEST_ASSERT_EQUAL(static_cast<int>(SensorStatus::NotConnected),
+                    static_cast<int>(absent.health()));
+
+  bus.attach(GypsumAcDriver::kDefaultAddress, &board);
+  GypsumAcDriver gypsum(bus, board, 33, "GYPSUM-1", 0.6f, 0.0f);
+  TEST_ASSERT_TRUE(gypsum.begin());
+  board.farEndOpen = true;
+  Reading r;
+  TEST_ASSERT_FALSE(gypsum.read(Variable::SoilWaterPotential, r));
+  TEST_ASSERT_EQUAL(static_cast<int>(SensorStatus::InvalidData), static_cast<int>(r.status));
+  TEST_ASSERT_EQUAL_HEX8(0x00, board.olat);
+
+  // The expander dropping off the bus mid-season is a bus error, not a dry soil reading.
+  board.farEndOpen = false;
+  bus.detach(GypsumAcDriver::kDefaultAddress);
+  TEST_ASSERT_FALSE(gypsum.read(Variable::SoilWaterPotential, r));
+  TEST_ASSERT_EQUAL(static_cast<int>(SensorStatus::BusError), static_cast<int>(r.status));
+}
+
+void test_pilot_gypsum_ac_switch_survives_a_roundtrip() {
+  NodeConfig original{};
+  copyString(original.nodeId, sizeof(original.nodeId), "CAUCE-003");
+  original.soilPotentialEnabled = true;
+  original.soilPotentialAc = true;
+  char text[8192];
+  TEST_ASSERT_TRUE(serializeConfig(original, text, sizeof(text)));
+  NodeConfig parsed{};
+  TEST_ASSERT_TRUE(parseConfig(text, parsed));
+  TEST_ASSERT_TRUE(parsed.soilPotentialAc);
+  NodeConfig defaults{};
+  TEST_ASSERT_FALSE(defaults.soilPotentialAc);
+}
+
 void registerPilotSensorTests() {
   RUN_TEST(test_pilot_every_variable_has_a_name_a_unit_and_round_trips);
   RUN_TEST(test_pilot_existing_variable_numbers_did_not_move);
@@ -638,4 +749,8 @@ void registerPilotSensorTests() {
   RUN_TEST(test_pilot_rtc_calendar_conversion_round_trips);
   RUN_TEST(test_pilot_rtc_write_then_read_and_the_stop_flag);
   RUN_TEST(test_pilot_rtc_refuses_an_impossible_date);
+  RUN_TEST(test_pilot_gypsum_ac_latches_low_before_enabling_outputs);
+  RUN_TEST(test_pilot_gypsum_ac_matches_the_dc_reading_with_zero_net_current);
+  RUN_TEST(test_pilot_gypsum_ac_refuses_an_undriven_end_and_a_missing_expander);
+  RUN_TEST(test_pilot_gypsum_ac_switch_survives_a_roundtrip);
 }

@@ -116,6 +116,7 @@ constexpr BoolKey kSensorFlags[] = {
     {"leaf_wetness_enabled", &NodeConfig::leafWetnessEnabled},
     {"irradiance_enabled", &NodeConfig::irradianceEnabled},
     {"soil_potential_enabled", &NodeConfig::soilPotentialEnabled},
+    {"soil_potential_ac", &NodeConfig::soilPotentialAc},
     {"battery_monitor_enabled", &NodeConfig::batteryMonitorEnabled},
 };
 
