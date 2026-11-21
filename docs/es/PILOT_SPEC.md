@@ -121,12 +121,12 @@ el documento de presupuesto.
 | Calibración: certificado del LATU, materiales de instalación | 309,49 |
 | Talleres e impresión de materiales | 309,20 |
 | Transporte y viáticos del equipo | 814,38 |
-| Gastos administrativos de la organización patrocinadora (5 %) | 200,00 |
-| Imprevistos | 406,57 |
+| Imprevistos | 606,57 |
 | **Total del proyecto** | **4.000,00** |
 
 Las bases limitan el equipamiento y la infraestructura al 50 % del
-proyecto y los gastos administrativos al 15 %. El equipamiento, contado
+proyecto. La organización patrocinadora no cobra gastos administrativos;
+las comisiones bancarias y de tarjeta salen de los imprevistos. El equipamiento, contado
 con su importación, suma USD 1.960,36 (49,0 %); los tributos de
 importación (USD 479,13 por el Decreto 50/2026, 60 % de cada envío, mínimo
 USD 20) están dentro de los USD 4.000. Los talleres son abiertos y

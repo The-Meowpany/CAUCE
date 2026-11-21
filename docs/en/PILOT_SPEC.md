@@ -118,12 +118,12 @@ panel, pipe, box, antenna), at the BROU selling rate of UYU 41.95: USD
 | Calibration: LATU certificate, installation materials | 309.49 |
 | Workshops and printed materials | 309.20 |
 | Team transport and subsistence | 814.38 |
-| Sponsoring organisation's administrative costs (5 %) | 200.00 |
-| Contingency | 406.57 |
+| Contingency | 606.57 |
 | **Project total** | **4,000.00** |
 
-The call caps equipment and infrastructure at 50 % of the project and
-administrative costs at 15 %. Equipment, counted with its import, is USD
+The call caps equipment and infrastructure at 50 % of the project. The
+sponsoring organisation charges no administrative costs; bank and card
+fees come out of the contingency. Equipment, counted with its import, is USD
 1,960.36 (49.0 %); import taxes (USD 479.13 under Decreto 50/2026, 60 % of
 each parcel, at least USD 20) sit inside the USD 4,000. Workshops are open
 and free; participants are invited to join the project and its GitHub
