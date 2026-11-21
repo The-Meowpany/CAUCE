@@ -106,23 +106,23 @@ Menores precios encontrados el 21/11/2026: AliExpress con envío a Uruguay
 para la electrónica, comercios locales para lo pesado o lo que localmente
 es más barato (batería, panel, caño, caja, antena). Al tipo de cambio
 vendedor del BROU de $U 41,95 más una previsión del 10 % por variación de
-precios: USD 260,22 por estación, con el detalle en el documento de
+precios: USD 264,77 por estación, con el detalle en el documento de
 presupuesto.
 
 ## 6. Presupuesto (USD 4.000 disponibles)
 
 | Concepto | USD |
 |---|---|
-| 8 estaciones idénticas | 2.081,76 |
+| 8 estaciones idénticas | 2.118,16 |
 | Gateway y servidor central (Orange Pi Zero 3) | 79,70 |
-| Herramientas y banco de pruebas | 99,30 |
+| Herramientas y banco de pruebas | 132,03 |
 | Calibración y co-localización | 30,00 |
 | Talleres y jornadas educativas | 259,27 |
-| Provisión de importación e instalación | 577,31 |
+| Tributos de importación, entrega e instalación | 870,74 |
 | Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 230,00 |
-| **Total del proyecto** | **3.407,28** |
-| No utilizado de los USD 4.000 | 592,72 |
+| Contingencia de doble propósito | 310,00 |
+| **Total del proyecto** | **3.849,84** |
+| No utilizado de los USD 4.000 | 150,16 |
 
 La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
 etapa 4 (todo comprado e importado) cubre lo que termine costando más de
@@ -136,8 +136,11 @@ co-localización de consistencia relativa en sesgo absoluto.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
 imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
-fabrican en los talleres. La provisión de importación es el 35 % de lo
-comprado en el exterior (unos USD 1.364). Sin línea de intervenciones
+fabrican en los talleres. La importación se calcula envío por envío con el
+régimen de prestación única del Decreto 50/2026 (60 % del valor de cada
+envío, mínimo USD 20, que reemplaza al IVA y a los demás tributos): USD
+770,74 con la gestión de entrega, sobre unos USD 1.188 de mercadería,
+comprada en un solo pedido para pagar el mínimo una sola vez por parte. Sin línea de intervenciones
 físicas: el proyecto genera evidencia para evaluar medidas, no las
 ejecuta.
 

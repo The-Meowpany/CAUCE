@@ -103,23 +103,23 @@ scripted buses and have not yet run on a board.
 Lowest prices found on 2026-11-21: AliExpress shipping to Uruguay for the
 electronics, local stores for what is heavy or cheaper locally (battery,
 panel, pipe, box, antenna). At the BROU selling rate of UYU 41.95 plus a
-10 % allowance for price changes: USD 260.22 per station, itemised in the
+10 % allowance for price changes: USD 264.77 per station, itemised in the
 budget document.
 
 ## 6. Budget (USD 4,000 available)
 
 | Item | USD |
 |---|---|
-| 8 identical stations | 2,081.76 |
+| 8 identical stations | 2,118.16 |
 | Gateway and central server (Orange Pi Zero 3) | 79.70 |
-| Tools and bench rig | 99.30 |
+| Tools and bench rig | 132.03 |
 | Calibration and co-location | 30.00 |
 | Workshops and educational sessions | 259.27 |
-| Import provision and installation | 577.31 |
+| Import taxes, delivery and installation | 870.74 |
 | Critical spares | 49.94 |
-| Contingency, dual purpose | 230.00 |
-| **Project total** | **3,407.28** |
-| Not used of the USD 4,000 | 592.72 |
+| Contingency, dual purpose | 310.00 |
+| **Project total** | **3,849.84** |
+| Not used of the USD 4,000 | 150.16 |
 
 The contingency is sized to the price risk. Until stage 4 closes
 (everything bought and imported) it covers what ends up costing more than
@@ -132,8 +132,11 @@ from relative consistency into absolute bias.
 
 There is no 3D printer: a commercial radiation shield costs less than
 printing one. No commercial gypsum blocks are available, so they are made
-in the workshops. The import provision is 35 % of the goods bought from
-abroad (about USD 1,364). No physical interventions line: the project
+in the workshops. Import is computed parcel by parcel under the
+single-payment regime of Decreto 50/2026 (60 % of each parcel's value, at
+least USD 20, replacing VAT and duties): USD 770.74 including delivery
+handling on about USD 1,188 of goods, bought in one order so each part pays
+the minimum once. No physical interventions line: the project
 generates evidence to evaluate measures, it doesn't execute them.
 
 What remains afterwards: hardware, firmware, protocol, data,
