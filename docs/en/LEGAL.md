@@ -12,7 +12,7 @@ legal text ships with the release it describes, so the text can never
 drift from the behavior it documents.
 
 - Documents: `terms`, `privacy`, `cookies`, `refunds`. Current version
-  `2026.09-v1` (`LEGAL_VERSION`), effective 2026-09-25.
+  `2026.11-v3` (`LEGAL_VERSION`), effective 2026-11-21.
 - Only `status == "published"` is served. Anything else (drafts,
   internal notes) is a 404 by construction — the allowlist is the
   `DOCS` keys, not a directory listing.

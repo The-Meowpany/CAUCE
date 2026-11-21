@@ -55,8 +55,10 @@ Examples of representing our community include:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-conduct@cauce-project.org.
+reported to any active and recognized member of the organization
+(https://github.com/The-Meowpany), who will bring it to the community leaders responsible for
+enforcement. The project has no dedicated e-mail address; reach the member
+privately through the channel you already share with them.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
@@ -104,4 +106,4 @@ https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
 
 [homepage]: https://www.contributor-covenant.org
 
-For questions, contact: conduct@cauce-project.org
+For questions, contact any active and recognized member of the organization (https://github.com/The-Meowpany).

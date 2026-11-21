@@ -12,7 +12,7 @@ remoto — el texto legal viaja con el release que describe, así nunca
 difiere del comportamiento que documenta.
 
 - Documentos: `terms`, `privacy`, `cookies`, `refunds`. Versión actual
-  `2026.09-v1` (`LEGAL_VERSION`), vigente 2026-09-25.
+  `2026.11-v3` (`LEGAL_VERSION`), vigente 2026-11-21.
 - Solo se sirve `status == "published"`. Todo lo demás (borradores,
   notas internas) es 404 por construcción — el allowlist son las keys
   de `DOCS`, no un listado de directorio.

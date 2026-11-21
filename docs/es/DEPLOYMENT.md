@@ -142,7 +142,7 @@ termina TLS y es el único puerto publicado:
 ```bash
 cd deployment
 export CAUCE_DOMAIN=cauce.example.org      # el hostname que van a usar los nodos
-export ACME_EMAIL=ops@cauce.example.org    # para que Let's Encrypt te avise
+export ACME_EMAIL=vos@example.org    # tu propia dirección; para que Let's Encrypt te avise
 docker compose up -d --build
 ```
 

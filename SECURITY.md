@@ -18,5 +18,8 @@ Summary:
   `docs/en/ROADMAP.md` M5); do not expose the central beyond a trusted LAN
   without an HTTPS reverse proxy.
 
-Report vulnerabilities privately to security@cauce-project.org.
+Report vulnerabilities privately, either through GitHub's private reporting
+on this repository (https://github.com/The-Meowpany/CAUCE/security/advisories/new)
+or directly to any active and recognized member of the organization
+(https://github.com/The-Meowpany). The project has no dedicated e-mail address.
 Do not open public issues for security reports.

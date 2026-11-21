@@ -976,7 +976,7 @@ def test_legal_pages_render_versioned_no_inventions(client):
     for slug in ('terms', 'privacy', 'cookies', 'refunds'):
         r = client.get(f'/legal/{slug}')
         assert r.status_code == 200, slug
-        assert '2026.09-v2' in r.text
+        assert '2026.11-v3' in r.text
         assert 'text/html' in r.headers['content-type']
     assert client.get('/legal/drafts').status_code == 404
     assert client.get('/legal/internal-notes').status_code == 404
@@ -997,7 +997,7 @@ def test_legal_footer_on_every_page(client):
         assert r.status_code == 200, path
         assert '/legal/privacy' in r.text, path
         assert '/legal/cookies' in r.text, path
-        assert '2026.09-v2' in r.text, path
+        assert '2026.11-v3' in r.text, path
         assert r.text.count('<main') == 1, path
 
 

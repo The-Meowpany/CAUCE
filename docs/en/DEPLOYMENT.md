@@ -160,7 +160,7 @@ LAN**. Caddy terminates TLS and is the only published port:
 ```bash
 cd deployment
 export CAUCE_DOMAIN=cauce.example.org      # hostname the nodes will use
-export ACME_EMAIL=ops@cauce.example.org    # lets Let's Encrypt warn you
+export ACME_EMAIL=you@example.org    # your own address; lets Let's Encrypt warn you
 docker compose up -d --build
 ```
 

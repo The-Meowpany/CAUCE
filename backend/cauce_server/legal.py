@@ -9,8 +9,8 @@ from .ratelimit import check_rate
 
 router = APIRouter()
 
-LEGAL_VERSION = "2026.09-v2"
-LEGAL_EFFECTIVE = "2026-09-25"
+LEGAL_VERSION = "2026.11-v3"
+LEGAL_EFFECTIVE = "2026-11-21"
 
 FOOTER_LABELS = {
     "en": {"legal": "Legal", "terms": "Terms", "privacy": "Privacy",
@@ -79,9 +79,10 @@ data (see Privacy for how). Which law governs and where disputes land:
 REQUIERE REVISIÓN LEGAL — a lawyer needs to look at this before anyone
 relies on it.</p>
 <h2>Contact</h2>
-<p>REQUIERE CONFIRMACIÓN: the operating entity, its address and a contact
-channel aren't published in this repository yet. Until they are, this
-section can't be completed honestly.</p>""",
+<p>The project has no dedicated e-mail address. Reach any active and
+recognized member of the organization (<a href="https://github.com/The-Meowpany">https://github.com/The-Meowpany</a>), who
+will route the request. REQUIERE CONFIRMACIÓN: the operating entity and
+its address aren't published in this repository yet.</p>""",
         },
         "es": {
             "title": "Términos de uso",
@@ -115,9 +116,11 @@ significa decomisionar tu nodo, o pedir al operador la purga de tus datos
 REQUIERE REVISIÓN LEGAL — un abogado tiene que mirar esto antes de que
 alguien se apoye en ello.</p>
 <h2>Contacto</h2>
-<p>REQUIERE CONFIRMACIÓN: la entidad operadora, su domicilio y un canal de
-contacto aún no están publicados en este repositorio. Hasta entonces, esta
-sección no puede completarse honestamente.</p>""",
+<p>El proyecto no tiene una dirección de correo propia. Comunicate con
+cualquier miembro activo y reconocido de la organización
+(<a href="https://github.com/The-Meowpany">https://github.com/The-Meowpany</a>), que va a derivar el pedido. REQUIERE
+CONFIRMACIÓN: la entidad operadora y su domicilio aún no están publicados
+en este repositorio.</p>""",
         },
     },
     "privacy": {
@@ -133,10 +136,11 @@ not assumed. Mentions of Uruguay's Law 18.331 and Decree 414/009 are
 context, not a claim: whether and how they apply to your deployment is
 something a lawyer has to determine. REQUIERE REVISIÓN LEGAL.</p>
 <h2>Who's responsible</h2>
-<p>REQUIERE CONFIRMACIÓN: nobody has published the operating entity and a
-contact channel in this repository yet (finding BUSINESS INFORMATION REQUIRED).
-Until that exists, treat this section as the project's most
-important blank space.</p>
+<p>REQUIERE CONFIRMACIÓN: nobody has published the operating entity in
+this repository yet (finding BUSINESS INFORMATION REQUIRED). Until that
+exists, requests go to any active and recognized member of the
+organization (<a href="https://github.com/The-Meowpany">https://github.com/The-Meowpany</a>); the project has no dedicated
+e-mail address.</p>
 <h2>What we hold</h2>
 <p><strong>Device telemetry</strong> — node and sensor ids, sequence,
 timestamp, variable, value, unit, quality. It's the whole point of the
@@ -167,8 +171,9 @@ so, and so do we.</p>
 rights, among others. Here's the honest mapping: read or export everything
 through the open API (<tt>/v1/nodes/{id}/measurements</tt>,
 <tt>/v1/export-all.csv</tt>) — that part works today, no permission
-needed. Rectification or suppression go through REQUIERE CONFIRMACIÓN (we
-need a contact channel first). Deleting provisioned-device records runs
+needed. Rectification or suppression: ask any active and recognized
+member of the organization, who will route it to whoever operates the
+central. Deleting provisioned-device records runs
 through the retention endpoint; copies living on a node need hands on the
 device.</p>
 <h2>Changes</h2>
@@ -185,10 +190,11 @@ de Uruguay son contexto, no una afirmación: si aplican y cómo a tu
 despliegue lo tiene que determinar un abogado. REQUIERE REVISIÓN
 LEGAL.</p>
 <h2>Quién responde</h2>
-<p>REQUIERE CONFIRMACIÓN: nadie publicó aún la entidad operadora ni un
-canal de contacto en este repositorio (finding BUSINESS INFORMATION
-REQUIRED). Hasta que exista, tratá esta sección como el espacio en blanco
-más importante del proyecto.</p>
+<p>REQUIERE CONFIRMACIÓN: nadie publicó aún la entidad operadora en este
+repositorio (finding BUSINESS INFORMATION REQUIRED). Mientras tanto, los
+pedidos van a cualquier miembro activo y reconocido de la organización
+(<a href="https://github.com/The-Meowpany">https://github.com/The-Meowpany</a>); el proyecto no tiene una dirección de
+correo propia.</p>
 <h2>Qué guardamos</h2>
 <p><strong>Telemetría de dispositivos</strong> — ids de nodo y sensor,
 secuencia, timestamp, variable, valor, unidad, calidad. Es todo el punto
@@ -221,8 +227,8 @@ docs lo dicen, y nosotros también.</p>
 actualización y supresión, entre otros. El mapeo honesto: leer o exportar
 todo vía la API abierta (<tt>/v1/nodes/{id}/measurements</tt>,
 <tt>/v1/export-all.csv</tt>) — eso anda hoy, sin permiso. Rectificación o
-supresión van por REQUIERE CONFIRMACIÓN (primero hace falta un canal de
-contacto). Borrar records de dispositivos provisionados corre por el
+supresión: pedila a cualquier miembro activo y reconocido de la
+organización, que la deriva a quien opere el central. Borrar records de dispositivos provisionados corre por el
 endpoint de retención; las copias que viven en un nodo necesitan manos
 sobre el dispositivo.</p>
 <h2>Cambios</h2>
