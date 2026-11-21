@@ -16,11 +16,11 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 |---|---|---|---|---|
 | air_temperature, relative_humidity, pressure | BME280 | I2C 0x76/0x77 | always on | `Bme280Driver` |
 | illuminance | BH1750 | I2C 0x23 | `light_enabled` | `Bh1750Driver` |
-| pm1, pm2_5, pm10 | Plantower PMS5003 (pilot) | UART1 RX GPIO2, 9600 baud | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
-| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (alternative) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
+| pm1, pm2_5, pm10 | Plantower PMS5003 (fallback) | UART1 RX GPIO2, 9600 baud | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
+| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (pilot) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baud | `co2_enabled` | `Mhz19Driver` |
-| uv_index | Lite-On LTR390 (pilot) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternative) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (fallback) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (pilot) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | cup anemometer (reed/Hall) | GPIO4, falling edge | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | resistor-ladder vane, 10k pull-up | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -159,14 +159,14 @@ centrally by `time-reconstruct`.
 ## Power
 
 The pilot station runs from a 20 W panel, a 12 V 7 Ah battery and a 10 A charge controller,
-with a DC-DC stage for 5 V (PMS5003, MH-Z19C) and 3.3 V. These are starting values, not a proven
+with a DC-DC stage for 5 V (SPS30, MH-Z19C) and 3.3 V. These are starting values, not a proven
 autonomy: the 14-day energy balance in `PILOT_SPEC.md` decides. The battery divider
 (`battery_divider_ratio`, 100k/22k by default) feeds `battery_voltage`, whose default valid
 range covers both a LiPo cell and a 12 V pack.
 
 ## Bill of materials (per node)
 
-The budget document of the pilot carries the priced BOM (about USD 255 per complete station);
+The budget document of the pilot carries the priced BOM (about USD 340 per complete station);
 this table lists the parts and the reason for each choice.
 
 | Subsystem | Part | Why this one |
@@ -174,9 +174,9 @@ this table lists the parts and the reason for each choice.
 | MCU | ESP32-WROOM-32, 4 MB | the firmware's target (`esp32dev`) |
 | Radio | SX1276/RFM95W 915 MHz + antenna | matches the existing driver |
 | T/RH/P | BME280 | reference sensor, driver since v0 |
-| PM | PMS5003 | PM1, PM2.5, PM10 at a sixth of an SPS30 |
+| PM | SPS30 | PM4 as well, and a sensor built for long outdoor service; the PMS5003 is the cheap fallback |
 | CO2 | MH-Z19C | NDIR, not an estimate |
-| UV | LTR390 | UV index; in production, unlike the VEML6075 |
+| UV | VEML6075 | separate UVA and UVB; discontinued, so the LTR390 is the fallback |
 | Light / irradiance | BH1750 + BPW34 | lux and relative W/m2 are different quantities |
 | Wind / rain | Misol cup anemometer, vane, tipping bucket | one kit, validated on the prototype before buying the rest |
 | Soil | capacitive probe, hand-made gypsum block, DS18B20 | moisture, suction and temperature |

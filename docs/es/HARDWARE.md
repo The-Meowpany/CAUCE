@@ -17,11 +17,11 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 |---|---|---|---|---|
 | air_temperature, relative_humidity, pressure | BME280 | I2C 0x76/0x77 | siempre activo | `Bme280Driver` |
 | illuminance | BH1750 | I2C 0x23 | `light_enabled` | `Bh1750Driver` |
-| pm1, pm2_5, pm10 | Plantower PMS5003 (piloto) | UART1 RX GPIO2, 9600 baudios | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
-| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (alternativa) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
+| pm1, pm2_5, pm10 | Plantower PMS5003 (alternativa) | UART1 RX GPIO2, 9600 baudios | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
+| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (piloto) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baudios | `co2_enabled` | `Mhz19Driver` |
-| uv_index | Lite-On LTR390 (piloto) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternativa) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (alternativa) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (piloto) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | anemómetro de cazoletas (reed/Hall) | GPIO4, flanco de bajada | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | veleta de escalera de resistencias, pull-up 10k | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -166,14 +166,14 @@ una sincronización completa. Los registros tomados antes de cualquier fuente co
 ## Energía
 
 La estación piloto funciona con un panel de 20 W, una batería de 12 V 7 Ah y un controlador de
-carga de 10 A, con una etapa DC-DC para 5 V (PMS5003, MH-Z19C) y 3,3 V. Son valores de partida,
+carga de 10 A, con una etapa DC-DC para 5 V (SPS30, MH-Z19C) y 3,3 V. Son valores de partida,
 no una autonomía demostrada: decide el balance energético de 14 días de `PILOT_SPEC.md`. El
 divisor de batería (`battery_divider_ratio`, 100k/22k por defecto) alimenta `battery_voltage`,
 cuyo rango válido por defecto cubre tanto una celda LiPo como una batería de 12 V.
 
 ## Lista de materiales (por nodo)
 
-El documento de presupuesto del piloto lleva el BOM con precios (unos USD 255 por estación
+El documento de presupuesto del piloto lleva el BOM con precios (unos USD 340 por estación
 completa); esta tabla lista los componentes y el motivo de cada elección.
 
 | Subsistema | Componente | Por qué este |
@@ -181,9 +181,9 @@ completa); esta tabla lista los componentes y el motivo de cada elección.
 | MCU | ESP32-WROOM-32, 4 MB | el target del firmware (`esp32dev`) |
 | Radio | SX1276/RFM95W 915 MHz + antena | coincide con el driver existente |
 | T/HR/P | BME280 | sensor de referencia, con driver desde v0 |
-| PM | PMS5003 | PM1, PM2.5, PM10 a un sexto del precio de un SPS30 |
+| PM | SPS30 | también PM4, y un sensor hecho para uso prolongado a la intemperie; el PMS5003 es la alternativa barata |
 | CO2 | MH-Z19C | NDIR, no una estimación |
-| UV | LTR390 | índice UV; en producción, a diferencia del VEML6075 |
+| UV | VEML6075 | UVA y UVB por separado; discontinuado, así que el LTR390 es la alternativa |
 | Luz / irradiancia | BH1750 + BPW34 | lux y W/m2 relativos son magnitudes distintas |
 | Viento / lluvia | anemómetro, veleta y balancín Misol | un kit, validado en el prototipo antes de comprar el resto |
 | Suelo | sonda capacitiva, bloque de yeso artesanal, DS18B20 | humedad, succión y temperatura |

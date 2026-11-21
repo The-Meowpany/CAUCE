@@ -78,9 +78,9 @@ earn its wording with node density first.
 ESP32-WROOM-32 + RFM95W (SX1276) at 915 MHz (AU915, the Uruguayan band) ·
 BME280 (temperature, humidity, pressure) · BH1750 (illuminance — lux, not
 solar irradiance) · BPW34 photodiode with transimpedance stage (relative
-solar irradiance) · PMS5003 (PM1, PM2.5, PM10) · MH-Z19C (NDIR CO₂,
-automatic baseline correction off, zeroed at co-location) · LTR390 (UV
-index) · AS3935 (lightning count and distance) · Misol cup anemometer, wind
+solar irradiance) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C (NDIR CO₂,
+automatic baseline correction off, zeroed at co-location) · VEML6075 (UVA,
+UVB, UV index) · AS3935 (lightning count and distance) · Misol cup anemometer, wind
 vane and tipping-bucket rain gauge · capacitive soil moisture probe,
 hand-made gypsum block (soil water potential, read with alternating
 polarity through an MCP23017 expander) and DS18B20 (soil temperature) ·
@@ -88,11 +88,13 @@ leaf wetness board · DS3231 (±2 ppm; NTP > DS3231 > internal hierarchy) ·
 microSD 32 GB (CSV archive) · 20 W panel, 12 V 7 Ah battery, PWM charge
 controller, DC-DC, fuse, TVS · weatherproof box with cable glands · 915 MHz
 antenna · commercial ABS radiation shield + mast (2 m installation
-protocol, WMO practice). 21 variables per station.
+protocol, WMO practice). 24 variables per station. A fifth identical
+station is bought as bench prototype, workshop demo and whole-station spare.
 
-The SPS30 and VEML6075 cost four to six times more for PM4 and a separate
-UVA/UVB reading; the firmware still drives them (`pm_pms5003=0`,
-`uv_ltr390=0`) for a deployment that needs those.
+The PMS5003 and LTR390 are the cheaper fallbacks (`pm_pms5003=1`,
+`uv_ltr390=1`): they drop PM4 and the separate UVA/UVB reading. The
+VEML6075 is discontinued by Vishay and still sold as modules; if it runs
+out, the LTR390 replaces it without other changes.
 
 Every sensor has a driver in the firmware and a config key that enables
 it; the pin map is in `HARDWARE.md`. Drivers are host-tested against
@@ -103,27 +105,25 @@ scripted buses and have not yet run on a board.
 Lowest prices found on 2026-11-21: AliExpress shipping to Uruguay for the
 electronics, local stores for what is heavy or cheaper locally (battery,
 panel, pipe, box, antenna). At the BROU selling rate of UYU 41.95 plus a
-10 % allowance for price changes: USD 264.77 per station, itemised in the
+10 % allowance for price changes: USD 341.75 per station, itemised in the
 budget document.
 
 ## 6. Budget (USD 4,000 available)
 
 | Item | USD |
 |---|---|
-| 4 identical stations | 1,059.08 |
+| 4 identical stations + 1 spare station | 1,708.75 |
 | Central node: gateway and server (Orange Pi Zero 3) | 79.70 |
 | Tools | 132.03 |
 | Workshops: printer, certificate paper, sticker vinyl | 205.40 |
-| Installation and import (taxes reserved) | 542.42 |
-| Spares | 49.94 |
-| Team travel and subsistence (10 % of the funding) | 400.00 |
-| Contingency (5 %) | 130.00 |
-| **Project total** | **2,598.57** |
-| Not used of the USD 4,000 | 1,401.43 |
+| Installation and import (taxes reserved) | 824.94 |
+| Team travel and subsistence (15 % of the funding) | 600.00 |
+| Contingency (the rest of the funding) | 449.18 |
+| **Project total** | **4,000.00** |
 
 Workshops are open and free; participants are invited to join the
 project and its GitHub organisation, and get a certificate and project
-stickers. Import taxes (USD 387.42 under the single-payment regime of
+stickers. Import taxes (USD 669.94 under the single-payment regime of
 Decreto 50/2026, 60 % of each parcel, at least USD 20) are requested from
 the Intendencia de Canelones and reserved in the budget meanwhile. There
 is no 3D printer: a commercial radiation shield costs less than printing

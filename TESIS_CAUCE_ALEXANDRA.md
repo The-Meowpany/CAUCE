@@ -443,7 +443,7 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Energy | Deep sleep implemented and host-tested but off by default until bench power measurement; Wi-Fi always-on in the default profile → high consumption | STATUS.md |
 | Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
 | Maintainability | 1428 automated tests (575 firmware, 853 backend); CI 5 jobs; reproducible docs | repository |
-| Cost | Minimal node (BME280 only) 13–32 USD; complete pilot station ≈265 USD with 21 variables at the lowest prices found for Uruguay (2026) | HARDWARE.md, pilot budget |
+| Cost | Minimal node (BME280 only) 13–32 USD; complete pilot station ≈340 USD with 24 variables at the lowest prices found for Uruguay (2026) | HARDWARE.md, pilot budget |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
 

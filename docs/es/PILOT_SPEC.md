@@ -79,9 +79,9 @@ primero.
 ESP32-WROOM-32 + RFM95W (SX1276) a 915 MHz (AU915, la banda de Uruguay) ·
 BME280 (temperatura, humedad, presión) · BH1750 (iluminancia — lux, no
 irradiancia solar) · fotodiodo BPW34 con etapa de transimpedancia
-(irradiancia solar relativa) · PMS5003 (PM1, PM2.5, PM10) · MH-Z19C (CO₂
+(irradiancia solar relativa) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C (CO₂
 NDIR, corrección automática de línea base desactivada, cero en
-co-localización) · LTR390 (índice UV) · AS3935 (conteo y distancia de
+co-localización) · VEML6075 (UVA, UVB, índice UV) · AS3935 (conteo y distancia de
 descargas) · anemómetro de cazoletas, veleta y pluviómetro de balancín
 Misol · sonda capacitiva de humedad de suelo, bloque de yeso artesanal
 (potencial hídrico, leído con polaridad alterna mediante un expansor
@@ -90,11 +90,14 @@ DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD 32 GB (archivo
 CSV) · panel 20 W, batería 12 V 7 Ah, controlador de carga PWM, DC-DC,
 fusible, TVS · caja estanca con prensaestopas · antena 915 MHz · escudo de
 radiación comercial de ABS + mástil (protocolo de instalación a 2 m,
-práctica OMM). 21 variables por estación.
+práctica OMM). 24 variables por estación. Se compra una quinta estación
+idéntica como prototipo de banco, demostración en los talleres y repuesto
+completo.
 
-El SPS30 y el VEML6075 cuestan de cuatro a seis veces más a cambio de PM4 y
-de separar UVA y UVB; el firmware los sigue manejando (`pm_pms5003=0`,
-`uv_ltr390=0`) para un despliegue que necesite esos datos.
+El PMS5003 y el LTR390 son las alternativas baratas (`pm_pms5003=1`,
+`uv_ltr390=1`): pierden PM4 y la separación entre UVA y UVB. Vishay
+discontinuó el VEML6075, que se sigue vendiendo en módulos; si se agota,
+el LTR390 lo reemplaza sin otros cambios.
 
 Cada sensor tiene driver en el firmware y una clave de config que lo
 habilita; el mapa de pines está en `HARDWARE.md`. Los drivers están
@@ -106,28 +109,26 @@ Menores precios encontrados el 21/11/2026: AliExpress con envío a Uruguay
 para la electrónica, comercios locales para lo pesado o lo que localmente
 es más barato (batería, panel, caño, caja, antena). Al tipo de cambio
 vendedor del BROU de $U 41,95 más una previsión del 10 % por variación de
-precios: USD 264,77 por estación, con el detalle en el documento de
+precios: USD 341,75 por estación, con el detalle en el documento de
 presupuesto.
 
 ## 6. Presupuesto (USD 4.000 disponibles)
 
 | Concepto | USD |
 |---|---|
-| 4 estaciones idénticas | 1.059,08 |
+| 4 estaciones idénticas + 1 de repuesto | 1.708,75 |
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
 | Herramientas | 132,03 |
 | Talleres: impresora, opalina para certificados, vinilo para stickers | 205,40 |
-| Instalación e importación (tributos reservados) | 542,42 |
-| Repuestos | 49,94 |
-| Viáticos del equipo (10 % del financiamiento) | 400,00 |
-| Imprevistos (5 %) | 130,00 |
-| **Total del proyecto** | **2.598,57** |
-| No utilizado de los USD 4.000 | 1.401,43 |
+| Instalación e importación (tributos reservados) | 824,94 |
+| Viáticos del equipo (15 % del financiamiento) | 600,00 |
+| Imprevistos (el resto del financiamiento) | 449,18 |
+| **Total del proyecto** | **4.000,00** |
 
 Los talleres son abiertos y gratuitos; a quienes participan se los invita
 a sumarse al proyecto y a su organización en GitHub, y reciben un
 certificado y stickers del proyecto. Los tributos de importación (USD
-387,42 por el régimen de prestación única del Decreto 50/2026, 60 % de
+669,94 por el régimen de prestación única del Decreto 50/2026, 60 % de
 cada envío, mínimo USD 20) se solicitan a la Intendencia de Canelones y,
 mientras tanto, quedan reservados en el presupuesto. No hay impresora 3D:
 un escudo de radiación comercial cuesta menos que imprimirlo. Los bloques
