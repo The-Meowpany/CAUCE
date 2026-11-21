@@ -9,12 +9,12 @@ Anexo técnico. La solicitud del fondo lleva únicamente Meta y Resultado
 ambientales autónomas capaces de generar información hiperlocal y
 comparable sobre condiciones microclimáticas en Canelones.
 
-**Resultado:** cinco estaciones calibradas y operativas, generando
+**Resultado:** ocho estaciones calibradas y operativas, generando
 registros ambientales durante el período piloto.
 
 ## 2. Alcance congelado
 
-5 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
+8 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
 de datos · 1 esquema de calibración · 1 sistema de almacenamiento local ·
 1 enlace LoRa punto a punto · 1 API central · 1 visor microclimático.
 
@@ -74,23 +74,27 @@ volumétrico 3D está descartado por decisión de diseño. Cualquier cosa
 más grandilocuente tiene que ganarse la redacción con densidad de nodos
 primero.
 
-## 4. Nodo (×5 idénticos)
+## 4. Nodo (×8 idénticos)
 
-ESP32-WROOM-32 + SX1276/RFM95W a 915 MHz (AU915, la banda de Uruguay) ·
+ESP32-WROOM-32 + RFM95W (SX1276) a 915 MHz (AU915, la banda de Uruguay) ·
 BME280 (temperatura, humedad, presión) · BH1750 (iluminancia — lux, no
 irradiancia solar) · fotodiodo BPW34 con etapa de transimpedancia
-(irradiancia solar relativa) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C (CO₂
+(irradiancia solar relativa) · PMS5003 (PM1, PM2.5, PM10) · MH-Z19C (CO₂
 NDIR, corrección automática de línea base desactivada, cero en
-co-localización) · VEML6075 (índice UV con UVA y UVB separados) · AS3935
-(conteo y distancia de descargas) · anemómetro de cazoletas, veleta y
-pluviómetro de balancín Misol · sonda capacitiva de humedad de suelo,
-bloque de yeso artesanal (potencial hídrico, leído con polaridad alterna
-mediante un expansor MCP23017) y DS18B20 (temperatura de suelo) · placa de
-mojado foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · tarjeta
-microSD 32 GB de videovigilancia (archivo CSV) · panel 20 W, batería 12 V
-7 Ah, controlador de carga PWM, DC-DC, fusible, TVS · caja estanca con
-prensaestopas · antena 915 MHz · escudo de radiación comercial de ABS +
-mástil (protocolo de instalación a 2 m, práctica OMM).
+co-localización) · LTR390 (índice UV) · AS3935 (conteo y distancia de
+descargas) · anemómetro de cazoletas, veleta y pluviómetro de balancín
+Misol · sonda capacitiva de humedad de suelo, bloque de yeso artesanal
+(potencial hídrico, leído con polaridad alterna mediante un expansor
+MCP23017) y DS18B20 (temperatura de suelo) · placa de mojado foliar ·
+DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD 32 GB (archivo
+CSV) · panel 20 W, batería 12 V 7 Ah, controlador de carga PWM, DC-DC,
+fusible, TVS · caja estanca con prensaestopas · antena 915 MHz · escudo de
+radiación comercial de ABS + mástil (protocolo de instalación a 2 m,
+práctica OMM). 21 variables por estación.
+
+El SPS30 y el VEML6075 cuestan de cuatro a seis veces más a cambio de PM4 y
+de separar UVA y UVB; el firmware los sigue manejando (`pm_pms5003=0`,
+`uv_ltr390=0`) para un despliegue que necesite esos datos.
 
 Cada sensor tiene driver en el firmware y una clave de config que lo
 habilita; el mapa de pines está en `HARDWARE.md`. Los drivers están
@@ -98,42 +102,42 @@ probados en host contra buses simulados y todavía no corrieron en placa.
 
 ## 5. Costo por estación
 
-Precios consultados en Uruguay el 21/11/2026 (Mercado Libre Uruguay y
-AliExpress con envío a Uruguay), al tipo de cambio vendedor del BROU de
-$U 41,95, más una previsión del 10 % por variación de precios hasta la
-compra: USD 429,73 por estación, con el detalle en el documento de
-presupuesto. A ese precio ocho estaciones no entran en el presupuesto;
-cinco idénticas sí, con reserva.
+Menores precios encontrados el 21/11/2026: AliExpress con envío a Uruguay
+para la electrónica, comercios locales para lo pesado o lo que localmente
+es más barato (batería, panel, caño, caja, antena). Al tipo de cambio
+vendedor del BROU de $U 41,95 más una previsión del 10 % por variación de
+precios: USD 260,22 por estación, con el detalle en el documento de
+presupuesto.
 
-## 6. Presupuesto (USD 4.000)
+## 6. Presupuesto (USD 4.000 disponibles)
 
 | Concepto | USD |
 |---|---|
-| 5 estaciones idénticas | 2.148,65 |
-| Gateway y servidor central | 252,22 |
-| Herramientas y banco de pruebas | 146,68 |
+| 8 estaciones idénticas | 2.081,76 |
+| Gateway y servidor central (Orange Pi Zero 3) | 79,70 |
+| Herramientas y banco de pruebas | 99,30 |
 | Calibración y co-localización | 30,00 |
-| Talleres y jornadas educativas | 479,27 |
-| Provisión de importación e instalación | 530,01 |
-| Repuestos críticos | 122,55 |
-| Contingencia de doble propósito | 290,62 |
-| **Total** | **4.000,00** |
+| Talleres y jornadas educativas | 259,27 |
+| Provisión de importación e instalación | 577,31 |
+| Repuestos críticos | 49,94 |
+| Contingencia de doble propósito | 230,00 |
+| **Total del proyecto** | **3.407,28** |
+| No utilizado de los USD 4.000 | 592,72 |
 
-La contingencia (7,3 %) tiene dos usos, en orden. Hasta cerrar la etapa 4
-(todo comprado e importado) cubre lo que termine costando más de lo
-previsto: precios por encima de la previsión, importación por encima de la
-provisión, una antena para un sitio al que no llega el gateway,
+La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
+etapa 4 (todo comprado e importado) cubre lo que termine costando más de
+lo previsto: precios por encima de la previsión, importación por encima de
+la provisión, una antena para un sitio al que no llega el gateway,
 componentes fallidos más allá de los repuestos. Lo que quede financia
 entonces, antes de la co-localización, la calibración trazable del
 instrumento de referencia del banco, propio del proyecto (o uno certificado
 si ese no admite certificación), que es lo que convierte la
-co-localización de consistencia relativa en sesgo absoluto; después, un
-segundo SPS30 de repuesto.
+co-localización de consistencia relativa en sesgo absoluto.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
 imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
 fabrican en los talleres. La provisión de importación es el 35 % de lo
-comprado en el exterior (unos USD 1.114). Sin línea de intervenciones
+comprado en el exterior (unos USD 1.364). Sin línea de intervenciones
 físicas: el proyecto genera evidencia para evaluar medidas, no las
 ejecuta.
 

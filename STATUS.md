@@ -3,7 +3,7 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (570 firmware + 853 backend tests, E2E green)
+## Implemented and verified (575 firmware + 853 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
 | **Dashboard behind the token**: with `CAUCE_API_TOKEN` set, every HTML page and `/v1/live` answer an HTTP Basic challenge and take the token as the password; a site-scoped token sees a filtered index and its own nodes and is refused on fleet-wide pages; `CAUCE_DASHBOARD_PUBLIC=1` reopens the pages only. A Basic credential authorises a write only with `X-Requested-With`, so the browser repeating it cross-site cannot be used for CSRF. The alerts page could not write at all with a token set, because its `fetch` calls sent no credential; it now can | 7 tests in `test_dashboard_auth.py` |

@@ -26,7 +26,7 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 570 tests en host (Unity)
+pio test -e native          # 575 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
@@ -117,7 +117,7 @@ Preferimos listarlas acá antes de que te las encuentres a la mala:
   reverse proxy adelante.
 - Los números del BME280 son grado datasheet. Nadie en este proyecto los
   verificó en campo, y la exactitud del sistema está sin medir.
-- Cinco nodos dispersos producen un campo interpolado suave, no
+- Ocho nodos dispersos producen un campo interpolado suave, no
   resolución a nivel de calle. El mapa dice su resolución efectiva en voz
   alta.
 - Los updates de firmware necesitan acceso físico en una placa provisionada
@@ -162,7 +162,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-570 firmware + 853 backend tests + build ESP32 + E2E = **1423 chequeos
+575 firmware + 853 backend tests + build ESP32 + E2E = **1428 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 

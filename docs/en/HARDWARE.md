@@ -6,7 +6,7 @@
 scripted buses (I2C, UART, ADC, 1-Wire) and the firmware cross-compiles for the ESP32, but none
 of it has been on a board. Datasheet figures are the manufacturers', not ours.
 
-## Pilot station (5 identical nodes)
+## Pilot station (8 identical nodes)
 
 Every sensor is optional and **off by default**: a probe is enabled with its config key only
 where it is fitted, and a node missing one keeps measuring everything else. A probe that is
@@ -16,9 +16,11 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 |---|---|---|---|---|
 | air_temperature, relative_humidity, pressure | BME280 | I2C 0x76/0x77 | always on | `Bme280Driver` |
 | illuminance | BH1750 | I2C 0x23 | `light_enabled` | `Bh1750Driver` |
-| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
+| pm1, pm2_5, pm10 | Plantower PMS5003 (pilot) | UART1 RX GPIO2, 9600 baud | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
+| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (alternative) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baud | `co2_enabled` | `Mhz19Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (pilot) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternative) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | cup anemometer (reed/Hall) | GPIO4, falling edge | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | resistor-ladder vane, 10k pull-up | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -49,10 +51,13 @@ Notes that change how the numbers may be read:
 - **CO2** comes only from the NDIR cell. The CCS811's "eCO2" is an estimate derived from VOC
   and is never published. Automatic baseline correction on the MH-Z19C is switched off at
   boot: calibration is the co-location procedure, not a background job.
-- **PM**: the SPS30 needs 30 s of fan time before its first frame; readings before that are
-  reported as initialising, not stored.
-- **UV**: the VEML6075 conversion uses Vishay's open-air coefficients. Behind a window or
-  diffuser they must be refitted.
+- **PM**: both sensors need 30 s of fan time before their first frame; readings before that
+  are reported as initialising, not stored. The PMS5003 reports its atmospheric values, not the
+  CF=1 ones calibrated for factory air. Its TX goes to GPIO2: use a board with no LED on that
+  pin, or remove it.
+- **UV**: the LTR390 runs at gain 18 and 20 bits, where its datasheet gives 2300 counts per UV
+  index; the VEML6075 uses Vishay's open-air coefficients. Behind a window or diffuser either
+  must be refitted.
 - **Lightning**: a strike is an interrupt, counted in the loop (never in the ISR). An interval
   with no strike reports a count of 0 and *no* distance - zero would mean "overhead".
 - **Irradiance** from a photodiode is relative until its gain is fitted against a pyranometer.
@@ -154,7 +159,7 @@ centrally by `time-reconstruct`.
 ## Power
 
 The pilot station runs from a 20 W panel, a 12 V 7 Ah battery and a 10 A charge controller,
-with a DC-DC stage for 5 V (SPS30, MH-Z19C) and 3.3 V. These are starting values, not a proven
+with a DC-DC stage for 5 V (PMS5003, MH-Z19C) and 3.3 V. These are starting values, not a proven
 autonomy: the 14-day energy balance in `PILOT_SPEC.md` decides. The battery divider
 (`battery_divider_ratio`, 100k/22k by default) feeds `battery_voltage`, whose default valid
 range covers both a LiPo cell and a 12 V pack.
@@ -169,9 +174,9 @@ this table lists the parts and the reason for each choice.
 | MCU | ESP32-WROOM-32, 4 MB | the firmware's target (`esp32dev`) |
 | Radio | SX1276/RFM95W 915 MHz + antenna | matches the existing driver |
 | T/RH/P | BME280 | reference sensor, driver since v0 |
-| PM | SPS30 | measures PM4 directly |
+| PM | PMS5003 | PM1, PM2.5, PM10 at a sixth of an SPS30 |
 | CO2 | MH-Z19C | NDIR, not an estimate |
-| UV | VEML6075 | separate UVA and UVB channels |
+| UV | LTR390 | UV index; in production, unlike the VEML6075 |
 | Light / irradiance | BH1750 + BPW34 | lux and relative W/m2 are different quantities |
 | Wind / rain | Misol cup anemometer, vane, tipping bucket | one kit, validated on the prototype before buying the rest |
 | Soil | capacitive probe, hand-made gypsum block, DS18B20 | moisture, suction and temperature |
@@ -210,7 +215,7 @@ Every other I2C part shares the same two wires; addresses do not collide.
   height works.
 - A radiation screen is mandatory if nodes are to be comparable at all. Same screen, same
   height, or don't compare.
-- The SPS30 and MH-Z19C need airflow but not rain: mount them in the screen's lower tier,
+- The PM sensor and the MH-Z19C need airflow but not rain: mount them in the screen's lower tier,
   inlet facing down.
 - Per node, write down: installation date/time, height, orientation, vane north offset,
   soil probe depth, dominant surrounding surface (context lives in `NodeConfig`).

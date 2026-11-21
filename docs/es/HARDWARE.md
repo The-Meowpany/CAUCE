@@ -6,7 +6,7 @@
 contra buses simulados (I2C, UART, ADC, 1-Wire) y el firmware compila para ESP32, pero nada de
 esto estuvo todavía en una placa. Las cifras de datasheet son del fabricante, no nuestras.
 
-## Estación piloto (5 nodos idénticos)
+## Estación piloto (8 nodos idénticos)
 
 Todos los sensores son opcionales y están **apagados por defecto**: un sensor se habilita con
 su clave de config solo donde está instalado, y un nodo al que le falta uno sigue midiendo todo
@@ -17,9 +17,11 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 |---|---|---|---|---|
 | air_temperature, relative_humidity, pressure | BME280 | I2C 0x76/0x77 | siempre activo | `Bme280Driver` |
 | illuminance | BH1750 | I2C 0x23 | `light_enabled` | `Bh1750Driver` |
-| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
+| pm1, pm2_5, pm10 | Plantower PMS5003 (piloto) | UART1 RX GPIO2, 9600 baudios | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
+| pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (alternativa) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baudios | `co2_enabled` | `Mhz19Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (piloto) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternativa) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | anemómetro de cazoletas (reed/Hall) | GPIO4, flanco de bajada | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | veleta de escalera de resistencias, pull-up 10k | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -52,10 +54,13 @@ Notas que cambian cómo se pueden leer los números:
   VOC y nunca se publica. La corrección automática de línea base del MH-Z19C se apaga al
   arrancar: la calibración es el procedimiento de co-localización, no un proceso en segundo
   plano.
-- **PM**: el SPS30 necesita 30 s de ventilador antes de su primer frame; las lecturas
-  anteriores se reportan como "inicializando" y no se guardan.
-- **UV**: la conversión del VEML6075 usa los coeficientes de Vishay para sensor al aire
-  libre. Detrás de una ventana o difusor hay que reajustarlos.
+- **PM**: los dos sensores necesitan 30 s de ventilador antes de su primer frame; las lecturas
+  anteriores se reportan como "inicializando" y no se guardan. El PMS5003 reporta sus valores
+  atmosféricos, no los CF=1 calibrados para aire de fábrica. Su TX va al GPIO2: usar una placa
+  sin LED en ese pin, o quitárselo.
+- **UV**: el LTR390 trabaja con ganancia 18 y 20 bits, donde su hoja de datos da 2300 cuentas
+  por unidad de índice UV; el VEML6075 usa los coeficientes de Vishay para sensor al aire
+  libre. Detrás de una ventana o difusor hay que reajustar cualquiera de los dos.
 - **Rayos**: una descarga es una interrupción, contada en el loop (nunca en la ISR). Un
   intervalo sin descargas reporta 0 descargas y *ninguna* distancia; cero significaría "encima".
 - La **irradiancia** de un fotodiodo es relativa hasta ajustar su ganancia contra un
@@ -161,7 +166,7 @@ una sincronización completa. Los registros tomados antes de cualquier fuente co
 ## Energía
 
 La estación piloto funciona con un panel de 20 W, una batería de 12 V 7 Ah y un controlador de
-carga de 10 A, con una etapa DC-DC para 5 V (SPS30, MH-Z19C) y 3,3 V. Son valores de partida,
+carga de 10 A, con una etapa DC-DC para 5 V (PMS5003, MH-Z19C) y 3,3 V. Son valores de partida,
 no una autonomía demostrada: decide el balance energético de 14 días de `PILOT_SPEC.md`. El
 divisor de batería (`battery_divider_ratio`, 100k/22k por defecto) alimenta `battery_voltage`,
 cuyo rango válido por defecto cubre tanto una celda LiPo como una batería de 12 V.
@@ -176,9 +181,9 @@ completa); esta tabla lista los componentes y el motivo de cada elección.
 | MCU | ESP32-WROOM-32, 4 MB | el target del firmware (`esp32dev`) |
 | Radio | SX1276/RFM95W 915 MHz + antena | coincide con el driver existente |
 | T/HR/P | BME280 | sensor de referencia, con driver desde v0 |
-| PM | SPS30 | mide PM4 directamente |
+| PM | PMS5003 | PM1, PM2.5, PM10 a un sexto del precio de un SPS30 |
 | CO2 | MH-Z19C | NDIR, no una estimación |
-| UV | VEML6075 | canales UVA y UVB separados |
+| UV | LTR390 | índice UV; en producción, a diferencia del VEML6075 |
 | Luz / irradiancia | BH1750 + BPW34 | lux y W/m2 relativos son magnitudes distintas |
 | Viento / lluvia | anemómetro, veleta y balancín Misol | un kit, validado en el prototipo antes de comprar el resto |
 | Suelo | sonda capacitiva, bloque de yeso artesanal, DS18B20 | humedad, succión y temperatura |
@@ -217,7 +222,7 @@ Los demás componentes I2C comparten los mismos dos cables; las direcciones no c
   de altura anda.
 - La pantalla de radiación es obligatoria si querés que los nodos sean comparables siquiera.
   Misma pantalla, misma altura, o no compares.
-- El SPS30 y el MH-Z19C necesitan flujo de aire pero no lluvia: van en el nivel inferior de la
+- El sensor de PM y el MH-Z19C necesitan flujo de aire pero no lluvia: van en el nivel inferior de la
   pantalla, con la entrada hacia abajo.
 - Por nodo, anotar: fecha/hora de instalación, altura, orientación, desvío de norte de la
   veleta, profundidad de las sondas de suelo, superficie dominante del entorno (el contexto
