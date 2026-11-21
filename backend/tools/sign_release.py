@@ -23,6 +23,10 @@ import sys
 from pathlib import Path
 
 SEED_BYTES = 32
+# The node parses the manifest into fixed buffers (OtaRelease in OtaInterfaces.h). A release that
+# does not fit is refused on every node, so it is refused here, before anyone signs it.
+MAX_VERSION_CHARS = 15
+MAX_URL_CHARS = 127
 
 
 def canonical(release: dict) -> str:
@@ -44,10 +48,30 @@ def public_key_hex(seed: bytes) -> str:
     ).hex()
 
 
-def sign(release: dict, seed: bytes) -> str:
+def release_problem(release: dict) -> str | None:
+    """Why a node would refuse this release before checking its signature, or None."""
     for field in ("version", "sha256", "url", "total_size"):
         if field not in release:
-            raise SystemExit(f"release is missing {field!r}")
+            return f"release is missing {field!r}"
+    version, sha256, url, size = (release["version"], release["sha256"], release["url"],
+                                  release["total_size"])
+    if not isinstance(version, str) or not 0 < len(version) <= MAX_VERSION_CHARS:
+        return f"version must be 1-{MAX_VERSION_CHARS} characters"
+    if not isinstance(sha256, str) or len(sha256) != 64 or any(
+            c not in "0123456789abcdefABCDEF" for c in sha256):
+        return "sha256 must be 64 hex characters"
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")) or \
+            len(url) > MAX_URL_CHARS:
+        return f"url must be http(s) and at most {MAX_URL_CHARS} characters"
+    if not isinstance(size, int) or isinstance(size, bool) or not 0 < size <= 0xFFFFFFFF:
+        return "total_size must be a positive 32-bit integer"
+    return None
+
+
+def sign(release: dict, seed: bytes) -> str:
+    problem = release_problem(release)
+    if problem:
+        raise SystemExit(problem)
     return _private_key(seed).sign(canonical(release).encode("utf-8")).hex()
 
 
@@ -55,12 +79,15 @@ def keygen(out: Path) -> dict:
     seed = os.urandom(SEED_BYTES)
     record = {"algorithm": "ed25519", "seed_hex": seed.hex(),
               "public_key_hex": public_key_hex(seed)}
-    out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    # Created 0600 and exclusively in one call: writing first and restricting afterwards leaves
+    # the seed readable by everyone for that moment, and a second keygen racing this one would
+    # otherwise overwrite a key that may already be in use.
     try:
-        os.chmod(out, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        print(f"WARNING: {out} could not be restricted to 0600 on this filesystem",
-              file=sys.stderr)
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR)
+    except FileExistsError:
+        raise SystemExit(f"{out} exists; refusing to overwrite a release key") from None
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, indent=2) + "\n")
     return record
 
 
@@ -83,8 +110,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "keygen":
-        if args.out.exists():
-            raise SystemExit(f"{args.out} exists; refusing to overwrite a release key")
         record = keygen(args.out)
         print(f"wrote {args.out} (mode 600); keep it off the central")
         print(f"ota_public_key={record['public_key_hex']}")

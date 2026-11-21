@@ -33,6 +33,46 @@ def test_the_release_tool_matches_the_firmware_known_answer():
     assert sign_release.sign(dict(VECTOR), RFC8032_TEST1_SEED) == VECTOR_SIGNATURE
 
 
+@pytest.mark.parametrize("field,value", [
+    ("version", "1." + "0" * 14),
+    ("url", "http://central.local/" + "f" * 107),
+    ("url", "ftp://central.local/fw.bin"),
+    ("sha256", "ab" * 31),
+    ("total_size", 0),
+    ("total_size", 2 ** 32),
+])
+def test_a_release_no_node_can_parse_is_not_signed(field, value):
+    release = dict(VECTOR, **{field: value})
+    assert sign_release.release_problem(release)
+    with pytest.raises(SystemExit):
+        sign_release.sign(release, RFC8032_TEST1_SEED)
+    assert sign_release.release_problem(dict(VECTOR)) is None
+
+
+def test_keygen_never_overwrites(tmp_path):
+    key_path = tmp_path / "release-key.json"
+    assert sign_release.main(["keygen", "--out", str(key_path)]) == 0
+    before = key_path.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit):
+        sign_release.main(["keygen", "--out", str(key_path)])
+    assert key_path.read_text(encoding="utf-8") == before
+
+
+def test_the_central_refuses_to_serve_a_release_nodes_cannot_parse(client, tmp_path,  # noqa: F811
+                                                                   monkeypatch):
+    from cauce_server.config import settings
+
+    path = tmp_path / "latest.json"
+    path.write_text(json.dumps(dict(VECTOR, url="http://central.local/" + "f" * 107)),
+                    encoding="utf-8")
+    monkeypatch.setattr(settings, "ota_releases_path", str(path))
+    response = client.get("/v1/ota/manifest")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "ota_manifest_exceeds_node_limits"
+    path.write_text(json.dumps(VECTOR), encoding="utf-8")
+    assert client.get("/v1/ota/manifest").status_code == 200
+
+
 def test_keygen_and_sign_round_trip(tmp_path):
     key_path = tmp_path / "release-key.json"
     release_path = tmp_path / "latest.json"

@@ -658,6 +658,12 @@ x_cauce_node: str | None = Header(default=None),
     }
 
 
+# OtaRelease in firmware/lib/cauce_app/include/cauce/app/OtaInterfaces.h: char version[16] and
+# char url[128], each with its terminator.
+OTA_MAX_VERSION_CHARS = 15
+OTA_MAX_URL_CHARS = 127
+
+
 @router.get("/ota/manifest")
 def ota_manifest(
     request: Request,
@@ -696,6 +702,14 @@ def ota_manifest(
             or not isinstance(url, str) or not url
             or not isinstance(total_size, int) or total_size <= 0):
         raise HTTPException(status_code=503, detail="ota_manifest_invalid")
+    # The node's parser (OtaJson.cpp, into the fixed buffers of OtaRelease) refuses anything
+    # past these bounds. Serving such a release anyway would leave every node failing its check
+    # with a message about the manifest, never about the size of one field.
+    if (len(version) > OTA_MAX_VERSION_CHARS or len(url) > OTA_MAX_URL_CHARS
+            or not url.startswith(("http://", "https://"))
+            or len(sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in sha256)
+            or total_size > 0xFFFFFFFF):
+        raise HTTPException(status_code=503, detail="ota_manifest_exceeds_node_limits")
     signature = None
     if node_id:
         rows = query(
