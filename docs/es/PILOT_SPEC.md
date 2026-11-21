@@ -85,7 +85,7 @@ co-localización) · VEML6075 (índice UV con UVA y UVB separados) ·
 AS3935 (conteo y distancia de descargas) · anemómetro de cazoletas +
 veleta de resistencias + pluviómetro de balancín (un kit validado antes
 de comprar siete) · sonda capacitiva de humedad de suelo, bloque de yeso
-(potencial hídrico) y DS18B20 (temperatura de suelo) · sensor de mojado
+(potencial hídrico, leído con polaridad alterna mediante un expansor MCP23008) y DS18B20 (temperatura de suelo) · sensor de mojado
 foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD
 16 GB high-endurance (archivo CSV) · panel 20 W, batería
 12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS · caja IP65 con
@@ -100,16 +100,16 @@ probados en host contra buses simulados y todavía no corrieron en placa.
 
 ESP32 3 · SX1276 + antena 7 · BME280 7 · SPS30 36,12 · MH-Z19C 24,99 ·
 VEML6075 6 · BH1750 1,50 · etapa BPW34 3 · kit viento/lluvia 34 · sondas
-de suelo 9 · mojado foliar 3 · AS3935 12 · DS3231 3 · microSD 6 · panel
+de suelo 9 · expansor de excitación del yeso 1,50 · mojado foliar 3 · AS3935 12 · DS3231 3 · microSD 6 · panel
 28 · batería 27 · controlador de carga 7,64 · regulación y protección 5 ·
 caja 7,39 · pantalla impresa 4 · PCB y conectores 12 · mástil 8.
-Total USD 254,64.
+Total USD 256,14.
 
 ## 6. Presupuesto (USD 4.000)
 
 | Concepto | USD |
 |---|---|
-| 8 estaciones completas | 2.037,12 |
+| 8 estaciones completas | 2.049,12 |
 | Gateway LoRa punto a punto (ESP32 + SX1276) | 60,00 |
 | Servidor central | 90,00 |
 | Herramientas, fabricación y banco de pruebas | 603,00 |
@@ -118,11 +118,11 @@ Total USD 254,64.
 | Instalación y logística local | 140,00 |
 | Transporte internacional e importación (provisión) | 400,00 |
 | Repuestos críticos | 78,11 |
-| Contingencia | 81,77 |
+| Contingencia | 69,77 |
 | **Total** | **4.000,00** |
 
 La provisión de importación cubre un costo efectivo de hasta ~30 % sobre
-unos USD 1.356 de mercadería importada; el documento de presupuesto
+unos USD 1.368 de mercadería importada; el documento de presupuesto
 lista las palancas de ajuste si la cifra real es mayor. Sin línea de
 intervenciones físicas: el proyecto genera evidencia para evaluar
 medidas, no las ejecuta.

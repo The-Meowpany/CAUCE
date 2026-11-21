@@ -40,6 +40,7 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/v1/analytics/period-compare` | Same node, two windows |
 | GET | `/v1/analytics/heat-events` | How long it stayed above a threshold |
 | GET | `/v1/analytics/summary-fast` | Same stats from materialized hourly aggregates (O(buckets)) |
+| GET | `/v1/analytics/series` | One row per materialized bucket for charts; `granularity=15min|hourly|daily`, calibrated, gaps left absent, capped at 5000 buckets (`truncated`) |
 | POST | `/v1/nodes/{id}/time-reconstruct` | Backfills timestamps of leading time-uncertain records from the first anchor + median interval; flags rows (`ts_reconstructed=1`) and states the margin-of-error caveat out loud |
 | GET | `/v1/export-all.csv` | Full-history CSV stream |
 | GET | `/v1/nodes/{id}/coverage.csv` | Coverage summary row followed by the gap table (same fields as the JSON endpoint) |

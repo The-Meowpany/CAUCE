@@ -40,6 +40,7 @@ PostgreSQL, la migración está acotada a `db.py` y a ningún otro lado.
 | GET | `/v1/analytics/period-compare` | Mismo nodo, dos ventanas |
 | GET | `/v1/analytics/heat-events` | Cuánto tiempo estuvo sobre un umbral |
 | GET | `/v1/analytics/summary-fast` | Mismos stats desde agregados horarios materializados (O(buckets)) |
+| GET | `/v1/analytics/series` | Una fila por bucket materializado, para gráficos; `granularity=15min|hourly|daily`, calibrado, los huecos quedan ausentes, tope de 5000 buckets (`truncated`) |
 | POST | `/v1/nodes/{id}/time-reconstruct` | Rellena timestamps de records iniciales con tiempo incierto desde la primera ancla + intervalo mediano; marca filas (`ts_reconstructed=1`) y dice el caveat de margen de error en voz alta |
 | GET | `/v1/export-all.csv` | Stream CSV de historia completa |
 | GET | `/v1/nodes/{id}/coverage.csv` | Fila de resumen de cobertura y luego la tabla de brechas |

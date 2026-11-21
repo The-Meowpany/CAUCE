@@ -27,13 +27,24 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 | soil_moisture | capacitive probe | ADC GPIO35 | `soil_moisture_enabled` | `AnalogSensorDriver` |
 | leaf_wetness | resistive/capacitive grid | ADC GPIO32 | `leaf_wetness_enabled` | `AnalogSensorDriver` |
 | solar_irradiance (relative) | BPW34 + transimpedance stage | ADC GPIO39 | `irradiance_enabled` | `AnalogSensorDriver` |
-| soil_water_potential | gypsum block + divider | ADC GPIO33 | `soil_potential_enabled` | `AnalogSensorDriver` |
+| soil_water_potential | gypsum block + 10k reference | ADC GPIO33; ends driven by MCP23008 GP0/GP1 at I2C 0x20 when `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) or `AnalogSensorDriver` (DC) |
 | battery_voltage | resistor divider | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (clock) | DS3231 RTC | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
 | (archive) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
 | tvoc | CCS811 (optional, not in the pilot BOM) | I2C 0x5A | `voc_enabled` | `Ccs811Driver` |
 
 Notes that change how the numbers may be read:
+
+- **The gypsum block** is read with alternating polarity when `soil_potential_ac=1`. Read as a
+  DC divider, current flows through the block the same way on every sample, which polarises it
+  and drifts the reading over a season. With the expander, GP0 drives the 10k reference end and
+  GP1 the far end of the block; each read is one conversion in each direction followed by both
+  ends low, so the net charge is zero. The two conversions are folded back into the millivolts
+  the DC divider would have read, so `soil_potential_kpa_per_mv` and `soil_potential_offset_kpa`
+  keep their meaning and a fit made on a DC node still applies. The MCP23008 (address pins to
+  ground) is used because the push-pull outputs can source the divider current; a PCF8574's weak
+  high side cannot. A read whose two halves do not add up to the supply is refused rather than
+  reported, because that is what an undriven end looks like.
 
 - **CO2** comes only from the NDIR cell. The CCS811's "eCO2" is an estimate derived from VOC
   and is never published. Automatic baseline correction on the MH-Z19C is switched off at
@@ -116,8 +127,13 @@ gateway is an ESP32 + SX1276 bridge (`pio run -e gateway`) on USB to the central
 With `peer_enabled=1` neighbours on the same `peer_channel` keep copies of each other's records,
 so a node that dies does not take its history with it. ESP-NOW authenticates nothing, so every
 frame is signed with the sender's Ed25519 seed (`sync_auth_seed`) and merged only when the
-sender is in `peer_keys` and every record in it is the sender's own. `tools/provision.py`
-prints the `peer_keys` line for a batch; every node of the site can carry the same line. One
+sender is trusted and every record in it is the sender's own. A sender is trusted when it is in
+`peer_keys`, or when its announcement carries a credential signed by the CA pinned in
+`ca_public_key`: 120 bytes binding its node id to its public key until an expiry, returned as
+`peer_credential` when the central issues the node's certificate and set in the node's config
+under the same name. Reseeding a node then means issuing it a new certificate, not editing every
+neighbour; an expired credential stops being trusted once the clock is valid. `tools/provision.py`
+still prints the `peer_keys` line for a batch, and a listed key always wins over a vouched one. One
 round per `peer_interval_s` (60 s) offers two of this node's records to each neighbour. Peer
 records stay in LittleFS: they are never synced or archived by the node that merely holds them.
 

@@ -28,13 +28,25 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 | soil_moisture | sonda capacitiva | ADC GPIO35 | `soil_moisture_enabled` | `AnalogSensorDriver` |
 | leaf_wetness | rejilla resistiva/capacitiva | ADC GPIO32 | `leaf_wetness_enabled` | `AnalogSensorDriver` |
 | solar_irradiance (relativa) | BPW34 + etapa de transimpedancia | ADC GPIO39 | `irradiance_enabled` | `AnalogSensorDriver` |
-| soil_water_potential | bloque de yeso + divisor | ADC GPIO33 | `soil_potential_enabled` | `AnalogSensorDriver` |
+| soil_water_potential | bloque de yeso + referencia 10k | ADC GPIO33; extremos manejados por GP0/GP1 de un MCP23008 en I2C 0x20 con `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) o `AnalogSensorDriver` (DC) |
 | battery_voltage | divisor resistivo | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (reloj) | RTC DS3231 | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
 | (archivo) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
 | tvoc | CCS811 (opcional, fuera del BOM del piloto) | I2C 0x5A | `voc_enabled` | `Ccs811Driver` |
 
 Notas que cambian cómo se pueden leer los números:
+
+- **El bloque de yeso** se lee con polaridad alterna cuando `soil_potential_ac=1`. Leído como
+  divisor en continua, la corriente atraviesa el bloque siempre en el mismo sentido, lo que lo
+  polariza y desplaza la lectura a lo largo de una temporada. Con el expansor, GP0 maneja el
+  extremo de la referencia de 10k y GP1 el extremo lejano del bloque; cada lectura es una
+  conversión en cada sentido y luego ambos extremos en bajo, así la carga neta es cero. Las dos
+  conversiones se vuelven a expresar en los milivoltios que habría leído el divisor en continua,
+  por lo que `soil_potential_kpa_per_mv` y `soil_potential_offset_kpa` conservan su significado y
+  un ajuste hecho en un nodo DC sigue valiendo. Se usa el MCP23008 (pines de dirección a masa)
+  porque sus salidas push-pull pueden entregar la corriente del divisor; el lado alto débil de un
+  PCF8574 no puede. Una lectura cuyas dos mitades no suman la alimentación se rechaza en vez de
+  informarse, porque así se ve un extremo sin manejar.
 
 - El **CO2** sale solo de la celda NDIR. El "eCO2" del CCS811 es una estimación derivada de
   VOC y nunca se publica. La corrección automática de línea base del MH-Z19C se apaga al
@@ -121,8 +133,14 @@ central, que alimenta a `cauce_server.gateway_runner`; ver DEPLOYMENT.md, secci�
 Con `peer_enabled=1` los vecinos en el mismo `peer_channel` guardan copias de los registros de
 los demás, así un nodo que se rompe no se lleva su historial. ESP-NOW no autentica nada, por lo
 que cada trama va firmada con la semilla Ed25519 del emisor (`sync_auth_seed`) y solo se integra
-si el emisor está en `peer_keys` y todos sus registros son propios. `tools/provision.py` imprime
-la línea `peer_keys` de un lote; todos los nodos del sitio pueden llevar la misma línea. Cada
+si el emisor es de confianza y todos sus registros son propios. Un emisor es de confianza si está
+en `peer_keys`, o si su anuncio trae una credencial firmada por la CA fijada en `ca_public_key`:
+120 bytes que atan su id de nodo a su clave pública hasta un vencimiento, devueltos como
+`peer_credential` cuando la central emite el certificado del nodo y cargados en la config del
+nodo con ese mismo nombre. Volver a sembrar un nodo pasa a ser emitirle un certificado nuevo, no
+editar a cada vecino; una credencial vencida deja de valer en cuanto el reloj es válido.
+`tools/provision.py` sigue imprimiendo la línea `peer_keys` de un lote, y una clave listada
+siempre gana sobre una avalada. Cada
 ronda (`peer_interval_s`, 60 s) ofrece dos registros propios a cada vecino. Los registros de
 vecinos quedan en LittleFS: el nodo que solo los guarda nunca los sincroniza ni los archiva.
 

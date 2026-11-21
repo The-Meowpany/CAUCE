@@ -26,6 +26,9 @@ Lo que realmente hacemos hoy, y lo que abiertamente no.
   lote de sync sobre el cuerpo crudo (`X-CAUCE-Signature`), computado
   con el mismo HMAC-SHA-256 verificado contra vectores RFC 4231. Una key
   robada te da un dispositivo, no la flota.
+- **Clave de release Ed25519.** Con `ota_public_key` configurada, el nodo exige una firma
+  Ed25519 de la clave de release (offline) sobre `version|sha256|url|totalSize` y rechaza un
+  manifiesto que solo trae HMAC: la central puede servir firmware, pero no autorizarlo.
 - **Gate del manifiesto OTA.** Con manifest key configurada, los
   releases sin HMAC válido sobre `version|url|totalSize` mueren antes de
   cualquier descarga — sin MITM de sustitución de manifiesto.
@@ -345,6 +348,31 @@ Ambos lados fijan la forma *serializada*, no solo la cadena que se firma:
 vivo y no contra una copia de su salida, de modo que un cambio de espaciado o escapado
 falla nombrando la causa.
 
+## Claves de release, vecinos avalados y lecturas por sitio
+
+**El firmware se autoriza offline.** `backend/tools/sign_release.py keygen` crea la clave de
+release (se niega a sobrescribir una existente, modo 600) e imprime la mitad pública para
+`ota_public_key`; `sign` escribe `ed25519_signature` en el archivo de release. La central reenvía
+ese campo y no puede producirlo, así que tomar la central ya no alcanza para empujar firmware a
+un nodo que fija la clave. El camino HMAC queda para los nodos que no la tienen.
+
+**La CA avala a los vecinos.** Una credencial de vecino es el id del nodo, su clave pública
+Ed25519 y un vencimiento, firmados por la CA de nodos bajo el dominio `cauce-peer-v1`. Los nodos
+la difunden en su anuncio ESP-NOW, y un vecino que fija `ca_public_key` agrega la clave a su
+llavero tras comprobar la firma una sola vez. `peer_keys` sigue funcionando y gana ante un
+conflicto.
+
+**Las lecturas se acotan por principal.** Toda lectura que nombra un nodo, un sitio o devuelve
+una lista de toda la flota aplica el sitio de quien llama: la analítica por nodo, la cobertura,
+los diagnósticos, el estado de revocación, el estado de certificados y las exportaciones CSV
+rechazan con 403 un nodo de otro sitio, y la lista de nodos, la vista de flota, los sitios, las
+intervenciones, las reglas y el registro de alertas y la exportación CSV completa solo devuelven
+el sitio de quien llama. Un nodo sin sitio queda fuera de todos, así un nodo sin asignar no lo
+lee cualquier operador de sitio. Un principal de solo lectura ve las reglas de alerta sin su
+destino, que suele llevar un secreto de webhook. Editar una regla de alerta y ejecutar el
+chequeo de alertas pasan ahora por la misma compuerta que falla cerrada que el resto de las
+escrituras; antes ambas quedaban abiertas si no había token de administración configurado.
+
 ## Pendiente (fases posteriores / hardware)
 
 - Integración de radio Wi-Fi: las credenciales entran por la UI local, y
@@ -352,8 +380,8 @@ falla nombrando la causa.
 - Encriptación de transporte (TLS): la capa de decisión ya acepta URLs
   https vía `ISyncTransport` — lo que falta es la infraestructura de
   certificados y provisioning, no el camino de código.
-- Flasheo OTA: la capa de decisión está hecha; la firma de payloads de
-  release debería llegar antes de cualquier rollout a flota.
+- Flasheo OTA: la capa de decisión y la firma Ed25519 de releases están
+  hechas; falta una prueba física de flasheo y rollback.
 - Throttling del lado del nodo: el transporte hoy asume aislamiento LAN.
   Revisarlo el día que esto salga de la red piloto.
 

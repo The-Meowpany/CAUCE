@@ -27,7 +27,11 @@ What we actually do today, and what we openly don't.
   you one device, not the fleet.
 - **OTA manifest gate.** With a manifest key configured, releases
   without a valid HMAC over `version|url|totalSize` die before any
-  download — no manifest-substitution MITM.
+  download — no manifest-substitution MITM. With `ota_public_key`
+  set, the node instead requires an Ed25519 signature by the offline
+  release key over `version|sha256|url|totalSize` and refuses an
+  HMAC-only manifest, so the central can serve firmware but not
+  authorise it.
 - **Read/write split.** Public reads, authenticated writes, on the
   node API and the central server alike.
 - **The central fails closed on writes.** With `CAUCE_API_TOKEN` unset,
@@ -326,6 +330,29 @@ signature and is unaffected; an attacker able to measure signing time locally at
 high resolution may not be. Where the device itself must be assumed hostile, use a
 constant-time library instead.
 
+## Release keys, vouched neighbours and site-scoped reads
+
+**Firmware is authorised offline.** `backend/tools/sign_release.py keygen` creates the release
+key (refusing to overwrite one, mode 600) and prints the public half for `ota_public_key`;
+`sign` writes `ed25519_signature` into the release file. The central forwards that field and
+cannot produce it, so taking over the central is no longer enough to push firmware to a node
+that pins the key. The HMAC path stays for nodes without it.
+
+**Neighbours are vouched for by the CA.** A peer credential is the node id, its Ed25519 public
+key and an expiry, signed by the node CA under the domain `cauce-peer-v1`. Nodes broadcast it in
+their ESP-NOW announcement, and a neighbour that pins `ca_public_key` adds the key to its keyring
+after checking the signature once. `peer_keys` still works and wins on a conflict.
+
+**Reads are scoped per principal.** Every read that names a node, a site or returns a fleet-wide
+list applies the caller's site: per-node analytics, coverage, diagnostics, revocation state,
+certificate status and CSV exports refuse a node outside the site with 403, and the node list,
+fleet view, sites, interventions, alert rules, alert log and the full CSV export only return
+the caller's site. A node with no site is outside every site, so an unassigned node is not
+readable by every site operator. A read-only principal sees alert rules without their target,
+which often embeds a webhook secret. Editing an alert rule and running the alert check now go
+through the same fail-closed gate as every other mutation; before, both were open when no admin
+token was configured.
+
 ## Pending (later phases / hardware)
 
 - Wi-Fi radio integration: credentials go in through the local UI, and
@@ -333,8 +360,8 @@ constant-time library instead.
 - Transport encryption (TLS): the decision layer already accepts
   https URLs through `ISyncTransport` — what's missing is the
   certificate and provisioning infrastructure, not the code path.
-- OTA flashing: the decision layer is done; release-payload signing
-  should land before any fleet rollout.
+- OTA flashing: the decision layer and Ed25519 release signing are
+  done; what remains is a physical flash and rollback trial.
 - Node-side throttling: the transport currently assumes LAN isolation.
   Revisit the day this leaves the pilot network.
 

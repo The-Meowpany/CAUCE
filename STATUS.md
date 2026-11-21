@@ -3,9 +3,14 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (551 firmware + 809 backend tests, E2E green)
+## Implemented and verified (563 firmware + 832 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
+| **Ed25519 release key for OTA**: with `ota_public_key` set, a node requires an Ed25519 signature by an offline release key over `version|sha256|url|totalSize` and refuses an HMAC-only manifest; `tools/sign_release.py` generates the key and signs release files, and the central only forwards `ed25519_signature`, so it can serve firmware but not authorise it | 4 firmware tests in `test_ota.cpp` against a signature made by `cryptography` (RFC 8032 TEST 1 key), 3 backend tests |
+| **CA-vouched neighbours**: a 120-byte peer credential (node id, Ed25519 public key, expiry, CA signature under `cauce-peer-v1`) is returned with every issued certificate, broadcast in the ESP-NOW announcement, verified once per neighbour and added to the keyring until it expires; `peer_keys` still works and a listed key wins | 4 firmware tests in `test_peer_driver.cpp` and 3 backend tests sharing one known-answer credential, so issuer and verifier cannot drift |
+| **Site-scoped reads everywhere**: per-node analytics, coverage, diagnostics, revocation, certificate status and CSV exports refuse a node outside the caller's site (an unassigned node included); node list, fleet, sites, interventions, alert rules and log and the full CSV export are filtered to it; alert targets hidden from read-only principals. Editing an alert rule and running the alert check were open with no admin token configured and now fail closed | 13 tests in `test_site_scoped_reads.py` |
+| **Bucketed series**: `GET /v1/analytics/series` returns the 15-minute, hourly or daily buckets themselves for charts, calibrated, with gaps absent rather than zero | 4 tests in `test_analytics_series.py` |
+| **Gypsum block with alternating polarity**: `GypsumAcDriver` drives the divider's two ends from an MCP23008 (`soil_potential_ac`), one conversion each way then both low, folded back into DC-equivalent millivolts so the per-soil fit is unchanged; an undriven end or a missing expander is refused | 4 tests in `test_pilot_sensors.cpp`; not yet on a board |
 | **Pilot station sensor suite**: seventeen new variables (CO2, PM1/2.5/4/10, UV index with UVA and UVB, relative solar irradiance, wind direction, rainfall, soil moisture, soil water potential, soil temperature, leaf wetness, lightning count and distance) with drivers for SPS30 (I2C, CRC-checked frames, fan warm-up), MH-Z19C (UART, checksum, ABC off, stale-reply discard), VEML6075 (application-note conversion, ID check), AS3935 (IRQ flag + loop service, disturbers masked, no distance without a strike), DS18B20 (1-Wire, non-blocking conversion, CRC and power-on value rejected), tipping-bucket rain (debounced, ISR-safe counter), resistor-ladder vane (nearest heading, open cable refused, mounting offset) and a generic analogue probe (two-point percent or linear) for soil moisture, leaf wetness, irradiance, gypsum block and battery divider; DS3231 RTC seeds the clock at boot and is written back after a completed SNTP sync. New HAL interfaces `IUart`, `IAnalogInput` (ADC1 only), `IOneWire`, and raw I2C transfers. Every sensor has a config key and is off by default. Backend registry, LoRa decoder and uncertainty budgets cover every firmware variable | 35 firmware tests (`test_pilot_sensors.cpp`) and 36 backend tests (`test_pilot_channels.py`), including a cross-language check that reads the firmware enum and fails if the LoRa decoder, the registry or the budgets miss a variable |
 | **The ESP-NOW path could not have worked on a board**: nothing ever broadcast a discovery announcement (`fillAnnouncement` existed and had no caller), so no node could be found; `Esp32PeerRadio::receive` always returned 0, so every frame a neighbour sent was dropped; and a peer announcing twice took a second table slot. Discovery now broadcasts every 20 s from `poll`, one ESP-NOW receive callback routes announcements to discovery and data frames into `PeerFrameRing` (four 250-byte slots, oldest kept when full, drops counted) which `receive` drains under a critical section, and a returning peer is refreshed in place. Host tests could not see any of this, because every one of them drives the exchange through a fake radio | 3 host tests for `PeerFrameRing`; the announce and callback glue is ESP32-only and cross-compiled, still unproven on radios |
 | **Every build is warning-free**: node, gateway and bench images, and the clang host build. The ESP32 core appended `-std=gnu++11` after the project's `-std=gnu++17`, so libraries compiled as C++11; `build_unflags` removes it. Fixed along the way: segment paths that could be truncated into a different file now refuse, the scripted I2C bounds check that could never fail, the BME280 humidity grouping now matches Bosch's reference exactly (it drifted by up to 1/1024 %RH), an OTA manifest size bound that 32-bit `unsigned long` made vacuous, an unsequenced read-and-increment in a test, and `test_the_signature_matches_the_pinned_value`, which a comment cited and nobody had written | Clean builds of all four environments; 551 host tests |
@@ -119,11 +124,8 @@ not. It overrides any aspirational claim elsewhere.
 
 - Archiving records merged from peers. The archive keeps this node's own records; peer records
   stay in LittleFS and are archived by the node that measured them.
-- Peer key rotation. `peer_keys` is a static list: replacing one node's seed means editing the
-  line on every neighbour. Fine for eight nodes; a larger fleet would want the CA to vouch for
-  peer keys instead.
-- Gypsum-block AC excitation. The block is read as a DC divider with a per-soil linear fit,
-  which polarises the block over time; an alternating-polarity read needs two GPIOs per block.
+- Revoking a peer credential before it expires. A retired node's credential stays trusted by
+  its neighbours until its `not_after`; the CA has no revocation list the nodes fetch.
 
 - Volumetric 3D viewer: discarded by design decision - the central keeps
   the dependency-free 2D schematic SVG map with IDW field and shared-scale
@@ -292,9 +294,9 @@ allowed.
 
 ### D3 - sub-hourly aggregates (DONE)
 
-`agg_hourly` and `agg_daily` exist. There is no `agg_15min`, so a query over the
-last six hours reads `measurements` directly. That is affordable for a pilot and
-is the first thing that stops being affordable as node count grows.
+`agg_15min`, `agg_hourly` and `agg_daily` exist and `granularity=auto` picks among them,
+so a query over the last six hours no longer reads `measurements` directly.
+`/v1/analytics/series` returns the buckets themselves, which is what a chart needs.
 
 ### C2 - Ed25519 signing in the firmware
 
