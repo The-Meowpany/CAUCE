@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <SD.h>
+#include <SPI.h>
 #include <time.h>
 
 namespace cauce::hal {
@@ -85,51 +87,55 @@ bool Esp32WireBus::readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t leng
   return true;
 }
 
+Esp32ArduinoFs::Esp32ArduinoFs(fs::FS& fs) : fs_(fs) {}
+
+Esp32LittleFs::Esp32LittleFs() : Esp32ArduinoFs(LittleFS) {}
+
 bool Esp32LittleFs::mount() { return LittleFS.begin(true); }
 
-bool Esp32LittleFs::exists(const char* path) { return LittleFS.exists(path); }
+bool Esp32ArduinoFs::exists(const char* path) { return fs_.exists(path); }
 
-bool Esp32LittleFs::appendBytes(const char* path, const uint8_t* data,
-                                size_t length) {
-  File file = LittleFS.open(path, FILE_APPEND);
+bool Esp32ArduinoFs::appendBytes(const char* path, const uint8_t* data,
+                                 size_t length) {
+  File file = fs_.open(path, FILE_APPEND);
   if (!file) return false;
   const size_t written = file.write(data, length);
   file.close();
   return written == length;
 }
 
-bool Esp32LittleFs::readRange(const char* path, size_t offset, uint8_t* buffer,
-                              size_t length) {
-  File file = LittleFS.open(path, FILE_READ);
+bool Esp32ArduinoFs::readRange(const char* path, size_t offset, uint8_t* buffer,
+                               size_t length) {
+  File file = fs_.open(path, FILE_READ);
   if (!file) return false;
   const bool ok = file.seek(offset) && file.read(buffer, length) == length;
   file.close();
   return ok;
 }
 
-bool Esp32LittleFs::writeWholeFile(const char* path, const uint8_t* data,
-                                   size_t length) {
-  File file = LittleFS.open(path, FILE_WRITE);
+bool Esp32ArduinoFs::writeWholeFile(const char* path, const uint8_t* data,
+                                    size_t length) {
+  File file = fs_.open(path, FILE_WRITE);
   if (!file) return false;
   const size_t written = file.write(data, length);
   file.close();
   return written == length;
 }
 
-size_t Esp32LittleFs::fileSize(const char* path) {
-  File file = LittleFS.open(path, FILE_READ);
+size_t Esp32ArduinoFs::fileSize(const char* path) {
+  File file = fs_.open(path, FILE_READ);
   if (!file) return 0;
   const size_t size = file.size();
   file.close();
   return size;
 }
 
-bool Esp32LittleFs::removeFile(const char* path) { return LittleFS.remove(path); }
+bool Esp32ArduinoFs::removeFile(const char* path) { return fs_.remove(path); }
 
-int Esp32LittleFs::listFiles(const char* directory, char (*outPaths)[64],
-                             int maxItems) {
+int Esp32ArduinoFs::listFiles(const char* directory, char (*outPaths)[64],
+                              int maxItems) {
   int count = 0;
-  File dir = LittleFS.open(directory, FILE_READ);
+  File dir = fs_.open(directory, FILE_READ);
   if (!dir || !dir.isDirectory()) return 0;
 
   // ITERATIONS ARE BOUNDED SEPARATELY FROM EMITTED FILES.
@@ -168,6 +174,47 @@ int Esp32LittleFs::listFiles(const char* directory, char (*outPaths)[64],
   }
   dir.close();
   return count;
+}
+
+Esp32SdCard::Esp32SdCard(uint8_t csPin, uint32_t frequencyHz)
+    : Esp32ArduinoFs(SD), csPin_(csPin), frequencyHz_(frequencyHz) {}
+
+bool Esp32SdCard::mount() {
+  if (mounted_) SD.end();
+  // The bus is VSPI, shared with the SX1276; each driver selects its own chip, and the SD
+  // library takes the bus through SPI transactions like the radio does.
+  SPI.begin(18, 19, 23);
+  mounted_ = SD.begin(csPin_, SPI, frequencyHz_) && SD.cardType() != CARD_NONE;
+  if (mounted_ && !SD.exists("/archive")) mounted_ = SD.mkdir("/archive");
+  return mounted_;
+}
+
+bool Esp32SdCard::ensureMounted() { return mounted_ || mount(); }
+
+bool Esp32SdCard::track(bool ok) {
+  if (!ok) mounted_ = false;
+  return ok;
+}
+
+bool Esp32SdCard::exists(const char* path) {
+  return ensureMounted() && Esp32ArduinoFs::exists(path);
+}
+
+bool Esp32SdCard::appendBytes(const char* path, const uint8_t* data, size_t length) {
+  return ensureMounted() && track(Esp32ArduinoFs::appendBytes(path, data, length));
+}
+
+bool Esp32SdCard::readRange(const char* path, size_t offset, uint8_t* buffer,
+                            size_t length) {
+  return ensureMounted() && track(Esp32ArduinoFs::readRange(path, offset, buffer, length));
+}
+
+bool Esp32SdCard::writeWholeFile(const char* path, const uint8_t* data, size_t length) {
+  return ensureMounted() && track(Esp32ArduinoFs::writeWholeFile(path, data, length));
+}
+
+size_t Esp32SdCard::fileSize(const char* path) {
+  return ensureMounted() ? Esp32ArduinoFs::fileSize(path) : 0;
 }
 
 }  // namespace cauce::hal

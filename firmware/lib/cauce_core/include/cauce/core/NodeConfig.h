@@ -80,6 +80,9 @@ struct NodeConfig {
   bool lightningIndoor{false};
   bool soilTemperatureEnabled{false};  // DS18B20, 1-Wire
   bool rtcEnabled{false};              // DS3231, I2C
+  // microSD archive on the shared SPI bus. Off by default like every other fitted part; a
+  // node without a card keeps LittleFS as its only store, which is how it ran before.
+  bool sdArchiveEnabled{false};
   bool rainEnabled{false};             // tipping-bucket gauge, pulse input
   // Depth of rain per bucket tip. 0.2794 mm is the common 0.011 in bucket; a different gauge
   // must say so, because every total is wrong by the ratio otherwise.

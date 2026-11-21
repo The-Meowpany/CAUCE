@@ -28,6 +28,14 @@ struct SystemHealth {
   uint32_t storageRecords{0};
   uint32_t storageBytes{0};
   uint32_t corruptedFrames{0};
+
+  // microSD archive. "disabled" when no card is configured; "degraded" means measurement is
+  // continuing on LittleFS while the card is retried.
+  const char* archiveState{"disabled"};
+  uint32_t archivedRecords{0};
+  uint32_t archiveLag{0};
+  uint32_t archiveFailures{0};
+  uint32_t archiveGapRecords{0};
 };
 
 }  // namespace cauce::app

@@ -272,7 +272,7 @@ ApiRouter::Response ApiRouter::routeGet(const char* path, const char* query, cha
   }
 
   if (pathEquals(path, "/api/v1/health")) {
-    char body[640];
+    char body[832];
     const int n = std::snprintf(
         body, sizeof(body),
         "{\"firmware\":\"%s\",\"node_state\":\"%s\",\"net_state\":\"%s\","
@@ -281,7 +281,9 @@ ApiRouter::Response ApiRouter::routeGet(const char* path, const char* query, cha
         "\"measurements\":%lu,\"stored\":%lu,\"invalid\":%lu,\"suspect\":%lu,"
         "\"read_failures\":%lu,\"storage_failures\":%lu,"
         "\"last_success_utc_ms\":%llu,"
-        "\"storage_records\":%lu,\"storage_bytes\":%lu,\"corrupted_frames\":%lu}",
+        "\"storage_records\":%lu,\"storage_bytes\":%lu,\"corrupted_frames\":%lu,"
+        "\"archive_state\":\"%s\",\"archived\":%lu,\"archive_lag\":%lu,"
+        "\"archive_failures\":%lu,\"archive_gap_records\":%lu}",
         health_.firmwareVersion, nodeStateName(health_.nodeState),
         netStateName(health_.netState),
         static_cast<unsigned long>(health_.uptimeMs),
@@ -297,7 +299,11 @@ ApiRouter::Response ApiRouter::routeGet(const char* path, const char* query, cha
         static_cast<unsigned long long>(health_.lastSuccessUtcMs),
         static_cast<unsigned long>(health_.storageRecords),
         static_cast<unsigned long>(health_.storageBytes),
-        static_cast<unsigned long>(health_.corruptedFrames));
+        static_cast<unsigned long>(health_.corruptedFrames),
+        health_.archiveState, static_cast<unsigned long>(health_.archivedRecords),
+        static_cast<unsigned long>(health_.archiveLag),
+        static_cast<unsigned long>(health_.archiveFailures),
+        static_cast<unsigned long>(health_.archiveGapRecords));
     if (n < 0 || static_cast<size_t>(n) >= sizeof(body))
       return respondError(500, "{\"error\":\"internal\"}", out, capacity);
     return respond(200, body, static_cast<size_t>(n), out, capacity);

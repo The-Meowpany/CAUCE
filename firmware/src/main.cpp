@@ -1,5 +1,6 @@
 #include <cstdio>
 
+#include "cauce/app/ArchiveManager.h"
 #include "cauce/app/DeepSleepController.h"
 #include "cauce/app/MeasurementScheduler.h"
 #include "cauce/core/BootDiagnostics.h"
@@ -91,6 +92,10 @@ static constexpr uint8_t BATTERY_ADC_PIN = 36;
 static constexpr uint8_t IRRADIANCE_ADC_PIN = 39;
 static constexpr uint8_t LEAF_WETNESS_ADC_PIN = 32;
 static constexpr uint8_t SOIL_POTENTIAL_ADC_PIN = 33;
+// microSD chip select on the shared VSPI bus. GPIO15 is a strapping pin, but it only selects
+// boot-log output and is sampled high, which is also the idle level of a chip select.
+static constexpr uint8_t SD_CS_PIN = 15;
+static constexpr uint32_t SD_SPI_HZ = 4000000;
 #endif
 
 static cauce::Logger* g_logger = nullptr;
@@ -108,6 +113,7 @@ static cauce::drivers::As3935Driver* g_lightning = nullptr;
 static cauce::drivers::Ds18b20Driver* g_soilTemp = nullptr;
 static cauce::drivers::RainGaugeDriver* g_rain = nullptr;
 static cauce::drivers::Ds3231Rtc* g_rtc = nullptr;
+static cauce::app::ArchiveManager* g_archive = nullptr;
 static bool g_rtcWrittenFromNtp = false;
 // Host build: there is no GPIO edge, so the accumulator is fed by nothing. The driver still
 // runs its interval logic, which is the part worth testing off-silicon.
@@ -547,6 +553,15 @@ void setup() {
       } else if (!g_rtc->timeTrustworthy()) {
         g_logger->event(cauce::LogLevel::Warn, "RTC_TIME_UNTRUSTED oscillator stopped");
       }
+    }
+    if (sensors.sdArchiveEnabled) {
+      // The archive reads LittleFS, so it can start before the first measurement and still
+      // collect everything; a card that is absent here is retried from loop(), not fatal.
+      static cauce::hal::Esp32SdCard card(SD_CS_PIN, SD_SPI_HZ);
+      if (!card.mount()) g_logger->event(cauce::LogLevel::Warn, "SD_MOUNT_FAILED");
+      g_archive = new cauce::app::ArchiveManager(*g_store, card, g_clock, *g_logger,
+                                                 sensors.nodeId);
+      g_archive->begin();
     }
     if (sensors.pmEnabled) {
       g_pm = new cauce::drivers::Sps30Driver(*g_bus, g_clock, "SPS30-1");
@@ -1035,6 +1050,14 @@ void loop() {
   g_health.lastSuccessUtcMs = counters.lastSuccessUtcMs;
   g_health.storageRecords = g_store->totalRecords();
   g_health.storageBytes = g_store->totalBytes();
+  if (g_archive != nullptr) {
+    g_archive->tick();
+    g_health.archiveState = cauce::app::archiveStateName(g_archive->state());
+    g_health.archivedRecords = g_archive->counters().archived;
+    g_health.archiveLag = g_archive->lag();
+    g_health.archiveFailures = g_archive->counters().writeFailures;
+    g_health.archiveGapRecords = g_archive->counters().gapRecords;
+  }
   const bool linkUp =
       (g_health.netState == cauce::app::NetState::Connected ||
        g_health.netState == cauce::app::NetState::Degraded);

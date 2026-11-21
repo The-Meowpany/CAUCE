@@ -107,6 +107,7 @@ constexpr BoolKey kSensorFlags[] = {
     {"lightning_indoor", &NodeConfig::lightningIndoor},
     {"soil_temperature_enabled", &NodeConfig::soilTemperatureEnabled},
     {"rtc_enabled", &NodeConfig::rtcEnabled},
+    {"sd_archive_enabled", &NodeConfig::sdArchiveEnabled},
     {"rain_enabled", &NodeConfig::rainEnabled},
     {"vane_enabled", &NodeConfig::vaneEnabled},
     {"soil_moisture_enabled", &NodeConfig::soilMoistureEnabled},

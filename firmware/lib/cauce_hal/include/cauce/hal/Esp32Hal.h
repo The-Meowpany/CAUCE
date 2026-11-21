@@ -7,6 +7,7 @@
 #include "cauce/hal/IFileSystem.h"
 #include "cauce/hal/II2cBus.h"
 
+#include <FS.h>
 #include <Wire.h>
 
 namespace cauce::hal {
@@ -43,9 +44,11 @@ class Esp32WireBus final : public II2cBus {
   uint32_t frequencyHz_;
 };
 
-class Esp32LittleFs final : public IFileSystem {
+// IFileSystem over any Arduino `fs::FS`. LittleFS and the SD card share it, so the
+// directory-iteration fix in listFiles() covers both.
+class Esp32ArduinoFs : public IFileSystem {
  public:
-  bool mount();
+  explicit Esp32ArduinoFs(fs::FS& fs);
   bool exists(const char* path) override;
   bool appendBytes(const char* path, const uint8_t* data, size_t length) override;
   bool readRange(const char* path, size_t offset, uint8_t* buffer,
@@ -54,6 +57,40 @@ class Esp32LittleFs final : public IFileSystem {
   size_t fileSize(const char* path) override;
   bool removeFile(const char* path) override;
   int listFiles(const char* directory, char (*outPaths)[64], int maxItems) override;
+
+ protected:
+  fs::FS& fs_;
+};
+
+class Esp32LittleFs final : public Esp32ArduinoFs {
+ public:
+  Esp32LittleFs();
+  bool mount();
+};
+
+// microSD on the shared VSPI bus. A card pulled out and pushed back in needs a fresh mount,
+// so any failed operation drops the mount and the next one tries again; the archive's own
+// backoff decides how often that is.
+class Esp32SdCard final : public Esp32ArduinoFs {
+ public:
+  Esp32SdCard(uint8_t csPin, uint32_t frequencyHz);
+  bool mount();
+  bool mounted() const { return mounted_; }
+
+  bool exists(const char* path) override;
+  bool appendBytes(const char* path, const uint8_t* data, size_t length) override;
+  bool readRange(const char* path, size_t offset, uint8_t* buffer,
+                 size_t length) override;
+  bool writeWholeFile(const char* path, const uint8_t* data, size_t length) override;
+  size_t fileSize(const char* path) override;
+
+ private:
+  bool ensureMounted();
+  bool track(bool ok);
+
+  uint8_t csPin_;
+  uint32_t frequencyHz_;
+  bool mounted_{false};
 };
 
 }  // namespace cauce::hal
