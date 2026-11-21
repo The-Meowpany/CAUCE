@@ -148,6 +148,10 @@ def issue_certificate(
         "certificate": certificate,
         "ca_public_key": authority.public_key_hex,
         "not_after_utc_ms": certificate["not_after_utc_ms"],
+        # For the node's `peer_credential` config line: neighbours that pin the same CA key
+        # accept this node's signed ESP-NOW frames without anyone editing their peer_keys.
+        "peer_credential": authority.peer_credential(
+            node_id, device_key, certificate["not_after_utc_ms"]),
         # Said out loud: issuing a new certificate retires the previous one, and a node
         # holding the old one stops being trusted. An operator rotating a key needs to know
         # a second certificate is not additive.

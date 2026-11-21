@@ -237,6 +237,7 @@ namespace {
 // same channel is ignored rather than recorded as a node.
 constexpr uint8_t kAnnounceTag = 0xC1;
 constexpr uint8_t kAnnounceLength = 1 + 16; // tag + node id
+constexpr uint8_t kAnnounceWithCredentialLength = kAnnounceLength + 120;
 
 void fillAnnouncement(uint8_t* out, const char* nodeId) {
   out[0] = kAnnounceTag;
@@ -285,6 +286,10 @@ void Esp32PeerDiscovery::onPeerFound(const uint8_t* address, const uint8_t* payl
   for (size_t i = 0; i < kMaxKnownPeers; ++i) {
     if (s_peers[i].inUse && std::memcmp(s_peers[i].address, address, 6) == 0) {
       s_peers[i].lastSeenMs = millis();
+      if (length == kAnnounceWithCredentialLength) {
+        std::memcpy(s_peers[i].credential, payload + kAnnounceLength, 120);
+        s_peers[i].hasCredential = true;
+      }
       return;
     }
   }
@@ -296,6 +301,10 @@ void Esp32PeerDiscovery::onPeerFound(const uint8_t* address, const uint8_t* payl
       std::memcpy(s_peers[i].address, address, 6);
       s_peers[i].lastSeenMs = millis();
       s_peers[i].inUse = true;
+      s_peers[i].hasCredential = length == kAnnounceWithCredentialLength;
+      if (s_peers[i].hasCredential) {
+        std::memcpy(s_peers[i].credential, payload + kAnnounceLength, 120);
+      }
       s_foundCount = static_cast<uint8_t>(s_foundCount + 1);
       return;
     }
@@ -324,15 +333,22 @@ void Esp32PeerDiscovery::setNodeId(const char* nodeId) {
   if (nodeId != nullptr) std::strncpy(nodeId_, nodeId, sizeof(nodeId_) - 1);
 }
 
+void Esp32PeerDiscovery::setCredential(const uint8_t credential[120]) {
+  std::memcpy(credential_, credential, sizeof(credential_));
+  hasCredential_ = true;
+}
+
 void Esp32PeerDiscovery::announce() {
-  uint8_t frame[kAnnounceLength];
+  uint8_t frame[kAnnounceWithCredentialLength];
   fillAnnouncement(frame, nodeId_);
+  const size_t length = hasCredential_ ? kAnnounceWithCredentialLength : kAnnounceLength;
+  if (hasCredential_) std::memcpy(frame + kAnnounceLength, credential_, sizeof(credential_));
   esp_now_peer_info_t info = {};
   std::memcpy(info.peer_addr, kBroadcast, 6);
   info.channel = 0;
   info.encrypt = false;
   if (esp_now_add_peer(&info) != ESP_OK) return;
-  esp_now_send(kBroadcast, frame, sizeof(frame));
+  esp_now_send(kBroadcast, frame, length);
   esp_now_del_peer(kBroadcast);
 }
 
@@ -362,6 +378,10 @@ size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
     // ESP-NOW here has no pairing, and marking a peer "verified" would be a claim the radio
     // cannot support.
     out[written].selfDeclared = true;
+    out[written].hasCredential = s_peers[i].hasCredential;
+    if (s_peers[i].hasCredential) {
+      std::memcpy(out[written].credential, s_peers[i].credential, 120);
+    }
     ++written;
   }
   return written;

@@ -35,6 +35,10 @@ struct Peer {
  // deployment that lets unverified peers join is trusting the local radio
   // segment, so callers are told which they have.
   bool selfDeclared{true};
+  // The CA-signed credential the peer put in its announcement, when it sent one. Carried
+  // unverified: checking an Ed25519 signature belongs in the loop, not in a radio callback.
+  uint8_t credential[120]{};
+  bool hasCredential{false};
 };
 
 enum class DiscoveryStatus : uint8_t {

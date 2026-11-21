@@ -26,12 +26,23 @@ class PeerKeyring {
   // The key for `nodeId`, or null when the node is not trusted.
   const uint8_t* find(const char* nodeId) const;
 
+  // Adds or refreshes a neighbour the CA vouched for (see PeerCredential.h). Entries from
+  // `peer_keys` are never replaced by one: an operator's explicit line outranks a credential.
+  // False when the table is full.
+  bool addVouched(const char* nodeId, const uint8_t key[kPublicKeyBytes],
+                  uint64_t notAfterUtcMs);
+  // Drops vouched entries whose credential has expired. Listed entries do not expire.
+  void expire(uint64_t nowUtcMs);
+
   size_t size() const { return count_; }
+  size_t vouchedCount() const;
 
  private:
   struct Entry {
     char nodeId[16]{};
     uint8_t key[kPublicKeyBytes]{};
+    bool vouched{false};
+    uint64_t notAfterUtcMs{0};
   };
   Entry entries_[kMaxPeers]{};
   size_t count_{0};

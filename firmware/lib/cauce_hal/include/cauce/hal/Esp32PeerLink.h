@@ -154,6 +154,9 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
   // node's announcement every kAnnounceIntervalMs, well inside the 60 s after which a silent
   // peer is dropped from the table.
   void setNodeId(const char* nodeId);
+  // This node's CA-signed peer credential (120 bytes), appended to every announcement so
+  // neighbours that pin the same CA can trust it without a key list.
+  void setCredential(const uint8_t credential[120]);
   size_t poll(Peer* out, size_t capacity) override;
   DiscoveryStatus status() const override { return status_; }
 
@@ -171,6 +174,8 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
     uint8_t address[6]{};
     uint32_t lastSeenMs{0};
     bool inUse{false};
+    uint8_t credential[120]{};
+    bool hasCredential{false};
   };
 
   void announce();
@@ -178,6 +183,8 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
   DiscoveryStatus status_{DiscoveryStatus::Unsupported};
   uint8_t channel_{0};
   char nodeId_[16]{};
+  uint8_t credential_[120]{};
+  bool hasCredential_{false};
   bool announced_{false};
   uint32_t lastAnnounceMs_{0};
   static KnownPeer s_peers[kMaxKnownPeers];

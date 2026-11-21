@@ -257,6 +257,7 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("peer_channel=%u\n", static_cast<unsigned>(config.peerChannel));
   c.write("peer_state_path=%s\n", config.peerStatePath);
   c.write("peer_keys=%s\n", config.peerKeys);
+  c.write("peer_credential=%s\n", config.peerCredentialHex);
   c.write("peer_interval_s=%lu\n", static_cast<unsigned long>(config.peerIntervalS));
   c.write("lora_sync_interval_s=%lu\n",
           static_cast<unsigned long>(config.loraSyncIntervalS));
@@ -417,6 +418,11 @@ bool parseConfig(const char* text, NodeConfig& out) {
                               ? static_cast<uint8_t>(intValue) : 0;
       } else if (std::strcmp(key, "peer_state_path") == 0) {
         copyString(cfg.peerStatePath, sizeof(cfg.peerStatePath), valueText);
+      } else if (std::strcmp(key, "peer_credential") == 0) {
+        if (valueText[0] != '\0' && !copyIfHexOfLength(valueText, 240, cfg.peerCredentialHex,
+                                                       sizeof(cfg.peerCredentialHex))) {
+          badCredentialLine = true;
+        }
       } else if (std::strcmp(key, "peer_keys") == 0) {
         copyString(cfg.peerKeys, sizeof(cfg.peerKeys), valueText);
       } else if (std::strcmp(key, "peer_interval_s") == 0 && parseInt(valueText, intValue)) {

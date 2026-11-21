@@ -5,6 +5,8 @@
 
 #include "cauce/app/Esp32PeerExchange.h"
 #include "cauce/core/IStorageRepository.h"
+#include "cauce/core/PeerCredential.h"
+#include "cauce/core/PeerKeyring.h"
 #include "cauce/hal/IClock.h"
 #include "cauce/hal/IPeerLink.h"
 
@@ -31,7 +33,14 @@ class PeerExchangeDriver {
                      IStorageRepository& store, hal::IClock& clock, const char* nodeId,
                      uint32_t intervalS);
 
+  // Neighbours announcing a credential signed by this CA are added to `keyring` for as long
+  // as the credential is valid. Without this call only `peer_keys` is trusted.
+  void setAuthority(const uint8_t caPublicKey[32], PeerKeyring* keyring);
+
   void tick();
+
+  uint32_t credentialsAccepted() const { return credentialsAccepted_; }
+  uint32_t credentialsRejected() const { return credentialsRejected_; }
 
   size_t peerCount() const;
   uint32_t rounds() const { return rounds_; }
@@ -43,7 +52,13 @@ class PeerExchangeDriver {
     bool used{false};
     uint8_t address[6]{};
     uint32_t offeredThrough{0};
+    // The credential last verified for this address, so an unchanged one is not checked
+    // again every round: an Ed25519 verification is the most expensive thing in the loop.
+    uint8_t verifiedCredential[kPeerCredentialBytes]{};
+    bool credentialVerified{false};
   };
+
+  void considerCredential(Slot& slot, const hal::Peer& peer);
 
   void learnPeers();
 
@@ -57,6 +72,10 @@ class PeerExchangeDriver {
   uint32_t lastRunMs_{0};
   uint32_t rounds_{0};
   Slot slots_[kMaxPeers]{};
+  uint8_t caPublicKey_[32]{};
+  PeerKeyring* keyring_{nullptr};
+  uint32_t credentialsAccepted_{0};
+  uint32_t credentialsRejected_{0};
   Measurement batch_[Esp32PeerExchange::kMaxSignedRecordsPerFrame]{};
 };
 

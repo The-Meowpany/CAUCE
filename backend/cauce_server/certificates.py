@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import struct
 import time
 
 from cryptography.exceptions import InvalidSignature
@@ -217,6 +218,44 @@ class CertificateAuthority:
         certificate["signature"] = self._private.sign(canonical_body(body)).hex()
         certificate["ca_public_key"] = self.public_key_hex
         return certificate
+
+    def peer_credential(self, node_id: str, public_key_hex: str, not_after_ms: int) -> str:
+        """The compact form a node broadcasts so neighbours can trust it without a key list.
+
+        120 bytes, small enough to ride inside an ESP-NOW discovery announcement where a full
+        certificate would not fit. The signature is domain-separated, so a peer credential
+        can never be replayed as any other statement this CA signs.
+        """
+        public_raw = decode_key_material(public_key_hex, ED25519_PUBLIC_KEY_BYTES)
+        body = peer_credential_body(node_id.strip(), public_raw, int(not_after_ms))
+        return (body + self._private.sign(PEER_CREDENTIAL_DOMAIN + body)).hex()
+
+
+PEER_CREDENTIAL_DOMAIN = b"cauce-peer-v1"
+PEER_CREDENTIAL_BYTES = 16 + 32 + 8 + 64
+
+
+def peer_credential_body(node_id: str, public_raw: bytes, not_after_ms: int) -> bytes:
+    """node_id (16, NUL padded) | public key (32) | not_after (u64 little-endian)."""
+    encoded = node_id.encode("utf-8")
+    if not encoded or len(encoded) >= 16:
+        raise CertificateError("node_id must be 1..15 bytes to fit a peer credential")
+    return encoded.ljust(16, b"\0") + public_raw + struct.pack("<Q", not_after_ms)
+
+
+def verify_peer_credential(raw: bytes, ca_public_hex: str) -> dict | None:
+    """The firmware's check, on this side, so the two can be tested against each other."""
+    if len(raw) != PEER_CREDENTIAL_BYTES:
+        return None
+    body, signature = raw[:56], raw[56:]
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(ca_public_hex)).verify(
+            signature, PEER_CREDENTIAL_DOMAIN + body)
+    except Exception:
+        return None
+    return {"node_id": body[:16].rstrip(b"\0").decode("utf-8"),
+            "public_key": body[16:48].hex(),
+            "not_after_utc_ms": struct.unpack("<Q", body[48:56])[0]}
 
 
 def verify_certificate(

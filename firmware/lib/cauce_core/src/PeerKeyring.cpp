@@ -55,6 +55,43 @@ bool PeerKeyring::parse(const char* text) {
   return true;
 }
 
+bool PeerKeyring::addVouched(const char* nodeId, const uint8_t key[kPublicKeyBytes],
+                             uint64_t notAfterUtcMs) {
+  if (nodeId == nullptr || nodeId[0] == '\0' || std::strlen(nodeId) >= 16) return false;
+  for (size_t i = 0; i < count_; ++i) {
+    if (std::strcmp(entries_[i].nodeId, nodeId) != 0) continue;
+    if (!entries_[i].vouched) return true;  // listed by the operator: keep that key
+    std::memcpy(entries_[i].key, key, kPublicKeyBytes);
+    entries_[i].notAfterUtcMs = notAfterUtcMs;
+    return true;
+  }
+  if (count_ >= kMaxPeers) return false;
+  Entry& entry = entries_[count_++];
+  entry = Entry{};
+  std::memcpy(entry.nodeId, nodeId, std::strlen(nodeId));
+  std::memcpy(entry.key, key, kPublicKeyBytes);
+  entry.vouched = true;
+  entry.notAfterUtcMs = notAfterUtcMs;
+  return true;
+}
+
+void PeerKeyring::expire(uint64_t nowUtcMs) {
+  if (nowUtcMs == 0) return;
+  size_t kept = 0;
+  for (size_t i = 0; i < count_; ++i) {
+    if (entries_[i].vouched && nowUtcMs > entries_[i].notAfterUtcMs) continue;
+    if (kept != i) entries_[kept] = entries_[i];
+    ++kept;
+  }
+  count_ = kept;
+}
+
+size_t PeerKeyring::vouchedCount() const {
+  size_t n = 0;
+  for (size_t i = 0; i < count_; ++i) n += entries_[i].vouched ? 1 : 0;
+  return n;
+}
+
 const uint8_t* PeerKeyring::find(const char* nodeId) const {
   if (nodeId == nullptr) return nullptr;
   for (size_t i = 0; i < count_; ++i) {

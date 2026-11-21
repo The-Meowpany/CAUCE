@@ -31,23 +31,53 @@ uint32_t PeerExchangeDriver::offeredThrough(const uint8_t address[6]) const {
   return 0;
 }
 
+void PeerExchangeDriver::setAuthority(const uint8_t caPublicKey[32], PeerKeyring* keyring) {
+  std::memcpy(caPublicKey_, caPublicKey, sizeof(caPublicKey_));
+  keyring_ = keyring;
+}
+
+void PeerExchangeDriver::considerCredential(Slot& slot, const hal::Peer& peer) {
+  if (keyring_ == nullptr || !peer.hasCredential) return;
+  if (slot.credentialVerified &&
+      std::memcmp(slot.verifiedCredential, peer.credential, kPeerCredentialBytes) == 0) {
+    return;
+  }
+  const uint64_t now = clock_.utcTimeValid() ? clock_.utcMs() : 0;
+  PeerCredential credential;
+  if (verifyPeerCredential(peer.credential, caPublicKey_, now, credential) !=
+          PeerCredentialStatus::Ok ||
+      !keyring_->addVouched(credential.nodeId, credential.publicKey,
+                            credential.notAfterUtcMs)) {
+    ++credentialsRejected_;
+    return;
+  }
+  std::memcpy(slot.verifiedCredential, peer.credential, kPeerCredentialBytes);
+  slot.credentialVerified = true;
+  ++credentialsAccepted_;
+}
+
 void PeerExchangeDriver::learnPeers() {
   hal::Peer found[kMaxPeers];
   const size_t n = discovery_.poll(found, kMaxPeers);
   for (size_t i = 0; i < n; ++i) {
-    bool known = false;
+    Slot* known = nullptr;
     Slot* free = nullptr;
     for (Slot& s : slots_) {
-      if (s.used && std::memcmp(s.address, found[i].address, 6) == 0) known = true;
+      if (s.used && std::memcmp(s.address, found[i].address, 6) == 0) known = &s;
       if (!s.used && free == nullptr) free = &s;
+    }
+    if (known != nullptr) {
+      considerCredential(*known, found[i]);
+      continue;
     }
     // A full table ignores newcomers rather than evicting: a neighbour that stays is worth
     // more than one passing by, and the bound is what keeps a busy channel from growing it.
-    if (known || free == nullptr) continue;
+    if (free == nullptr) continue;
     free->used = true;
     std::memcpy(free->address, found[i].address, 6);
     const uint32_t last = store_.lastOwnSequence();
     free->offeredThrough = last > kInitialBacklog ? last - kInitialBacklog : 0;
+    considerCredential(*free, found[i]);
   }
 }
 
@@ -58,6 +88,7 @@ void PeerExchangeDriver::tick() {
   lastRunMs_ = now;
   ++rounds_;
 
+  if (keyring_ != nullptr && clock_.utcTimeValid()) keyring_->expire(clock_.utcMs());
   learnPeers();
   for (Slot& slot : slots_) {
     if (!slot.used) continue;

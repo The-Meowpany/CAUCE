@@ -121,6 +121,9 @@ struct NodeConfig {
   // Neighbours whose signed frames are merged: `NODE_ID:pubkeyhex,...`, at most eight. Empty
   // means no peer is trusted, and the exchange then only offers this node's records.
   char peerKeys[720]{};
+  // This node's CA-signed peer credential, 240 hex characters, as returned with its
+  // certificate. Broadcast in discovery so neighbours pinning the same CA trust it.
+  char peerCredentialHex[241]{};
   // Seconds between exchange rounds. Each round signs one frame per peer, which costs real time
   // on this CPU, so the default is a minute rather than as fast as the radio allows.
   uint32_t peerIntervalS{60};

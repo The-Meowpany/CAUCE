@@ -12,6 +12,7 @@
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
 #include "cauce/core/NodeConfig.h"
+#include "cauce/core/PeerCredential.h"
 #include "cauce/core/PeerKeyring.h"
 #include "cauce/hal/ManualClock.h"
 #include "cauce/hal/MemoryFileSystem.h"
@@ -296,7 +297,117 @@ void test_peer_ring_refuses_oversize_frames_and_drops_one_it_cannot_return() {
   TEST_ASSERT_EQUAL_UINT32(2, ring.dropped());
 }
 
+// ---------------------------------------------------------------- CA-vouched neighbours
+//
+// Issued by Python's `cryptography` the way certificates.CertificateAuthority.peer_credential
+// does: CA seed = RFC 8032 TEST 2, neighbour CAUCE-002 holding the TEST 1 key, valid until
+// 1800000000000. backend/tests/test_peer_credential.py pins the same bytes.
+const char* kCaPublicHex = "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c";
+const char* kCredentialHex =
+    "43415543452d30303200000000000000d75a980182b10ab7d54bfed3c964073a"
+    "0ee172f3daa62325af021a68f707511a00505c18a30100004f84a65672b062b1"
+    "c6c8915c26c4448ca27755271bb6104d57f4de3edd85829e69ee0466c946214f"
+    "2d3119f6322b556c266f2ca58d20f97add893dfdfa0c2703";
+
+void decodeHex(const char* hex, uint8_t* out, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    char b[3] = {hex[2 * i], hex[2 * i + 1], '\0'};
+    out[i] = static_cast<uint8_t>(std::strtoul(b, nullptr, 16));
+  }
+}
+
+void test_peer_credential_from_the_central_verifies_on_the_node() {
+  uint8_t raw[kPeerCredentialBytes];
+  uint8_t ca[32];
+  decodeHex(kCredentialHex, raw, sizeof(raw));
+  decodeHex(kCaPublicHex, ca, sizeof(ca));
+  PeerCredential credential;
+  TEST_ASSERT_EQUAL(static_cast<int>(PeerCredentialStatus::Ok),
+                    static_cast<int>(verifyPeerCredential(raw, ca, kDriverT0, credential)));
+  TEST_ASSERT_EQUAL_STRING("CAUCE-002", credential.nodeId);
+  TEST_ASSERT_EQUAL_UINT64(1800000000000ULL, credential.notAfterUtcMs);
+  TEST_ASSERT_EQUAL_HEX8(0xd7, credential.publicKey[0]);
+}
+
+void test_peer_credential_refuses_tampering_another_ca_and_expiry() {
+  uint8_t raw[kPeerCredentialBytes];
+  uint8_t ca[32];
+  decodeHex(kCredentialHex, raw, sizeof(raw));
+  decodeHex(kCaPublicHex, ca, sizeof(ca));
+  PeerCredential credential;
+
+  uint8_t forged[kPeerCredentialBytes];
+  std::memcpy(forged, raw, sizeof(forged));
+  forged[16] ^= 0x01;  // a different public key under the same signature
+  TEST_ASSERT_EQUAL(static_cast<int>(PeerCredentialStatus::BadSignature),
+                    static_cast<int>(verifyPeerCredential(forged, ca, kDriverT0, credential)));
+
+  uint8_t otherCa[32];
+  std::memcpy(otherCa, ca, sizeof(otherCa));
+  otherCa[0] ^= 0x01;
+  TEST_ASSERT_NOT_EQUAL(static_cast<int>(PeerCredentialStatus::Ok),
+                        static_cast<int>(verifyPeerCredential(raw, otherCa, kDriverT0, credential)));
+
+  TEST_ASSERT_EQUAL(static_cast<int>(PeerCredentialStatus::Expired),
+                    static_cast<int>(verifyPeerCredential(raw, ca, 1800000000001ULL, credential)));
+  // Without a trusted clock the signature alone decides.
+  TEST_ASSERT_EQUAL(static_cast<int>(PeerCredentialStatus::Ok),
+                    static_cast<int>(verifyPeerCredential(raw, ca, 0, credential)));
+}
+
+void test_keyring_keeps_listed_keys_over_vouched_ones_and_expires_vouched_only() {
+  PeerKeyring keyring;
+  TEST_ASSERT_TRUE(keyring.parse((std::string("CAUCE-003:") + kKeyA).c_str()));
+  uint8_t key[32] = {0x11};
+  TEST_ASSERT_TRUE(keyring.addVouched("CAUCE-002", key, 1000));
+  TEST_ASSERT_TRUE(keyring.addVouched("CAUCE-003", key, 1000));  // listed: not replaced
+  TEST_ASSERT_EQUAL_HEX8(0xAA, keyring.find("CAUCE-003")[0]);
+  TEST_ASSERT_EQUAL(1u, keyring.vouchedCount());
+  keyring.expire(1001);
+  TEST_ASSERT_NULL(keyring.find("CAUCE-002"));
+  TEST_ASSERT_NOT_NULL(keyring.find("CAUCE-003"));
+}
+
+void test_peer_driver_trusts_a_neighbour_its_ca_vouched_for() {
+  hal::MemoryFileSystem fs;
+  LogStorageRepository store(fs, "/data");
+  store.setOwnNodeId("CAUCE-001");
+  store.open();
+  PeerWatermarks marks(fs, "/state/peer_marks");
+  CountingRadio radio;
+  ScriptedDiscovery discovery;
+  hal::Peer neighbour = peerAt(2);
+  decodeHex(kCredentialHex, neighbour.credential, kPeerCredentialBytes);
+  neighbour.hasCredential = true;
+  discovery.pending.push_back(neighbour);
+  Esp32PeerExchange exchange(store, marks, &radio, &discovery);
+  PeerKeyring keyring;  // empty peer_keys: the CA is the only source of trust
+  exchange.setAuthentication(&keyring, kSeed);
+  hal::ManualClock clock(kDriverT0);
+  PeerExchangeDriver driver(exchange, discovery, store, clock, "CAUCE-001", 60);
+  uint8_t ca[32];
+  decodeHex(kCaPublicHex, ca, sizeof(ca));
+  driver.setAuthority(ca, &keyring);
+
+  driver.tick();
+  TEST_ASSERT_EQUAL_UINT32(1, driver.credentialsAccepted());
+  const uint8_t* key = keyring.find("CAUCE-002");
+  TEST_ASSERT_NOT_NULL(key);
+  TEST_ASSERT_EQUAL_HEX8(0xd7, key[0]);
+
+  // The same credential again is not verified a second time.
+  discovery.pending.push_back(neighbour);
+  clock.advanceMs(60000);
+  driver.tick();
+  TEST_ASSERT_EQUAL_UINT32(1, driver.credentialsAccepted());
+  TEST_ASSERT_EQUAL_UINT32(0, driver.credentialsRejected());
+}
+
 void registerPeerDriverTests() {
+  RUN_TEST(test_peer_credential_from_the_central_verifies_on_the_node);
+  RUN_TEST(test_peer_credential_refuses_tampering_another_ca_and_expiry);
+  RUN_TEST(test_keyring_keeps_listed_keys_over_vouched_ones_and_expires_vouched_only);
+  RUN_TEST(test_peer_driver_trusts_a_neighbour_its_ca_vouched_for);
   RUN_TEST(test_peer_ring_hands_frames_back_in_arrival_order);
   RUN_TEST(test_peer_ring_keeps_the_oldest_when_full_and_counts_the_drop);
   RUN_TEST(test_peer_ring_refuses_oversize_frames_and_drops_one_it_cannot_return);

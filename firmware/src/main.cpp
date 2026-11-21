@@ -159,6 +159,18 @@ static cauce::app::DeepSleepController g_sleepController{};
 static size_t g_lastStoredSeen = 0;
 static uint64_t g_lastMeasurementMs = 0;
 static void maybeDeepSleep();
+
+// Exactly 2 * length hex characters into `out`. The config parser has already checked the
+// length and alphabet of the fields this is used on; this is the decode, not the validation.
+static bool hexDecode(const char* hex, uint8_t* out, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    char byteHex[3] = {hex[2 * i], hex[2 * i + 1], '\0'};
+    char* end = nullptr;
+    out[i] = static_cast<uint8_t>(std::strtoul(byteHex, &end, 16));
+    if (end != byteHex + 2) return false;
+  }
+  return true;
+}
 static void confirmBootIfPending(uint32_t measurementCount);
 static cauce::app::ApiRouter* g_apiRouter = nullptr;
 static WebServer* g_webServer = nullptr;
@@ -834,10 +846,22 @@ void setup() {
         g_peerDriver = new cauce::app::PeerExchangeDriver(*g_peerExchange, *g_peerDiscovery,
                                                          *g_store, g_clock, config.nodeId,
                                                          config.peerIntervalS);
+        // CA-vouched neighbours: this node announces its own credential, and trusts any
+        // neighbour whose credential the pinned CA signed. Both halves are optional; without
+        // them peer_keys is the whole trust list, as before.
+        uint8_t raw[120];
+        const bool haveCredential =
+            config.peerCredentialHex[0] != '\0' && hexDecode(config.peerCredentialHex, raw, 120);
+        if (haveCredential) g_peerDiscovery->setCredential(raw);
+        uint8_t caKey[32];
+        const bool haveCa =
+            config.caPublicKeyHex[0] != '\0' && hexDecode(config.caPublicKeyHex, caKey, 32);
+        if (haveCa) g_peerDriver->setAuthority(caKey, &g_peerKeyring);
         g_logger->eventf(cauce::LogLevel::Info, "PEER_EXCHANGE_ENABLED",
-                         "channel=%u trusted=%u interval_s=%lu",
+                         "channel=%u listed=%u ca=%d credential=%d interval_s=%lu",
                          static_cast<unsigned>(config.peerChannel),
-                         static_cast<unsigned>(g_peerKeyring.size()),
+                         static_cast<unsigned>(g_peerKeyring.size()), haveCa ? 1 : 0,
+                         haveCredential ? 1 : 0,
                          static_cast<unsigned long>(config.peerIntervalS));
       } else {
         // Said at boot because a node configured for peer exchange and not getting it is the
