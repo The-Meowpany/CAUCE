@@ -7,10 +7,9 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_admin_write, require_bearer_token
+from .security import principal_site, require_admin_write, require_node_read, require_scope
 
 router = APIRouter(prefix="/v1")
 
@@ -118,7 +117,7 @@ def latest_diagnostics(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_node_read(authorization, node_id)
     rows = query(
         """SELECT diag_id, received_at_utc_ms, firmware_version, uptime_ms,
                   node_state, net_state, rssi_dbm, clock_valid, battery_v,
@@ -179,11 +178,12 @@ def fleet(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
-    return fleet_snapshot(storage_capacity_bytes)
+    principal = require_scope(authorization, "read")
+    return fleet_snapshot(storage_capacity_bytes, principal_site(principal))
 
 
-def fleet_snapshot(storage_capacity_bytes: int | None = None) -> dict:
+def fleet_snapshot(storage_capacity_bytes: int | None = None,
+                   site_id: str | None = None) -> dict:
     now_ms = int(time.time() * 1000)
     rows = query(
         """SELECT n.node_id, n.site_id, n.firmware_version,
@@ -195,7 +195,8 @@ def fleet_snapshot(storage_capacity_bytes: int | None = None) -> dict:
                   (SELECT d.received_at_utc_ms FROM node_diagnostics d
                    WHERE d.node_id=n.node_id ORDER BY d.diag_id DESC LIMIT 1)
                     AS last_diagnostic_utc_ms
-           FROM nodes n ORDER BY n.node_id"""
+           FROM nodes n WHERE (? IS NULL OR n.site_id=?) ORDER BY n.node_id""",
+        (site_id, site_id),
     )
     nodes: list[dict] = []
     versions: dict[str, int] = {}

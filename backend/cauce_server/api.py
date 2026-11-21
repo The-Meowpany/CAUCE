@@ -24,7 +24,13 @@ from .config import settings
 from .db import engine, query, transaction
 from .ratelimit import check_rate
 from .retention import purge_older_than, read_state
-from .security import require_bearer_token, require_scope, require_site_access
+from .security import (
+    principal_site,
+    require_bearer_token,
+    require_node_read,
+    require_scope,
+    require_site_access,
+)
 from .signing import (
     DEFAULT_ALGORITHM,
     ED25519,
@@ -256,7 +262,7 @@ def get_node_revocation(
     authorization: str | None = Header(default=None),
 ) -> dict:
     """Whether a node's identity is retired. Read scope, like any other node read."""
-    require_site_access(require_scope(authorization, "read"), None)
+    require_node_read(authorization, node_id)
     retired_at, reason = revocation.retirement_state(node_id)
     return {
         "node_id": node_id,
@@ -750,15 +756,19 @@ def list_nodes(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_scope(authorization, "read")
+    site = principal_site(require_scope(authorization, "read"))
     limit = max(1, min(limit, 1000))
     offset = max(0, offset)
     after = decode_node_cursor(cursor)
-    where = ""
+    clauses: list[str] = []
     params: list = []
     if after is not None:
-        where = " WHERE node_id>?"
+        clauses.append("node_id>?")
         params.append(after)
+    if site:
+        clauses.append("site_id=?")
+        params.append(site)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     total = query(f"SELECT COUNT(*) AS c FROM nodes{where}",
                   tuple(params))[0]["c"]
     sql = ("SELECT node_id, site_id, firmware_version,"
@@ -947,7 +957,7 @@ def analytics_summary(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_scope(authorization, "read")
+    require_node_read(authorization, node_id)
     if granularity not in ("auto", "raw", "15min", "hourly", "daily"):
         raise HTTPException(status_code=422, detail="invalid_granularity")
     calibration = calibration_for(node_id, variable)
@@ -1250,7 +1260,7 @@ def analytics_heat_events(
     # Annotated parameter is a real None, so a direct call is simply unauthenticated and
     # the read stays open when no token is configured.
     _check_rate(request)
-    require_scope(authorization, "read")
+    require_node_read(authorization, node_id)
     sql = """SELECT timestamp_utc_ms, value FROM measurements
              WHERE node_id=? AND variable=? AND value IS NOT NULL
                AND quality IN ('VALID','CALIBRATED','SUSPECT','UNCALIBRATED')"""
@@ -1316,7 +1326,7 @@ def analytics_period_compare(
     authorization: str | None = Header(default=None),
 ) -> dict:
     _check_rate(request)
-    require_scope(authorization, "read")
+    require_node_read(authorization, node_id)
     if min(a_start, a_end, b_start, b_end) < 0 or a_end <= a_start or b_end <= b_start:
         raise HTTPException(status_code=422, detail="invalid_windows")
 
@@ -1386,7 +1396,7 @@ def analytics_summary_fast(
 ) -> dict:
     """Reads precomputed hourly aggregates; O(buckets) instead of O(records)."""
     _check_rate(request)
-    require_scope(authorization, "read")
+    require_node_read(authorization, node_id)
     sql = """SELECT hour_ts, cnt, sum, sumsq, min_v, max_v FROM agg_hourly
              WHERE node_id=? AND variable=?"""
     params: list = [node_id, variable]

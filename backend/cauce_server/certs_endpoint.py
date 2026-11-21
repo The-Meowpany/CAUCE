@@ -18,7 +18,7 @@ from . import certificates
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_scope, require_site_access
+from .security import require_node_access, require_scope, require_site_access
 from .signing import ED25519
 
 router = APIRouter(prefix="/v1")
@@ -215,7 +215,7 @@ def certificate_status(
     stop being good" without reading the database.
     """
     check_rate(request)
-    require_scope(authorization, "read")
+    principal = require_scope(authorization, "read")
 
     rows = query(
         "SELECT serial, node_id, status, issued_utc_ms, not_after_utc_ms, body"
@@ -225,6 +225,7 @@ def certificate_status(
     if not rows:
         raise HTTPException(status_code=404, detail="certificate_not_found")
     row = rows[0]
+    require_node_access(principal, row["node_id"])
 
     # Status comes from the database and the verdict comes from the signature. They are
     # reported separately on purpose: a certificate can be signature-valid and retired, and

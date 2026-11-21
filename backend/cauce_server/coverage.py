@@ -4,10 +4,9 @@ import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from .config import settings
 from .db import query
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import require_node_read, require_scope, require_site_access
 
 router = APIRouter(prefix="/v1")
 
@@ -372,7 +371,7 @@ def node_coverage_endpoint(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_node_read(authorization, node_id)
     # Validated before the node lookup, so a malformed parameter is reported as itself
     # rather than as `node_not_found` for a node that does exist. The 404 would send the
     # caller looking for a node problem they do not have.
@@ -407,7 +406,7 @@ def site_coverage_endpoint(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_site_access(require_scope(authorization, "read"), site_id)
     if not query("SELECT 1 FROM sites WHERE site_id=?", (site_id,)):
         raise HTTPException(status_code=404, detail="site_not_found")
     interval = _interval(expected_interval_ms)

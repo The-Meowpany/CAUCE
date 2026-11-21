@@ -23,7 +23,7 @@ from .calibration import (
 from .config import settings
 from .db import engine, query
 from .ratelimit import check_rate
-from .security import require_bearer_token
+from .security import principal_site, require_node_read, require_scope
 from .uncertainty import budget_for
 
 router = APIRouter()
@@ -1644,9 +1644,11 @@ def export_all_csv(
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    site = principal_site(require_scope(authorization, "read"))
     return StreamingResponse(
-        _csv_chunks(_CSV_SELECT + " ORDER BY node_id, sequence"),
+        _csv_chunks(_CSV_SELECT + " WHERE (? IS NULL OR node_id IN"
+                    " (SELECT node_id FROM nodes WHERE site_id=?))"
+                    " ORDER BY node_id, sequence", (site, site)),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=cauce-all.csv"})
 
@@ -1658,7 +1660,7 @@ def export_node_csv(
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_node_read(authorization, node_id)
     safe_node_id = "".join(
         c for c in node_id if c.isalnum() or c in ("-", "_")
     ) or "node"
@@ -1681,7 +1683,7 @@ def export_node_coverage_csv(
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_node_read(authorization, node_id)
     from .coverage import _interval, _window, node_coverage
 
     if not query("SELECT 1 FROM nodes WHERE node_id=?", (node_id,)):

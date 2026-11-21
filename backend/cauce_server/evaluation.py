@@ -16,10 +16,15 @@ from .calibration import (
     calibration_summary,
     is_identity,
 )
-from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_admin_write, require_bearer_token
+from .security import (
+    principal_site,
+    require_admin_write,
+    require_node_read,
+    require_scope,
+    require_site_access,
+)
 
 router = APIRouter(prefix="/v1")
 
@@ -105,12 +110,13 @@ def list_sites(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    site = principal_site(require_scope(authorization, "read"))
     rows = query(
         """SELECT s.site_id, s.name, s.notes, s.lat, s.lon, s.is_control,
                   (SELECT COUNT(*) FROM nodes n WHERE n.site_id=s.site_id) AS node_count,
                   (SELECT COUNT(*) FROM interventions i WHERE i.site_id=s.site_id) AS intervention_count
-           FROM sites s ORDER BY s.site_id"""
+           FROM sites s WHERE (? IS NULL OR s.site_id=?) ORDER BY s.site_id""",
+        (site, site),
     )
     return {"sites": [dict(r) for r in rows]}
 
@@ -216,7 +222,9 @@ def list_interventions(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_scope(authorization, "read")
+    require_site_access(principal, site_id)
+    site_id = site_id or principal_site(principal)
     sql = "SELECT * FROM interventions"
     params: list = []
     if site_id:
@@ -236,7 +244,7 @@ def analytics_before_after(
     authorization: str | None = Header(default=None),
 ) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    principal = require_node_read(authorization, node_id)
     if before_window_days is not None and not 1 <= before_window_days <= 3650:
         raise HTTPException(status_code=422, detail="invalid_before_window_days")
 
@@ -247,6 +255,7 @@ def analytics_before_after(
     if not rows:
         raise HTTPException(status_code=404, detail="intervention_not_found")
     iv = rows[0]
+    require_site_access(principal, iv["site_id"])
     start = iv["start_utc_ms"]
     end = iv["end_utc_ms"] or int(time.time() * 1000)
     before_from = 0

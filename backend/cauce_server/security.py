@@ -143,6 +143,40 @@ def require_site_access(principal: dict | None, site_id: str | None) -> None:
         )
 
 
+def principal_site(principal: dict | None) -> str | None:
+    """The one site a principal is confined to, or None for a fleet-wide caller."""
+    return principal.get("site_id") if principal else None
+
+
+def site_of_node(node_id: str) -> str | None:
+    from .db import query
+
+    rows = query("SELECT site_id FROM nodes WHERE node_id=?", (node_id,))
+    return rows[0]["site_id"] if rows else None
+
+
+def require_node_access(principal: dict | None, node_id: str) -> None:
+    """A site-scoped principal may only see nodes assigned to its own site.
+
+    Stricter than `require_site_access`: a node with no site, or no row at all, is out of
+    scope too. Otherwise an unassigned node would be readable by every site operator, and
+    the 403-versus-404 difference would tell them which node ids exist elsewhere.
+    """
+    allowed = principal_site(principal)
+    if allowed and site_of_node(node_id) != allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "site_out_of_scope", "site_id": allowed},
+        )
+
+
+def require_node_read(authorization: str | None, node_id: str) -> dict | None:
+    """Read scope plus the node's site. The gate for every per-node read."""
+    principal = require_scope(authorization, "read")
+    require_node_access(principal, node_id)
+    return principal
+
+
 def hash_token(token: str) -> str:
     return _sha256_hex(token)
 

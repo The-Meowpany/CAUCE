@@ -9,7 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from .config import settings
 from .db import query, transaction
 from .ratelimit import check_rate
-from .security import require_admin_write, require_bearer_token
+from .security import principal_site, require_admin_write, require_scope
 
 router = APIRouter(prefix="/v1")
 
@@ -207,7 +207,7 @@ def create_rule(payload: dict, request: Request,
 def update_rule(rule_id: int, payload: dict, request: Request,
                 authorization: str | None = Header(default=None)) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     fields: list = []
     params: list = []
     if "enabled" in payload:
@@ -251,9 +251,17 @@ def update_rule(rule_id: int, payload: dict, request: Request,
 def list_rules(request: Request,
                authorization: str | None = Header(default=None)) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
-    return {"rules": [dict(r) for r in query(
-        "SELECT * FROM alert_rules ORDER BY rule_id")]}
+    principal = require_scope(authorization, "read")
+    site = principal_site(principal)
+    rules = [dict(r) for r in query(
+        "SELECT * FROM alert_rules WHERE (? IS NULL OR node_id IN"
+        " (SELECT node_id FROM nodes WHERE site_id=?)) ORDER BY rule_id", (site, site))]
+    # The target is a webhook URL or an address, often with a secret in it. A read-only
+    # principal sees that a rule exists and what it watches, not where it reports.
+    if principal is not None and not ({"write", "admin"} & set(principal["scopes"])):
+        for rule in rules:
+            rule["target"] = "" if not rule["target"] else "***"
+    return {"rules": rules}
 
 
 @router.delete("/alerts/rules/{rule_id}")
@@ -274,10 +282,12 @@ def alert_log(request: Request,
               authorization: str | None = Header(default=None),
               limit: int = 50) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    site = principal_site(require_scope(authorization, "read"))
     limit = max(1, min(limit, 500))
     return {"entries": [dict(r) for r in query(
-        "SELECT * FROM alert_log ORDER BY log_id DESC LIMIT ?", (limit,))]}
+        "SELECT * FROM alert_log WHERE (? IS NULL OR node_id IN"
+        " (SELECT node_id FROM nodes WHERE site_id=?)) ORDER BY log_id DESC LIMIT ?",
+        (site, site, limit))]}
 
 
 @router.post("/alerts/check")
@@ -285,7 +295,7 @@ def alert_log(request: Request,
 def run_check(request: Request,
               authorization: str | None = Header(default=None)) -> dict:
     check_rate(request)
-    require_bearer_token(authorization, settings.api_token)
+    require_admin_write(authorization)
     fired = evaluate_stale_rules()
     redelivered = retry_pending()
     return {"status": "checked", "fired": fired,
