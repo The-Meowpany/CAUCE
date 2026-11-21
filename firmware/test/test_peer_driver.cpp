@@ -253,7 +253,53 @@ void test_peer_driver_bounds_its_table_and_the_backlog_for_a_new_peer() {
                            driver.offeredThrough(peerAt(1).address));
 }
 
+// ---------------------------------------------------------------- receive ring
+
+void test_peer_ring_hands_frames_back_in_arrival_order() {
+  hal::PeerFrameRing ring;
+  const uint8_t a[3] = {0xC3, 0x5A, 1};
+  const uint8_t b[4] = {0xC3, 0x5A, 2, 2};
+  TEST_ASSERT_TRUE(ring.push(a, sizeof(a)));
+  TEST_ASSERT_TRUE(ring.push(b, sizeof(b)));
+  uint8_t out[hal::kPeerFrameMaxBytes];
+  TEST_ASSERT_EQUAL(3, ring.pop(out, sizeof(out)));
+  TEST_ASSERT_EQUAL_HEX8(1, out[2]);
+  TEST_ASSERT_EQUAL(4, ring.pop(out, sizeof(out)));
+  TEST_ASSERT_EQUAL(0, ring.pop(out, sizeof(out)));
+}
+
+void test_peer_ring_keeps_the_oldest_when_full_and_counts_the_drop() {
+  hal::PeerFrameRing ring;
+  uint8_t frame[2] = {0xC3, 0};
+  for (uint8_t i = 0; i < hal::PeerFrameRing::kSlots; ++i) {
+    frame[1] = i;
+    TEST_ASSERT_TRUE(ring.push(frame, sizeof(frame)));
+  }
+  frame[1] = 99;
+  TEST_ASSERT_FALSE(ring.push(frame, sizeof(frame)));
+  TEST_ASSERT_EQUAL_UINT32(1, ring.dropped());
+  uint8_t out[8];
+  ring.pop(out, sizeof(out));
+  TEST_ASSERT_EQUAL_HEX8(0, out[1]);
+}
+
+void test_peer_ring_refuses_oversize_frames_and_drops_one_it_cannot_return() {
+  hal::PeerFrameRing ring;
+  std::vector<uint8_t> big(hal::kPeerFrameMaxBytes + 1, 0xC3);
+  TEST_ASSERT_FALSE(ring.push(big.data(), big.size()));
+  const uint8_t frame[10] = {0xC3, 0x5A};
+  ring.push(frame, sizeof(frame));
+  uint8_t small[4];
+  TEST_ASSERT_EQUAL(-1, ring.pop(small, sizeof(small)));
+  // Dropped rather than left at the head, where it would block every later frame.
+  TEST_ASSERT_EQUAL(0u, ring.size());
+  TEST_ASSERT_EQUAL_UINT32(2, ring.dropped());
+}
+
 void registerPeerDriverTests() {
+  RUN_TEST(test_peer_ring_hands_frames_back_in_arrival_order);
+  RUN_TEST(test_peer_ring_keeps_the_oldest_when_full_and_counts_the_drop);
+  RUN_TEST(test_peer_ring_refuses_oversize_frames_and_drops_one_it_cannot_return);
   RUN_TEST(test_peer_keyring_parses_and_finds_entries);
   RUN_TEST(test_peer_keyring_refuses_a_malformed_list_whole);
   RUN_TEST(test_peer_settings_survive_a_config_roundtrip);

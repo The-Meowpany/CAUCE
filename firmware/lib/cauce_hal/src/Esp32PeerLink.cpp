@@ -25,11 +25,6 @@ namespace {
 // Not `memcpy` of a struct field: that is correct on this target and undefined on a host where
 // the field is at a different offset, and the whole point of putting the format in a
 // host-testable file is that a host test means something.
-void putU16(uint8_t*& p, uint16_t v) {
-  *p++ = static_cast<uint8_t>(v & 0xFFu);
-  *p++ = static_cast<uint8_t>((v >> 8) & 0xFFu);
-}
-
 void putU32(uint8_t*& p, uint32_t v) {
   *p++ = static_cast<uint8_t>(v & 0xFFu);
   *p++ = static_cast<uint8_t>((v >> 8) & 0xFFu);
@@ -41,12 +36,6 @@ void putU64(uint8_t*& p, uint64_t v) {
   for (int i = 0; i < 8; ++i) {
     *p++ = static_cast<uint8_t>((v >> (8 * i)) & 0xFFu);
   }
-}
-
-uint16_t getU16(const uint8_t*& p) {
-  const uint16_t v = static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8));
-  p += 2;
-  return v;
 }
 
 uint32_t getU32(const uint8_t*& p) {
@@ -213,6 +202,32 @@ bool decodePeerFrame(const uint8_t* data, size_t length, PeerFrameContents& out)
 // the untestable seam this file is honest about having.
 // ---------------------------------------------------------------------------
 
+bool PeerFrameRing::push(const uint8_t* data, size_t length) {
+  if (data == nullptr || length == 0 || length > kPeerFrameMaxBytes || count_ == kSlots) {
+    ++dropped_;
+    return false;
+  }
+  const size_t slot = (head_ + count_) % kSlots;
+  std::memcpy(frames_[slot], data, length);
+  lengths_[slot] = static_cast<uint16_t>(length);
+  ++count_;
+  return true;
+}
+
+int PeerFrameRing::pop(uint8_t* buffer, size_t capacity) {
+  if (count_ == 0) return 0;
+  const size_t length = lengths_[head_];
+  const size_t slot = head_;
+  head_ = (head_ + 1) % kSlots;
+  --count_;
+  if (buffer == nullptr || length > capacity) {
+    ++dropped_;
+    return -1;
+  }
+  std::memcpy(buffer, frames_[slot], length);
+  return static_cast<int>(length);
+}
+
 #ifdef ARDUINO
 #ifdef ARDUINO_ARCH_ESP32
 
@@ -232,6 +247,27 @@ void fillAnnouncement(uint8_t* out, const char* nodeId) {
   }
 }
 
+const uint8_t kBroadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+// One receive callback for the whole ESP-NOW link: the IDF keeps a single one, so discovery and
+// the radio cannot each register their own without one silently replacing the other. Before
+// this, only discovery registered, and every data frame a neighbour sent was discarded.
+PeerFrameRing s_rxRing;
+portMUX_TYPE s_rxMux = portMUX_INITIALIZER_UNLOCKED;
+
+void onEspNowReceive(const uint8_t* address, const uint8_t* payload, int length) {
+  if (payload == nullptr || length < 1) return;
+  if (payload[0] == kAnnounceTag) {
+    Esp32PeerDiscovery::onPeerFound(address, payload, length);
+    return;
+  }
+  if (length >= 2 && payload[0] == kPeerFrameMagic0 && payload[1] == kPeerFrameMagic1) {
+    portENTER_CRITICAL(&s_rxMux);
+    s_rxRing.push(payload, static_cast<size_t>(length));
+    portEXIT_CRITICAL(&s_rxMux);
+  }
+}
+
 }  // namespace
 
 volatile uint8_t Esp32PeerDiscovery::s_foundCount = 0;
@@ -244,6 +280,14 @@ void Esp32PeerDiscovery::onPeerFound(const uint8_t* address, const uint8_t* payl
                                      int length) {
   if (address == nullptr || payload == nullptr || length < 1) return;
   if (payload[0] != kAnnounceTag) return;
+  // A peer that announces again is refreshed, not added a second time: without this every
+  // announcement took a new slot and a single neighbour filled the table.
+  for (size_t i = 0; i < kMaxKnownPeers; ++i) {
+    if (s_peers[i].inUse && std::memcmp(s_peers[i].address, address, 6) == 0) {
+      s_peers[i].lastSeenMs = millis();
+      return;
+    }
+  }
   if (s_foundCount >= kMaxKnownPeers) return;
 
   // A fixed table, no allocation, and no reference into the callback's frame.
@@ -270,16 +314,38 @@ bool Esp32PeerDiscovery::begin() {
   // `esp_now_register_recv_cb`, not `esp_now_set_peer_receive_cb`: the latter does not
   // exist in this IDF (4.4) and the compiler says so, which is more useful than a link
   // error at the end of the build. The callback signature matches `onPeerFound` exactly.
-  esp_now_register_recv_cb(onPeerFound);
+  esp_now_register_recv_cb(onEspNowReceive);
   status_ = DiscoveryStatus::Ok;
   return true;
 }
 
-size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
-  if (out == nullptr || capacity == 0) return 0;
-  if (status_ != DiscoveryStatus::Ok) return 0;
+void Esp32PeerDiscovery::setNodeId(const char* nodeId) {
+  std::memset(nodeId_, 0, sizeof(nodeId_));
+  if (nodeId != nullptr) std::strncpy(nodeId_, nodeId, sizeof(nodeId_) - 1);
+}
 
+void Esp32PeerDiscovery::announce() {
+  uint8_t frame[kAnnounceLength];
+  fillAnnouncement(frame, nodeId_);
+  esp_now_peer_info_t info = {};
+  std::memcpy(info.peer_addr, kBroadcast, 6);
+  info.channel = 0;
+  info.encrypt = false;
+  if (esp_now_add_peer(&info) != ESP_OK) return;
+  esp_now_send(kBroadcast, frame, sizeof(frame));
+  esp_now_del_peer(kBroadcast);
+}
+
+size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
+  if (status_ != DiscoveryStatus::Ok) return 0;
   const uint32_t now = millis();
+  if (!announced_ || now - lastAnnounceMs_ >= kAnnounceIntervalMs) {
+    announce();
+    announced_ = true;
+    lastAnnounceMs_ = now;
+  }
+  if (out == nullptr || capacity == 0) return 0;
+
   size_t written = 0;
   for (size_t i = 0; i < kMaxKnownPeers && written < capacity; ++i) {
     if (!s_peers[i].inUse) continue;
@@ -303,6 +369,7 @@ size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
 
 bool Esp32PeerRadio::begin(uint8_t channel) {
   if (esp_now_init() != ESP_OK) return false;
+  esp_now_register_recv_cb(onEspNowReceive);
   // The channel is logged nowhere and reported nowhere. A node whose peer discovery runs on
   // channel 1 and whose peer radio on channel 6 finds peers it can never reach, and the
   // symptom - total silence - points at the driver rather than at the configuration.
@@ -335,9 +402,10 @@ RadioStatus Esp32PeerRadio::send(const uint8_t* data, size_t length,
 
 int Esp32PeerRadio::receive(uint8_t* buffer, size_t capacity) {
   if (buffer == nullptr || capacity == 0) return -1;
-  // A receive callback would have to buffer a frame that may never be drained. Until there is
-  // one, an honest "nothing yet" beats a buffer that fills and silently drops the oldest frame.
-  return 0;
+  portENTER_CRITICAL(&s_rxMux);
+  const int got = s_rxRing.pop(buffer, capacity);
+  portEXIT_CRITICAL(&s_rxMux);
+  return got;
 }
 
 #endif

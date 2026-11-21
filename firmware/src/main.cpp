@@ -812,6 +812,7 @@ void setup() {
     if (config.peerEnabled) {
       g_peerRadio = new cauce::hal::Esp32PeerRadio();
       g_peerDiscovery = new cauce::hal::Esp32PeerDiscovery(config.peerChannel);
+      g_peerDiscovery->setNodeId(config.nodeId);
       const bool radioUp = g_peerRadio->begin(config.peerChannel);
       const bool discoveryUp = g_peerDiscovery->begin();
       g_peerExchange = new cauce::app::Esp32PeerExchange(*g_store, *g_peerMarks,

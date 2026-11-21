@@ -116,6 +116,32 @@ bool decodePeerFrame(const uint8_t* data, size_t length, PeerFrameContents& out)
 //
 // `poll()` drains a fixed ring the radio callback fills, so a caller spending its whole
 // scheduler cycle listening is impossible by construction rather than by convention.
+// Received peer frames waiting for `Esp32PeerRadio::receive`. The ESP-NOW callback runs on the
+// Wi-Fi task and must return quickly, so it copies the frame here and the loop drains it. Plain
+// C++ with no locking of its own - the ESP32 glue wraps push and pop in a critical section - so
+// the ordering and overflow rules are testable on the host.
+class PeerFrameRing {
+ public:
+  static constexpr size_t kSlots = 4;
+
+  // False, and counted as dropped, when the ring is full or the frame does not fit a slot. The
+  // oldest frame is kept: it was received first and is no less authentic than the newest.
+  bool push(const uint8_t* data, size_t length);
+  // The next frame's length, 0 when empty, or -1 when `capacity` cannot hold it (the frame is
+  // dropped rather than left to block every later one).
+  int pop(uint8_t* buffer, size_t capacity);
+
+  size_t size() const { return count_; }
+  uint32_t dropped() const { return dropped_; }
+
+ private:
+  uint8_t frames_[kSlots][kPeerFrameMaxBytes]{};
+  uint16_t lengths_[kSlots]{};
+  size_t head_{0};
+  size_t count_{0};
+  uint32_t dropped_{0};
+};
+
 class Esp32PeerDiscovery final : public IPeerDiscovery {
  public:
   // Explicit channel: peers only find each other on the same one, and a deployment that
@@ -124,8 +150,14 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
   ~Esp32PeerDiscovery() override;
 
   bool begin();
+  // Discovery is two-sided: a node is found only if it announces itself. `poll` broadcasts this
+  // node's announcement every kAnnounceIntervalMs, well inside the 60 s after which a silent
+  // peer is dropped from the table.
+  void setNodeId(const char* nodeId);
   size_t poll(Peer* out, size_t capacity) override;
   DiscoveryStatus status() const override { return status_; }
+
+  static constexpr uint32_t kAnnounceIntervalMs = 20000;
 
   // The radio callback. Copies the address into a fixed table; it must not reference a
   // pointer into the callback's own frame, which has already returned by the time anything
@@ -141,8 +173,13 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
     bool inUse{false};
   };
 
+  void announce();
+
   DiscoveryStatus status_{DiscoveryStatus::Unsupported};
   uint8_t channel_{0};
+  char nodeId_[16]{};
+  bool announced_{false};
+  uint32_t lastAnnounceMs_{0};
   static KnownPeer s_peers[kMaxKnownPeers];
   // Written from the WiFi task, read from `poll`. A `uint8_t` count: single-word writes are
   // atomic on Xtensa, and a torn read here would be a count one too high at worst.
