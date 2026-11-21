@@ -114,13 +114,12 @@ budget document.
 | Central node: gateway and server (Orange Pi Zero 3) | 79.70 |
 | Tools and bench rig | 132.03 |
 | Calibration and co-location | 30.00 |
-| Workshops, teaching materials and travel | 2,159.12 |
-| Parcel delivery and installation | 155.00 |
+| Education programme | 1,573.84 |
+| Logistics, operation and import taxes | 754.26 |
 | Critical spares | 49.94 |
-| Contingency, dual purpose | 290.00 |
-| **Project total** | **3,954.87** |
-| Not used of the USD 4,000 | 45.13 |
-| Import taxes, requested from the Intendencia de Canelones | 387.42 |
+| Contingency, dual purpose | 270.00 |
+| **Project total** | **3,948.85** |
+| Not used of the USD 4,000 | 51.15 |
 
 The contingency is sized to the price risk. Until stage 4 closes
 (everything bought and imported) it covers what ends up costing more than
@@ -131,20 +130,23 @@ calibration of the bench reference instrument the project owns (or a
 certified one if it cannot be certified), which is what turns co-location
 from relative consistency into absolute bias.
 
-The education chapter holds most of what the network no longer needs:
+The education programme gets most of what the network no longer needs:
 six practice kits (ESP32 and a sensor set) that stay with the schools, an
-ink-tank printer, a cutting plotter and a laminator for guides, stickers
-and station labels, a roll-up, snacks for the workshops, and suburban bus
-fares for the team (workshops, four maintenance rounds) and for students
-travelling to the closing day.
+ink-tank printer and a laminator for guides, labels and certificates, a
+roll-up, snacks for the workshops, and suburban bus fares for the team and
+for students travelling to the closing day. Logistics also carries the
+fares for four maintenance rounds during the pilot.
 
 There is no 3D printer: a commercial radiation shield costs less than
 printing one. No commercial gypsum blocks are available, so they are made
-in the workshops. Import taxes sit outside the budget and are
-requested from the Intendencia de Canelones: under the single-payment
+in the workshops. Import taxes are requested from the Intendencia
+de Canelones and reserved in the budget meanwhile, so purchases do not wait
+on the answer: under the single-payment
 regime of Decreto 50/2026 (60 % of each parcel's value, at least USD 20,
 replacing VAT and duties) they come to USD 387.42 on about USD 639 of goods
-in 11 parcels, bought in one order so each part pays the minimum once. No physical interventions line: the project
+in 11 parcels, bought in one order so each part pays the minimum once. If the Intendencia
+covers them, the reserve pays for the traceable calibration and two more
+workshops. No physical interventions line: the project
 generates evidence to evaluate measures, it doesn't execute them.
 
 What remains afterwards: hardware, firmware, protocol, data,
@@ -152,7 +154,7 @@ calibration methodology, platform.
 
 ## 7. Calibration
 
-Two-week co-location of all 8 nodes before deployment; individual
+Two-week co-location of all 4 stations before deployment; individual
 `cal_*` coefficients per node and variable; a divergence report.
 Reference first: the bench's own reference thermohygrometer, with a
 calibration certificate from an accredited laboratory funded by the

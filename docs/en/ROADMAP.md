@@ -83,7 +83,7 @@ period decision.
 Done means: 3 nodes × 7 days in central with `time-reconstruct`
 covering the LoRa gaps.
 
-## M4 — 8-node km-scale pilot (frozen in PILOT_SPEC.md)
+## M4 — 5-node km-scale pilot: 4 stations + central node (frozen in PILOT_SPEC.md)
 
 Pick 8 sites for environmental interest, survey gateway height and
 antenna, deploy 1–2 gateways. Everything feeds one database. Add

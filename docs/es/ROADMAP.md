@@ -86,7 +86,7 @@ documentada de SF y período.
 Hecho significa: 3 nodos × 7 días en central con `time-reconstruct`
 cubriendo los huecos LoRa.
 
-## M4 — Piloto de 8 nodos a escala km (congelado en PILOT_SPEC.md)
+## M4 — Piloto de 5 nodos a escala km: 4 estaciones + nodo central (congelado en PILOT_SPEC.md)
 
 Elegir 8 sitios por interés ambiental, survey de altura y antena del
 gateway, desplegar 1–2 gateways. Todo alimenta una base. Agregar

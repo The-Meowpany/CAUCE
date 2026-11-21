@@ -117,13 +117,12 @@ presupuesto.
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
 | Herramientas y banco de pruebas | 132,03 |
 | Calibración y co-localización | 30,00 |
-| Talleres, materiales didácticos y traslados | 2.159,12 |
-| Entrega de envíos e instalación | 155,00 |
+| Programa educativo | 1.573,84 |
+| Logística, operación e importación | 754,26 |
 | Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 290,00 |
-| **Total del proyecto** | **3.954,87** |
-| No utilizado de los USD 4.000 | 45,13 |
-| Tributos de importación, solicitados a la Intendencia de Canelones | 387,42 |
+| Contingencia de doble propósito | 270,00 |
+| **Total del proyecto** | **3.948,85** |
+| No utilizado de los USD 4.000 | 51,15 |
 
 La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
 etapa 4 (todo comprado e importado) cubre lo que termine costando más de
@@ -135,22 +134,24 @@ instrumento de referencia del banco, propio del proyecto (o uno certificado
 si ese no admite certificación), que es lo que convierte la
 co-localización de consistencia relativa en sesgo absoluto.
 
-El capítulo educativo concentra lo que la red ya no necesita: seis kits de
-práctica (ESP32 y un juego de sensores) que quedan en las instituciones,
-una impresora de tinta continua, un plotter de corte y una plastificadora
-para guías, stickers y etiquetas de las estaciones, un roll-up, la merienda
-de los talleres y los boletos suburbanos del equipo (talleres y cuatro
-rondas de mantenimiento) y de los estudiantes que viajan a la jornada de
-cierre.
+El programa educativo concentra lo que la red ya no necesita: seis kits
+de práctica (ESP32 y un juego de sensores) que quedan en las instituciones,
+una impresora de tinta continua y una plastificadora para guías, etiquetas
+y certificados, un roll-up, la merienda de los talleres y los boletos
+suburbanos del equipo y de los estudiantes que viajan a la jornada de
+cierre. La logística incluye además los boletos de cuatro rondas de
+mantenimiento durante el piloto.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
 imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
-fabrican en los talleres. Los tributos de importación quedan fuera del
-presupuesto y se solicitan a la Intendencia de Canelones: con el régimen de
+fabrican en los talleres. Los tributos de importación se solicitan a la
+Intendencia de Canelones y, mientras tanto, quedan reservados en el
+presupuesto para que las compras no esperen la respuesta: con el régimen de
 prestación única del Decreto 50/2026 (60 % del valor de cada envío, mínimo
 USD 20, que reemplaza al IVA y a los demás tributos) suman USD 387,42 sobre
 unos USD 639 de mercadería en 11 envíos, comprada en un solo pedido para
-pagar el mínimo una sola vez por parte. Sin línea de intervenciones
+pagar el mínimo una sola vez por parte. Si la Intendencia los cubre, la
+reserva paga la calibración trazable y dos talleres más. Sin línea de intervenciones
 físicas: el proyecto genera evidencia para evaluar medidas, no las
 ejecuta.
 
@@ -159,7 +160,7 @@ de calibración, plataforma.
 
 ## 7. Calibración
 
-Co-localización de los 8 nodos dos semanas antes del despliegue;
+Co-localización de las 4 estaciones dos semanas antes del despliegue;
 coeficientes `cal_*` individuales por nodo y variable; informe de
 divergencias. Referencia primero: el termohigrómetro de referencia
 propio del banco, con certificado de calibración de un laboratorio
