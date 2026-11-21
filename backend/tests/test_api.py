@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -881,8 +882,12 @@ def test_measurements_offset_pagination_with_total(client):
 
 
 def test_retention_deletes_old_and_vacuums(client):
-    old = [make_record(1, BASE_TS - 200 * 86400000, 20.0)]
-    new = [make_record(2, BASE_TS, 21.0)]
+    # Anchored to the real clock, because retention cuts at wall-clock now minus the window.
+    # Anchored to BASE_TS instead, the "new" record silently aged past 90 days on 2026-11-20
+    # and the test started deleting both rows.
+    now_ms = int(time.time() * 1000)
+    old = [make_record(1, now_ms - 200 * 86400000, 20.0)]
+    new = [make_record(2, now_ms - 86400000, 21.0)]
     client.post('/v1/sync', json=sync_payload(old + new))
     r = client.post('/v1/maintenance/retention', json={'older_than_days': 90})
     assert r.status_code == 200
