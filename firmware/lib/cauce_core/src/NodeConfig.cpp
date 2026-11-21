@@ -1,5 +1,6 @@
 #include "cauce/core/NodeConfig.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <new>
 #include <cstdio>
@@ -82,13 +83,107 @@ struct Cursor {
   }
 };
 
-void appendThresholdKeys(Cursor& c, const Thresholds& t, Variable v) {
+// Sensor switches and calibrations, as tables so a new probe is one line here instead of a
+// serialise branch and a parse branch that can drift apart. The light/voc/wind flags existed
+// before these tables and had neither branch, so no node could ever turn those sensors on.
+struct BoolKey {
+  const char* key;
+  bool NodeConfig::*field;
+};
+
+struct FloatKey {
+  const char* key;
+  float NodeConfig::*field;
+};
+
+constexpr BoolKey kSensorFlags[] = {
+    {"light_enabled", &NodeConfig::lightEnabled},
+    {"voc_enabled", &NodeConfig::vocEnabled},
+    {"wind_enabled", &NodeConfig::windEnabled},
+    {"pm_enabled", &NodeConfig::pmEnabled},
+    {"co2_enabled", &NodeConfig::co2Enabled},
+    {"uv_enabled", &NodeConfig::uvEnabled},
+    {"lightning_enabled", &NodeConfig::lightningEnabled},
+    {"lightning_indoor", &NodeConfig::lightningIndoor},
+    {"soil_temperature_enabled", &NodeConfig::soilTemperatureEnabled},
+    {"rtc_enabled", &NodeConfig::rtcEnabled},
+    {"rain_enabled", &NodeConfig::rainEnabled},
+    {"vane_enabled", &NodeConfig::vaneEnabled},
+    {"soil_moisture_enabled", &NodeConfig::soilMoistureEnabled},
+    {"leaf_wetness_enabled", &NodeConfig::leafWetnessEnabled},
+    {"irradiance_enabled", &NodeConfig::irradianceEnabled},
+    {"soil_potential_enabled", &NodeConfig::soilPotentialEnabled},
+    {"battery_monitor_enabled", &NodeConfig::batteryMonitorEnabled},
+};
+
+constexpr FloatKey kSensorFloats[] = {
+    {"wind_diameter_m", &NodeConfig::windDiameterMetres},
+    {"rain_mm_per_tip", &NodeConfig::rainMmPerTip},
+    {"vane_offset_deg", &NodeConfig::vaneOffsetDegrees},
+    {"soil_moisture_dry_mv", &NodeConfig::soilMoistureDryMv},
+    {"soil_moisture_wet_mv", &NodeConfig::soilMoistureWetMv},
+    {"leaf_wetness_dry_mv", &NodeConfig::leafWetnessDryMv},
+    {"leaf_wetness_wet_mv", &NodeConfig::leafWetnessWetMv},
+    {"irradiance_wm2_per_mv", &NodeConfig::irradianceWm2PerMv},
+    {"soil_potential_kpa_per_mv", &NodeConfig::soilPotentialKpaPerMv},
+    {"soil_potential_offset_kpa", &NodeConfig::soilPotentialOffsetKpa},
+    {"battery_divider_ratio", &NodeConfig::batteryDividerRatio},
+};
+
+void appendSensorKeys(Cursor& c, const NodeConfig& config) {
+  for (const auto& k : kSensorFlags) c.write("%s=%d\n", k.key, (config.*k.field) ? 1 : 0);
+  for (const auto& k : kSensorFloats) {
+    c.write("%s=%.4f\n", k.key, static_cast<double>(config.*k.field));
+  }
+  c.write("wind_pulses_per_rev=%u\n", static_cast<unsigned>(config.windPulsesPerRevolution));
+}
+
+// Returns true when `key` is a sensor key, whether or not its value parsed, so the caller does
+// not fall through to the threshold branch with it.
+bool parseSensorKey(const char* key, const char* valueText, NodeConfig& cfg, bool& malformed) {
+  for (const auto& k : kSensorFlags) {
+    if (std::strcmp(key, k.key) != 0) continue;
+    cfg.*k.field = std::strcmp(valueText, "1") == 0 || std::strcmp(valueText, "true") == 0;
+    return true;
+  }
+  for (const auto& k : kSensorFloats) {
+    if (std::strcmp(key, k.key) != 0) continue;
+    char* end = nullptr;
+    const float value = std::strtof(valueText, &end);
+    if (end == valueText || !std::isfinite(value)) {
+      malformed = true;
+    } else {
+      cfg.*k.field = value;
+    }
+    return true;
+  }
+  if (std::strcmp(key, "wind_pulses_per_rev") == 0) {
+    const long value = std::strtol(valueText, nullptr, 10);
+    if (value >= 1 && value <= 255) {
+      cfg.windPulsesPerRevolution = static_cast<uint8_t>(value);
+    } else {
+      malformed = true;
+    }
+    return true;
+  }
+  return false;
+}
+
+// Only thresholds that differ from the firmware defaults are written. Parsing starts from the
+// defaults, so nothing is lost, and the file stays inside the config buffer now that the
+// catalogue has two dozen variables - an unbounded limit printed with %.2f is a 40-digit line.
+void appendThresholdKeys(Cursor& c, const Thresholds& t, const Thresholds& defaults,
+                         Variable v) {
   const char* name = variableName(v);
   const uint8_t i = static_cast<uint8_t>(v);
-  c.write("thr_range_min_%s=%.2f\n", name, static_cast<double>(t.rangeMin[i]));
-  c.write("thr_range_max_%s=%.2f\n", name, static_cast<double>(t.rangeMax[i]));
-  c.write("thr_rise_pm_%s=%.2f\n", name, static_cast<double>(t.maxRisePerMinute[i]));
-  c.write("thr_drop_pm_%s=%.2f\n", name, static_cast<double>(t.maxDropPerMinute[i]));
+  if (t.rangeMin[i] != defaults.rangeMin[i])
+    c.write("thr_range_min_%s=%.2f\n", name, static_cast<double>(t.rangeMin[i]));
+  if (t.rangeMax[i] != defaults.rangeMax[i])
+    c.write("thr_range_max_%s=%.2f\n", name, static_cast<double>(t.rangeMax[i]));
+  if (t.maxRisePerMinute[i] != defaults.maxRisePerMinute[i])
+    c.write("thr_rise_pm_%s=%.2f\n", name, static_cast<double>(t.maxRisePerMinute[i]));
+  if (t.maxDropPerMinute[i] != defaults.maxDropPerMinute[i])
+    c.write("thr_drop_pm_%s=%.2f\n", name, static_cast<double>(t.maxDropPerMinute[i]));
 }
 
 char* trim(char* s) {
@@ -160,9 +255,11 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
           static_cast<unsigned long>(config.segmentMaxBytes));
   c.write("deep_sleep_enabled=%d\n", config.deepSleepEnabled ? 1 : 0);
   c.write("admin_token_sha256=%s\n", config.adminTokenSha256);
+  appendSensorKeys(c, config);
 
+  const Thresholds defaults = defaultThresholds();
   for (uint8_t v = 0; v < kVariableCount; ++v) {
-    appendThresholdKeys(c, config.thresholds, static_cast<Variable>(v));
+    appendThresholdKeys(c, config.thresholds, defaults, static_cast<Variable>(v));
   }
   if (c.overflow) {
     out[capacity > 0 ? capacity - 1 : 0] = '\0';
@@ -325,6 +422,8 @@ bool parseConfig(const char* text, NodeConfig& out) {
                                std::strcmp(valueText, "true") == 0;
       } else if (std::strcmp(key, "admin_token_sha256") == 0) {
         copyString(cfg.adminTokenSha256, sizeof(cfg.adminTokenSha256), valueText);
+      } else if (bool badValue = false; parseSensorKey(key, valueText, cfg, badValue)) {
+        if (badValue) malformed++;
       } else if (std::strncmp(key, "thr_", 4) == 0) {
         for (uint8_t v = 0; v < kVariableCount; ++v) {
           const Variable var = static_cast<Variable>(v);

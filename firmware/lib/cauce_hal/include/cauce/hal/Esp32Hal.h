@@ -34,6 +34,8 @@ class Esp32WireBus final : public II2cBus {
   bool readRegisters(uint8_t deviceAddress, uint8_t startRegister,
                      uint8_t* buffer, size_t length) override;
   bool isPresent(uint8_t deviceAddress) override;
+  bool writeBytes(uint8_t deviceAddress, const uint8_t* data, size_t length) override;
+  bool readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t length) override;
 
  private:
   int sdaPin_;

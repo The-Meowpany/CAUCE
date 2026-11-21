@@ -2,64 +2,69 @@
 
 namespace cauce {
 
-const char* variableName(Variable v) {
-  switch (v) {
-    case Variable::AirTemperature:
-      return "air_temperature";
-    case Variable::RelativeHumidity:
-      return "relative_humidity";
-    case Variable::Pressure:
-      return "pressure";
-    case Variable::Light:
-      return "illuminance";
-    case Variable::BatteryVoltage:
-      return "battery_voltage";
-    case Variable::WindSpeed:
-      return "wind_speed";
-    case Variable::Tvoc:
-      return "tvoc";
-    default:
-      return "unknown";
+namespace {
+
+struct VariableEntry {
+  Variable var;
+  const char* name;
+  const char* unit;
+};
+
+// One table instead of three switches, so a variable cannot gain a name and forget its unit.
+// Units stay ASCII: they are written into CSV exports and HTTP bodies that a serial console
+// also has to show.
+constexpr VariableEntry kVariables[] = {
+    {Variable::AirTemperature, "air_temperature", "C"},
+    {Variable::RelativeHumidity, "relative_humidity", "%RH"},
+    {Variable::Pressure, "pressure", "hPa"},
+    {Variable::Light, "illuminance", "lx"},
+    {Variable::BatteryVoltage, "battery_voltage", "V"},
+    {Variable::WindSpeed, "wind_speed", "m/s"},
+    {Variable::Tvoc, "tvoc", "ppb"},
+    {Variable::Co2, "co2", "ppm"},
+    {Variable::Pm1, "pm1", "ug/m3"},
+    {Variable::Pm25, "pm2_5", "ug/m3"},
+    {Variable::Pm4, "pm4", "ug/m3"},
+    {Variable::Pm10, "pm10", "ug/m3"},
+    {Variable::UvIndex, "uv_index", "UVI"},
+    {Variable::UvaIndex, "uva_index", "UVI"},
+    {Variable::UvbIndex, "uvb_index", "UVI"},
+    {Variable::SolarIrradiance, "solar_irradiance", "W/m2"},
+    {Variable::WindDirection, "wind_direction", "deg"},
+    {Variable::Rainfall, "rainfall", "mm"},
+    {Variable::SoilMoisture, "soil_moisture", "%"},
+    {Variable::SoilWaterPotential, "soil_water_potential", "kPa"},
+    {Variable::SoilTemperature, "soil_temperature", "C"},
+    {Variable::LeafWetness, "leaf_wetness", "%"},
+    {Variable::LightningStrikes, "lightning_strikes", "count"},
+    {Variable::LightningDistance, "lightning_distance", "km"},
+};
+
+static_assert(sizeof(kVariables) / sizeof(kVariables[0]) == kVariableCount,
+              "every variable needs a name and a unit");
+
+const VariableEntry* find(Variable v) {
+  for (const auto& e : kVariables) {
+    if (e.var == v) return &e;
   }
+  return nullptr;
+}
+
+}  // namespace
+
+const char* variableName(Variable v) {
+  const VariableEntry* e = find(v);
+  return e ? e->name : "unknown";
 }
 
 const char* variableUnit(Variable v) {
-  switch (v) {
-    case Variable::AirTemperature:
-      return "C";
-    case Variable::RelativeHumidity:
-      return "%RH";
-    case Variable::Pressure:
-      return "hPa";
-    case Variable::Light:
-      return "lx";
-    case Variable::BatteryVoltage:
-      return "V";
-    case Variable::WindSpeed:
-      return "m/s";
-    case Variable::Tvoc:
-      return "ppb";
-    default:
-      return "?";
-  }
+  const VariableEntry* e = find(v);
+  return e ? e->unit : "?";
 }
 
 Variable parseVariable(const char* name) {
   if (!name) return Variable::Unknown;
-  struct Entry {
-    const char* name;
-    Variable var;
-  };
-  static constexpr Entry kEntries[] = {
-      {"air_temperature", Variable::AirTemperature},
-      {"relative_humidity", Variable::RelativeHumidity},
-      {"pressure", Variable::Pressure},
-      {"illuminance", Variable::Light},
-      {"battery_voltage", Variable::BatteryVoltage},
-      {"wind_speed", Variable::WindSpeed},
-      {"tvoc", Variable::Tvoc},
-  };
-  for (const auto& e : kEntries) {
+  for (const auto& e : kVariables) {
     if (strcmp(name, e.name) == 0) return e.var;
   }
   return Variable::Unknown;

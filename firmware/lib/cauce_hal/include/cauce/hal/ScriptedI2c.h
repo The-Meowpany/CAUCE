@@ -23,6 +23,8 @@ class ScriptedI2cBus final : public II2cBus {
   bool readRegisters(uint8_t deviceAddress, uint8_t startRegister,
                      uint8_t* buffer, size_t length) override;
   bool isPresent(uint8_t deviceAddress) override;
+  bool writeBytes(uint8_t deviceAddress, const uint8_t* data, size_t length) override;
+  bool readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t length) override;
 
  private:
   std::map<uint8_t, ScriptedI2cDevice*> devices_;
@@ -33,6 +35,18 @@ class ScriptedI2cDevice {
   virtual ~ScriptedI2cDevice() = default;
   virtual void writeRegister(uint8_t reg, const uint8_t* data, size_t length) = 0;
   virtual bool readRegister(uint8_t reg, uint8_t* buffer, size_t length) = 0;
+  // Register-less transfers. A device that only speaks registers refuses them, which is what
+  // the real part would do with a transfer it does not understand.
+  virtual bool writeRaw(const uint8_t* data, size_t length) {
+    (void)data;
+    (void)length;
+    return false;
+  }
+  virtual bool readRaw(uint8_t* buffer, size_t length) {
+    (void)buffer;
+    (void)length;
+    return false;
+  }
 };
 
 class RegisterFileDevice final : public ScriptedI2cDevice {

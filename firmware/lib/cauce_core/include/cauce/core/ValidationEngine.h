@@ -42,6 +42,10 @@ struct Thresholds {
 
 Thresholds defaultThresholds();
 
+// True when an unchanging value is the variable's normal resting state rather than evidence of
+// a frozen sensor, so the stuck-value rule must not fire on it.
+bool isLegitimatelyConstant(Variable variable, float value, float epsilon);
+
 struct ValidationContext {
   bool hasPreviousValue{false};
   float previousValue{0.0f};

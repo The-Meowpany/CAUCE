@@ -85,10 +85,11 @@ void MeasurementScheduler::processSensor(drivers::ISensorDriver* sensor) {
     const Variable variable = meta.variables[v];
     if (variable == Variable::Unknown) continue;
 
-    PerVariableState& varState = variableState_[static_cast<uint8_t>(variable)][slot];
+    PerVariableState& varState = variableState_[slot][v];
     drivers::Reading reading{};
     const bool readOk = sensor->read(variable, reading);
 
+    if (!readOk && reading.status == drivers::SensorStatus::NoEvent) continue;
     if (!readOk) {
       counters_.readFailures++;
       varState.consecutiveMisses++;

@@ -274,10 +274,17 @@ void test_the_ccs811_reports_initializing_when_no_sample_is_ready_yet() {
 }
 
 void test_the_ccs811_has_no_co2_variable_at_all() {
-  // The schema-level half of the same decision: if a CO2 quantity existed, some other driver
-  // could publish it and the argument in the header would quietly stop holding.
+  // The schema-level half of the same decision. `co2` now exists, but only for an NDIR sensor
+  // that measures it; the CCS811's estimate must never be published under that name, and
+  // there is still no `eco2` variable for it to be published under instead.
   TEST_ASSERT_EQUAL_UINT8(255, static_cast<uint8_t>(Variable::Unknown));
-  TEST_ASSERT_EQUAL_INT(Variable::Unknown, parseVariable("co2"));
+  hal::ScriptedI2cBus bus;
+  hal::ManualClock clock;
+  Ccs811Driver voc(bus, clock, "CCS811-1");
+  for (uint8_t i = 0; i < voc.metadata().variableCount; ++i) {
+    TEST_ASSERT_NOT_EQUAL(static_cast<int>(Variable::Co2),
+                          static_cast<int>(voc.metadata().variables[i]));
+  }
   TEST_ASSERT_EQUAL_INT(Variable::Unknown, parseVariable("eco2"));
   TEST_ASSERT_EQUAL_INT(Variable::Tvoc, parseVariable("tvoc"));
   TEST_ASSERT_EQUAL_STRING("ppb", variableUnit(Variable::Tvoc));

@@ -30,6 +30,18 @@ bool ScriptedI2cBus::isPresent(uint8_t deviceAddress) {
   return devices_.count(deviceAddress) > 0;
 }
 
+bool ScriptedI2cBus::writeBytes(uint8_t deviceAddress, const uint8_t* data, size_t length) {
+  auto it = devices_.find(deviceAddress);
+  if (it == devices_.end()) return false;
+  return it->second->writeRaw(data, length);
+}
+
+bool ScriptedI2cBus::readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t length) {
+  auto it = devices_.find(deviceAddress);
+  if (it == devices_.end()) return false;
+  return it->second->readRaw(buffer, length);
+}
+
 void RegisterFileDevice::writeRegister(uint8_t reg, const uint8_t* data,
                                        size_t length) {
   for (size_t i = 0; i < length; ++i) {

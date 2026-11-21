@@ -268,7 +268,7 @@ void test_an_unrecognised_variable_is_stored_as_unknown_rather_than_dropped() {
   rig.store.open();
   Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
 
-  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-002", 1, "soil_moisture")};
+  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-002", 1, "sap_flow")};
   (void)exchange.mergeVerified(incoming, 1);
 
   Measurement stored{};

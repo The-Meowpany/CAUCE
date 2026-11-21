@@ -61,7 +61,11 @@ class MeasurementScheduler {
   const ValidationEngine& validator_;
   Logger& logger_;
 
-  static constexpr size_t kMaxSensors = 4;
+  // The full pilot station carries twelve drivers; the margin is for a bench node with extra
+  // probes. State is kept per (sensor, metadata slot) rather than per (variable, sensor), so
+  // the table grows with what is fitted and not with the size of the variable catalogue.
+  static constexpr size_t kMaxSensors = 16;
+  static constexpr size_t kMaxVariablesPerSensor = 4;
   drivers::ISensorDriver* sensors_[kMaxSensors]{};
   size_t sensorCount_{0};
 
@@ -72,7 +76,7 @@ class MeasurementScheduler {
   uint32_t retentionBudgetBytes_{0};
   uint64_t lastRetentionMonotonicMs_{0};
   SchedulerCounters counters_{};
-  PerVariableState variableState_[kVariableCount][kMaxSensors]{};
+  PerVariableState variableState_[kMaxSensors][kMaxVariablesPerSensor]{};
   NodeState state_{NodeState::Boot};
 };
 

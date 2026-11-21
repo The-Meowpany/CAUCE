@@ -13,10 +13,29 @@ enum class Variable : uint8_t {
   BatteryVoltage = 4,
   WindSpeed = 5,
   Tvoc = 6,
+  // Pilot station suite. Appended rather than inserted: the numeric value travels in the
+  // 68-byte frame and the compact LoRa record, so renumbering would reinterpret stored data.
+  Co2 = 7,
+  Pm1 = 8,
+  Pm25 = 9,
+  Pm4 = 10,
+  Pm10 = 11,
+  UvIndex = 12,
+  UvaIndex = 13,
+  UvbIndex = 14,
+  SolarIrradiance = 15,
+  WindDirection = 16,
+  Rainfall = 17,
+  SoilMoisture = 18,
+  SoilWaterPotential = 19,
+  SoilTemperature = 20,
+  LeafWetness = 21,
+  LightningStrikes = 22,
+  LightningDistance = 23,
   Unknown = 255,
 };
 
-static constexpr uint8_t kVariableCount = 7;
+static constexpr uint8_t kVariableCount = 24;
 
 enum class Quality : uint8_t {
   Valid = 0,

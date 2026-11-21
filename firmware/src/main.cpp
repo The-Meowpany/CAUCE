@@ -11,8 +11,15 @@
 #include "cauce/drivers/Bme280Driver.h"
 #include "cauce/drivers/Bh1750Driver.h"
 #include "cauce/drivers/Ccs811Driver.h"
+#include "cauce/drivers/As3935Driver.h"
+#include "cauce/drivers/Ds18b20Driver.h"
+#include "cauce/drivers/Ds3231Rtc.h"
 #include "cauce/drivers/HallAnemometerDriver.h"
+#include "cauce/drivers/Mhz19Driver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
+#include "cauce/drivers/Sps30Driver.h"
+#include "cauce/drivers/Veml6075Driver.h"
+#include "cauce/drivers/WeatherKitDrivers.h"
 #include "cauce/app/Esp32Sleeper.h"
 #include "cauce/hal/MemoryFileSystem.h"
 
@@ -21,8 +28,11 @@
 
 #include <Arduino.h>
 #include <WebServer.h>
+#include <esp_sntp.h>
 #include <esp_task_wdt.h>
 #include <time.h>
+
+#include "cauce/hal/Esp32Peripherals.h"
 
 #include "cauce/app/ApiRouter.h"
 #include "cauce/app/CommandExecutor.h"
@@ -67,6 +77,20 @@ static cauce::app::SerialLogSink* g_sink = nullptr;
 // reference build; a node wired differently overrides this in platformio.ini rather than
 // editing the firmware, because a pin that differs between nodes is a deployment fact.
 static constexpr uint8_t ANEMOMETER_PIN = 4;
+// Pilot station wiring. The SX1276 holds SPI (18/19/23/5), RESET 14 and DIO0 26; I2C is 21/22.
+// Analogue probes use ADC1 only (32..39), because ADC2 stops working whenever Wi-Fi is on.
+// GPIO 0, 2, 12 and 15 are strapping pins and stay free.
+static constexpr uint8_t RAIN_GAUGE_PIN = 27;
+static constexpr uint8_t LIGHTNING_IRQ_PIN = 25;
+static constexpr uint8_t ONE_WIRE_PIN = 13;
+static constexpr int CO2_UART_RX_PIN = 16;
+static constexpr int CO2_UART_TX_PIN = 17;
+static constexpr uint8_t VANE_ADC_PIN = 34;
+static constexpr uint8_t SOIL_MOISTURE_ADC_PIN = 35;
+static constexpr uint8_t BATTERY_ADC_PIN = 36;
+static constexpr uint8_t IRRADIANCE_ADC_PIN = 39;
+static constexpr uint8_t LEAF_WETNESS_ADC_PIN = 32;
+static constexpr uint8_t SOIL_POTENTIAL_ADC_PIN = 33;
 #endif
 
 static cauce::Logger* g_logger = nullptr;
@@ -77,6 +101,14 @@ static cauce::drivers::Bme280Driver* g_bme = nullptr;
 static cauce::drivers::Bh1750Driver* g_light = nullptr;
 static cauce::drivers::Ccs811Driver* g_voc = nullptr;
 static cauce::drivers::HallAnemometerDriver* g_wind = nullptr;
+static cauce::drivers::Sps30Driver* g_pm = nullptr;
+static cauce::drivers::Mhz19Driver* g_co2 = nullptr;
+static cauce::drivers::Veml6075Driver* g_uv = nullptr;
+static cauce::drivers::As3935Driver* g_lightning = nullptr;
+static cauce::drivers::Ds18b20Driver* g_soilTemp = nullptr;
+static cauce::drivers::RainGaugeDriver* g_rain = nullptr;
+static cauce::drivers::Ds3231Rtc* g_rtc = nullptr;
+static bool g_rtcWrittenFromNtp = false;
 // Host build: there is no GPIO edge, so the accumulator is fed by nothing. The driver still
 // runs its interval logic, which is the part worth testing off-silicon.
 static cauce::drivers::IPulseSource* g_noPulseSource = nullptr;
@@ -101,6 +133,13 @@ class Esp32PulseSource final : public cauce::drivers::IPulseSource {
 };
 static Esp32PulseSource g_esp32PulseSource{};
 static void IRAM_ATTR onAnemometerEdge() { g_esp32PulseSource.onEdge(); }
+// Same rule as the anemometer: count in the ISR, do everything else in the loop.
+static void IRAM_ATTR onRainTip() {
+  if (g_rain) g_rain->onTip(millis());
+}
+static void IRAM_ATTR onLightningIrq() {
+  if (g_lightning) g_lightning->onInterrupt();
+}
 #endif
 static cauce::ConfigManager* g_configManager = nullptr;
 static cauce::app::SystemHealth g_health{};
@@ -479,6 +518,115 @@ void setup() {
       g_wind->begin();
       g_scheduler->addSensor(g_wind);
     }
+#ifdef ARDUINO
+    const cauce::NodeConfig& sensors = g_configManager->current();
+    // Registers a probe only when it answers, the same rule as the optional sensors above.
+    auto addIfPresent = [](cauce::drivers::ISensorDriver* driver) -> bool {
+      if (driver->begin()) {
+        g_scheduler->addSensor(driver);
+        return true;
+      }
+      g_logger->eventf(cauce::LogLevel::Warn, "SENSOR_ABSENT", "sensor=%s model=%s",
+                       driver->metadata().id, driver->metadata().model);
+      return false;
+    };
+    if (sensors.rtcEnabled) {
+      // Seed the clock from the DS3231 before the first measurement, so a node that boots
+      // without network stamps records with real time instead of TIME_UNCERTAIN. A chip whose
+      // oscillator stopped is ignored: its time reads back cleanly and is wrong.
+      g_rtc = new cauce::drivers::Ds3231Rtc(*g_bus);
+      uint64_t rtcMs = 0;
+      if (!g_rtc->present()) {
+        g_logger->event(cauce::LogLevel::Warn, "RTC_ABSENT");
+        delete g_rtc;
+        g_rtc = nullptr;
+      } else if (!g_clock.utcTimeValid() && g_rtc->timeTrustworthy() &&
+                 g_rtc->readUtcMs(rtcMs)) {
+        g_clock.setUtcMs(rtcMs);
+        g_logger->event(cauce::LogLevel::Info, "RTC_TIME_RESTORED");
+      } else if (!g_rtc->timeTrustworthy()) {
+        g_logger->event(cauce::LogLevel::Warn, "RTC_TIME_UNTRUSTED oscillator stopped");
+      }
+    }
+    if (sensors.pmEnabled) {
+      g_pm = new cauce::drivers::Sps30Driver(*g_bus, g_clock, "SPS30-1");
+      if (!addIfPresent(g_pm)) {
+        delete g_pm;
+        g_pm = nullptr;
+      }
+    }
+    if (sensors.co2Enabled) {
+      static cauce::hal::Esp32Uart co2Uart(Serial2, CO2_UART_RX_PIN, CO2_UART_TX_PIN);
+      g_co2 = new cauce::drivers::Mhz19Driver(co2Uart, g_clock, "MHZ19C-1");
+      if (!addIfPresent(g_co2)) {
+        delete g_co2;
+        g_co2 = nullptr;
+      }
+    }
+    if (sensors.uvEnabled) {
+      g_uv = new cauce::drivers::Veml6075Driver(*g_bus, "VEML6075-1");
+      if (!addIfPresent(g_uv)) {
+        delete g_uv;
+        g_uv = nullptr;
+      }
+    }
+    if (sensors.lightningEnabled) {
+      g_lightning = new cauce::drivers::As3935Driver(*g_bus, "AS3935-1", sensors.lightningIndoor);
+      if (addIfPresent(g_lightning)) {
+        pinMode(LIGHTNING_IRQ_PIN, INPUT);
+        attachInterrupt(digitalPinToInterrupt(LIGHTNING_IRQ_PIN), onLightningIrq, RISING);
+      } else {
+        delete g_lightning;
+        g_lightning = nullptr;
+      }
+    }
+    if (sensors.soilTemperatureEnabled) {
+      static cauce::hal::Esp32OneWire oneWire(ONE_WIRE_PIN);
+      g_soilTemp = new cauce::drivers::Ds18b20Driver(oneWire, "DS18B20-1");
+      if (!addIfPresent(g_soilTemp)) {
+        delete g_soilTemp;
+        g_soilTemp = nullptr;
+      }
+    }
+    if (sensors.rainEnabled) {
+      g_rain = new cauce::drivers::RainGaugeDriver("RAIN-1", sensors.rainMmPerTip);
+      pinMode(RAIN_GAUGE_PIN, INPUT_PULLUP);
+      attachInterrupt(digitalPinToInterrupt(RAIN_GAUGE_PIN), onRainTip, FALLING);
+      g_scheduler->addSensor(g_rain);
+    }
+    static cauce::hal::Esp32AnalogInput adc;
+    using Mapping = cauce::drivers::AnalogSensorDriver::Mapping;
+    if (sensors.vaneEnabled) {
+      addIfPresent(new cauce::drivers::WindVaneDriver(adc, VANE_ADC_PIN, "VANE-1", 3300.0f,
+                                                      10000.0f, sensors.vaneOffsetDegrees));
+    }
+    if (sensors.soilMoistureEnabled) {
+      addIfPresent(new cauce::drivers::AnalogSensorDriver(
+          adc, SOIL_MOISTURE_ADC_PIN, "SOIL-1", "CAP-SOIL", cauce::Variable::SoilMoisture,
+          Mapping::TwoPointPercent, sensors.soilMoistureDryMv, sensors.soilMoistureWetMv));
+    }
+    if (sensors.leafWetnessEnabled) {
+      addIfPresent(new cauce::drivers::AnalogSensorDriver(
+          adc, LEAF_WETNESS_ADC_PIN, "LEAF-1", "LEAF-GRID", cauce::Variable::LeafWetness,
+          Mapping::TwoPointPercent, sensors.leafWetnessDryMv, sensors.leafWetnessWetMv));
+    }
+    if (sensors.irradianceEnabled) {
+      addIfPresent(new cauce::drivers::AnalogSensorDriver(
+          adc, IRRADIANCE_ADC_PIN, "IRR-1", "BPW34-TIA", cauce::Variable::SolarIrradiance,
+          Mapping::Linear, sensors.irradianceWm2PerMv, 0.0f));
+    }
+    if (sensors.soilPotentialEnabled) {
+      addIfPresent(new cauce::drivers::AnalogSensorDriver(
+          adc, SOIL_POTENTIAL_ADC_PIN, "GYPSUM-1", "GYPSUM-BLOCK",
+          cauce::Variable::SoilWaterPotential, Mapping::Linear, sensors.soilPotentialKpaPerMv,
+          sensors.soilPotentialOffsetKpa));
+    }
+    if (sensors.batteryMonitorEnabled) {
+      addIfPresent(new cauce::drivers::AnalogSensorDriver(
+          adc, BATTERY_ADC_PIN, "VBAT-1", "DIVIDER", cauce::Variable::BatteryVoltage,
+          Mapping::Linear, sensors.batteryDividerRatio / 1000.0f, 0.0f));
+    }
+#endif
     g_scheduler->beginAllSensors();
   }
 
@@ -604,10 +752,12 @@ void setup() {
       g_loraSpi = new cauce::hal::Esp32SpiBus(1000000);
       g_loraControl = new cauce::hal::Esp32RadioControl();
       const bool spiUp = g_loraSpi->begin();
-      // SCK=18, MISO=19, MOSI=23; NSS=5, RESET=14, DIO0=26, DIO1=33, BUSY=32.
+      // SCK=18, MISO=19, MOSI=23; NSS=5, RESET=14, DIO0=26. No BUSY (an SX126x signal) and
+      // no DIO1: GPIO32/33 are ADC1 inputs the pilot station needs for its analogue probes.
       g_loraRadio = new cauce::hal::Sx1276Radio(*g_loraSpi, *g_loraControl,
                                                  /*resetPin=*/14, /*dio0Pin=*/26,
-                                                 /*dio1Pin=*/33, /*busyPin=*/32);
+                                                 cauce::hal::Sx1276Radio::kPinNotWired,
+                                                 cauce::hal::Sx1276Radio::kPinNotWired);
       cauce::hal::Sx1276Config loraConfig{};
       const bool regionKnown = kLoRaDefaultsFor(config.loraRegion, loraConfig);
       const bool radioUp = regionKnown && spiUp && g_loraRadio->begin(loraConfig);
@@ -871,6 +1021,7 @@ void loop() {
   if (g_syncManager != nullptr) {
     g_syncManager->tick();
   }
+  if (g_lightning != nullptr) g_lightning->service();
   g_scheduler->tick();
   const auto& counters = g_scheduler->counters();
   g_health.uptimeMs = g_clock.monotonicMs();
@@ -892,6 +1043,15 @@ void loop() {
       configTime(static_cast<long>(g_activeConfig.timezoneOffsetMin) * 60L, 0,
                  g_activeConfig.ntpServer);
       g_ntpConfigured = true;
+    }
+    // Once NTP has really synchronised (not merely "the clock looks valid", which is also true
+    // after seeding from the RTC), write the time back to the DS3231 so the next offline boot
+    // starts from it.
+    if (g_rtc != nullptr && !g_rtcWrittenFromNtp &&
+        sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+      g_rtcWrittenFromNtp = g_rtc->writeUtcMs(g_clock.utcMs());
+      g_logger->eventf(cauce::LogLevel::Info, "RTC_SET_FROM_NTP", "ok=%d",
+                       g_rtcWrittenFromNtp ? 1 : 0);
     }
     g_syncManager->onNetworkConnected();
     g_syncManager->tick();

@@ -179,6 +179,11 @@ struct Sx1276Config {
 
 class Sx1276Radio final : public ILoRaRadio {
  public:
+  // For a line the board does not route. The SX1276 has no BUSY output at all - that signal
+  // belongs to the SX126x family - and this driver polls IRQ flags instead of reading DIO1, so
+  // neither needs a GPIO; the ESP32 has few ADC-capable pins to spare for lines nobody reads.
+  static constexpr uint8_t kPinNotWired = 0xFF;
+
   Sx1276Radio(ISpiBus& spi, IRadioControl& control, uint8_t resetPin,
               uint8_t dio0Pin, uint8_t dio1Pin, uint8_t busyPin);
 

@@ -70,6 +70,43 @@ struct NodeConfig {
   // speed conversion is wrong by the ratio between the two diameters otherwise.
   float windDiameterMetres{0.15f};
   uint8_t windPulsesPerRevolution{3};
+  // Pilot station suite. Same rule as above: off until the node says the part is fitted.
+  bool pmEnabled{false};         // Sensirion SPS30, I2C
+  bool co2Enabled{false};        // Winsen MH-Z19C, UART
+  bool uvEnabled{false};         // Vishay VEML6075, I2C
+  bool lightningEnabled{false};  // AS3935, I2C
+  // Indoor/outdoor gain of the AS3935's analogue front end. Outdoors is the pilot case; the
+  // indoor setting is far more sensitive and turns mains noise into false strikes outside.
+  bool lightningIndoor{false};
+  bool soilTemperatureEnabled{false};  // DS18B20, 1-Wire
+  bool rtcEnabled{false};              // DS3231, I2C
+  bool rainEnabled{false};             // tipping-bucket gauge, pulse input
+  // Depth of rain per bucket tip. 0.2794 mm is the common 0.011 in bucket; a different gauge
+  // must say so, because every total is wrong by the ratio otherwise.
+  float rainMmPerTip{0.2794f};
+  bool vaneEnabled{false};  // resistor-ladder wind vane, ADC
+  // Degrees between the vane's north mark and true north, added to every reading. A vane is
+  // mounted by hand, and an unrecorded offset rotates the whole wind field.
+  float vaneOffsetDegrees{0.0f};
+  // Analogue channels. Each is a two-point calibration in millivolts at the ADC pin, taken
+  // from the procedure in docs: dry/wet for moisture probes, and a linear scale for the rest.
+  bool soilMoistureEnabled{false};
+  float soilMoistureDryMv{2600.0f};
+  float soilMoistureWetMv{1100.0f};
+  bool leafWetnessEnabled{false};
+  float leafWetnessDryMv{3000.0f};
+  float leafWetnessWetMv{800.0f};
+  bool irradianceEnabled{false};
+  // BPW34 behind a transimpedance stage: W/m2 per mV. Uncalibrated until compared against a
+  // pyranometer, which is why the default is a datasheet-derived starting point.
+  float irradianceWm2PerMv{0.5f};
+  bool soilPotentialEnabled{false};
+  // Gypsum block suction, kPa = scale * mV + offset, fitted per soil type.
+  float soilPotentialKpaPerMv{0.6f};
+  float soilPotentialOffsetKpa{0.0f};
+  bool batteryMonitorEnabled{false};
+  // Ratio of the resistor divider feeding the ADC: 12 V through 100k/22k is ~5.545.
+  float batteryDividerRatio{5.545f};
   // Peer-to-peer over ESP-NOW. Off by default, like deep sleep, because a node that
   // announces itself onto a radio segment it was not asked to join is a deployment
   // decision rather than a default. The channel is explicit for the same reason the
@@ -79,7 +116,9 @@ struct NodeConfig {
   uint8_t peerChannel{0};
   char peerStatePath[64]{"/state/peer_marks"};
   uint32_t loraSyncIntervalS{3600};
-  char loraRegion[16]{"EU868"};
+  // AU915 because the pilot is in Uruguay, which uses the 915-928 MHz band. A node elsewhere
+  // must set lora_region explicitly; the name is validated at boot, not guessed.
+  char loraRegion[16]{"AU915"};
   uint32_t storageMaxBytes{512u * 1024u};
   uint32_t segmentMaxBytes{64u * 1024u};
   bool deepSleepEnabled{false};

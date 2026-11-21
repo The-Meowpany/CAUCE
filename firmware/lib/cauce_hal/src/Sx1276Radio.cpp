@@ -75,8 +75,8 @@ void Sx1276Radio::setMode(uint8_t mode) {
 
 void Sx1276Radio::dumpRegisters() {
   control_.pinMode(dio0Pin_, false);
-  control_.pinMode(dio1Pin_, false);
-  control_.pinMode(busyPin_, false);
+  if (dio1Pin_ != kPinNotWired) control_.pinMode(dio1Pin_, false);
+  if (busyPin_ != kPinNotWired) control_.pinMode(busyPin_, false);
 }
 
 uint16_t Sx1276Radio::maxPayloadBytes() const {

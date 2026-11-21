@@ -71,6 +71,20 @@ bool Esp32WireBus::isPresent(uint8_t deviceAddress) {
   return Wire.endTransmission() == 0;
 }
 
+bool Esp32WireBus::writeBytes(uint8_t deviceAddress, const uint8_t* data, size_t length) {
+  Wire.beginTransmission(deviceAddress);
+  for (size_t i = 0; i < length; ++i) Wire.write(data[i]);
+  return Wire.endTransmission() == 0;
+}
+
+bool Esp32WireBus::readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t length) {
+  const size_t received = Wire.requestFrom(static_cast<int>(deviceAddress),
+                                           static_cast<int>(length));
+  if (received != length) return false;
+  for (size_t i = 0; i < length; ++i) buffer[i] = Wire.read();
+  return true;
+}
+
 bool Esp32LittleFs::mount() { return LittleFS.begin(true); }
 
 bool Esp32LittleFs::exists(const char* path) { return LittleFS.exists(path); }

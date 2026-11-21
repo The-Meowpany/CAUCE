@@ -13,6 +13,9 @@ enum class SensorStatus : uint8_t {
   NotConnected = 2,
   BusError = 3,
   InvalidData = 4,
+  // The sensor works and had nothing to report this interval - no strike for a lightning
+  // detector. Not a failure, and not a zero: the scheduler skips the variable silently.
+  NoEvent = 5,
 };
 
 struct SensorMetadata {
