@@ -44,15 +44,17 @@ bool ScriptedI2cBus::readBytes(uint8_t deviceAddress, uint8_t* buffer, size_t le
 
 void RegisterFileDevice::writeRegister(uint8_t reg, const uint8_t* data,
                                        size_t length) {
+  // The index is computed wide: narrowed to uint8_t it wrapped to register 0 past 0xFF, and the
+  // bound check below could never fail.
   for (size_t i = 0; i < length; ++i) {
-    uint8_t target = static_cast<uint8_t>(reg + i);
+    const size_t target = static_cast<size_t>(reg) + i;
     if (target < kMaxRegisters) registers_[target] = data[i];
   }
 }
 
 bool RegisterFileDevice::readRegister(uint8_t reg, uint8_t* buffer, size_t length) {
   for (size_t i = 0; i < length; ++i) {
-    uint8_t source = static_cast<uint8_t>(reg + i);
+    const size_t source = static_cast<size_t>(reg) + i;
     if (source >= kMaxRegisters) return false;
     buffer[i] = registers_[source];
   }

@@ -242,7 +242,7 @@ ExchangeReport Esp32PeerExchange::exchange(const uint8_t peerAddress[6]) {
     // A record whose id does not fit the frame is skipped rather than truncated: a truncated id
     // is a different node, and the peer would store it as one.
     if (idLen == 0 || idLen >= sizeof(outgoing[packed].nodeId)) continue;
-    std::memset(&outgoing[packed], 0, sizeof(outgoing[packed]));
+    outgoing[packed] = ReplicatedRecord{};
     std::memcpy(outgoing[packed].nodeId, m.nodeId, idLen);
     std::snprintf(outgoing[packed].variable, sizeof(outgoing[packed].variable), "%s",
                   variableName(m.variable));

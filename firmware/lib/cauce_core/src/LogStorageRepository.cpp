@@ -125,8 +125,11 @@ bool LogStorageRepository::scanAllSegments() {
 }
 
 bool LogStorageRepository::createSegment(uint32_t index, SegmentInfo& created) {
-  std::snprintf(created.path, sizeof(created.path), "%s/meas_%06u.clog", directory_,
-                static_cast<unsigned>(index));
+  // A truncated path names a different file, so a directory too long for the field is a
+  // refusal rather than a segment written somewhere nobody will look.
+  const int pathLength = std::snprintf(created.path, sizeof(created.path), "%s/meas_%06u.clog",
+                                       directory_, static_cast<unsigned>(index));
+  if (pathLength < 0 || static_cast<size_t>(pathLength) >= sizeof(created.path)) return false;
   created.bytes = 0;
   created.records = 0;
   created.firstTimestampMs = UINT64_MAX;
@@ -497,8 +500,9 @@ bool LogStorageRepository::adoptCheckpoint(const CheckpointData& cp) {
 
   for (const auto& seg : cp.segments) {
     SegmentInfo info;
-    std::snprintf(info.path, sizeof(info.path), "%s/meas_%06u.clog", directory_,
-                  static_cast<unsigned>(seg.index));
+    const int pathLength = std::snprintf(info.path, sizeof(info.path), "%s/meas_%06u.clog",
+                                         directory_, static_cast<unsigned>(seg.index));
+    if (pathLength < 0 || static_cast<size_t>(pathLength) >= sizeof(info.path)) return false;
     if (!fs_.exists(info.path)) return false;
     info.bytes = static_cast<uint32_t>(fs_.fileSize(info.path));
     if (info.bytes != seg.bytes && !seg.sealed) return false;

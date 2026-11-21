@@ -119,9 +119,11 @@ static cauce::drivers::RainGaugeDriver* g_rain = nullptr;
 static cauce::drivers::Ds3231Rtc* g_rtc = nullptr;
 static cauce::app::ArchiveManager* g_archive = nullptr;
 static bool g_rtcWrittenFromNtp = false;
+#ifndef ARDUINO
 // Host build: there is no GPIO edge, so the accumulator is fed by nothing. The driver still
 // runs its interval logic, which is the part worth testing off-silicon.
 static cauce::drivers::IPulseSource* g_noPulseSource = nullptr;
+#endif
 #ifdef ARDUINO
 // The anemometer's Hall switch is a GPIO edge, and an edge that arrives while the radio is
 // mid-transmit still has to be counted or the speed reads low with nothing wrong. The ISR
