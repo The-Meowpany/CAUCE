@@ -5,16 +5,16 @@ Technical annex. The funding application carries only Meta and Result
 
 ## 1. Form (evaluator version)
 
-**Goal:** develop and validate a pilot network of eight autonomous
+**Goal:** develop and validate a pilot network of four autonomous
 environmental microstations capable of producing hyperlocal, comparable
 information on microclimate conditions in Canelones.
 
-**Result:** eight calibrated, operating stations generating
+**Result:** four calibrated, operating stations generating
 environmental records through the pilot period.
 
 ## 2. Frozen scope
 
-8 identical nodes · 1 gateway · 1 CAUCE-Node carrier PCB · 1 data
+5 nodes: 4 identical stations + 1 central node (gateway and server) · 1 CAUCE-Node carrier PCB · 1 data
 protocol · 1 calibration scheme · 1 local storage system · 1 LoRa
 point-to-point link · 1 central API · 1 microclimate viewer.
 
@@ -73,7 +73,7 @@ and direction → interpolated vector field". Volumetric 3D rendering is
 discarded by design decision. Anything grander has to
 earn its wording with node density first.
 
-## 4. Node (×8 identical)
+## 4. Station (×4 identical)
 
 ESP32-WROOM-32 + RFM95W (SX1276) at 915 MHz (AU915, the Uruguayan band) ·
 BME280 (temperature, humidity, pressure) · BH1750 (illuminance — lux, not
@@ -110,16 +110,17 @@ budget document.
 
 | Item | USD |
 |---|---|
-| 8 identical stations | 2,118.16 |
-| Gateway and central server (Orange Pi Zero 3) | 79.70 |
+| 4 identical stations | 1,059.08 |
+| Central node: gateway and server (Orange Pi Zero 3) | 79.70 |
 | Tools and bench rig | 132.03 |
 | Calibration and co-location | 30.00 |
 | Workshops and educational sessions | 259.27 |
-| Import taxes, delivery and installation | 870.74 |
+| Parcel delivery and installation | 155.00 |
 | Critical spares | 49.94 |
-| Contingency, dual purpose | 310.00 |
-| **Project total** | **3,849.84** |
-| Not used of the USD 4,000 | 150.16 |
+| Contingency, dual purpose | 170.00 |
+| **Project total** | **1,935.02** |
+| Not used of the USD 4,000 | 2,064.98 |
+| Import taxes, requested from the Intendencia de Canelones | 387.42 |
 
 The contingency is sized to the price risk. Until stage 4 closes
 (everything bought and imported) it covers what ends up costing more than
@@ -132,11 +133,11 @@ from relative consistency into absolute bias.
 
 There is no 3D printer: a commercial radiation shield costs less than
 printing one. No commercial gypsum blocks are available, so they are made
-in the workshops. Import is computed parcel by parcel under the
-single-payment regime of Decreto 50/2026 (60 % of each parcel's value, at
-least USD 20, replacing VAT and duties): USD 770.74 including delivery
-handling on about USD 1,188 of goods, bought in one order so each part pays
-the minimum once. No physical interventions line: the project
+in the workshops. Import taxes sit outside the budget and are
+requested from the Intendencia de Canelones: under the single-payment
+regime of Decreto 50/2026 (60 % of each parcel's value, at least USD 20,
+replacing VAT and duties) they come to USD 387.42 on about USD 639 of goods
+in 11 parcels, bought in one order so each part pays the minimum once. No physical interventions line: the project
 generates evidence to evaluate measures, it doesn't execute them.
 
 What remains afterwards: hardware, firmware, protocol, data,
@@ -149,8 +150,8 @@ Two-week co-location of all 8 nodes before deployment; individual
 Reference first: the bench's own reference thermohygrometer, with a
 calibration certificate from an accredited laboratory funded by the
 unspent contingency; every instrument the plan relies on is owned, none
-borrowed or shared. Until that certificate exists, eight-way
-intercomparison **establishes relative consistency, not absolute bias**,
+borrowed or shared. Until that certificate exists, intercomparison
+of the four stations **establishes relative consistency, not absolute bias**,
 and the scientific docs must say so (a bias shared by all nodes would be
 invisible).
 Periodic field re-validation by neighbor comparison; sustained

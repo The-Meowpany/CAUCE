@@ -6,7 +6,7 @@
 scripted buses (I2C, UART, ADC, 1-Wire) and the firmware cross-compiles for the ESP32, but none
 of it has been on a board. Datasheet figures are the manufacturers', not ours.
 
-## Pilot station (8 identical nodes)
+## Pilot station (4 identical stations + central node)
 
 Every sensor is optional and **off by default**: a probe is enabled with its config key only
 where it is fitted, and a node missing one keeps measuring everything else. A probe that is

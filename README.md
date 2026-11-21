@@ -116,7 +116,7 @@ We'd rather list these here than have you trip over them:
   reverse proxy in front.
 - BME280 numbers are datasheet-grade. Nobody in this project has verified
   them in the field, and whole-system accuracy is unmeasured.
-- Eight spread-out nodes produce a smooth interpolated field, not street
+- Four spread-out stations produce a smooth interpolated field, not street
   resolution. The map says its effective resolution out loud.
 - Firmware updates need physical access on a board provisioned with the
   Arduino default partition table; the two-slot table with rollback

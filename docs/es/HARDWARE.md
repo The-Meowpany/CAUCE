@@ -6,7 +6,7 @@
 contra buses simulados (I2C, UART, ADC, 1-Wire) y el firmware compila para ESP32, pero nada de
 esto estuvo todavía en una placa. Las cifras de datasheet son del fabricante, no nuestras.
 
-## Estación piloto (8 nodos idénticos)
+## Estación piloto (4 estaciones idénticas + nodo central)
 
 Todos los sensores son opcionales y están **apagados por defecto**: un sensor se habilita con
 su clave de config solo donde está instalado, y un nodo al que le falta uno sigue midiendo todo

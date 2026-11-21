@@ -117,7 +117,7 @@ Preferimos listarlas acá antes de que te las encuentres a la mala:
   reverse proxy adelante.
 - Los números del BME280 son grado datasheet. Nadie en este proyecto los
   verificó en campo, y la exactitud del sistema está sin medir.
-- Ocho nodos dispersos producen un campo interpolado suave, no
+- Cuatro estaciones dispersas producen un campo interpolado suave, no
   resolución a nivel de calle. El mapa dice su resolución efectiva en voz
   alta.
 - Los updates de firmware necesitan acceso físico en una placa provisionada

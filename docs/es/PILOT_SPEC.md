@@ -5,16 +5,16 @@ Anexo técnico. La solicitud del fondo lleva únicamente Meta y Resultado
 
 ## 1. Formulario (versión evaluador)
 
-**Meta:** desarrollar y validar una red piloto de ocho microestaciones
+**Meta:** desarrollar y validar una red piloto de cuatro microestaciones
 ambientales autónomas capaces de generar información hiperlocal y
 comparable sobre condiciones microclimáticas en Canelones.
 
-**Resultado:** ocho estaciones calibradas y operativas, generando
+**Resultado:** cuatro estaciones calibradas y operativas, generando
 registros ambientales durante el período piloto.
 
 ## 2. Alcance congelado
 
-8 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
+5 nodos: 4 estaciones idénticas + 1 nodo central (gateway y servidor) · 1 carrier PCB CAUCE-Node · 1 protocolo
 de datos · 1 esquema de calibración · 1 sistema de almacenamiento local ·
 1 enlace LoRa punto a punto · 1 API central · 1 visor microclimático.
 
@@ -74,7 +74,7 @@ volumétrico 3D está descartado por decisión de diseño. Cualquier cosa
 más grandilocuente tiene que ganarse la redacción con densidad de nodos
 primero.
 
-## 4. Nodo (×8 idénticos)
+## 4. Estación (×4 idénticas)
 
 ESP32-WROOM-32 + RFM95W (SX1276) a 915 MHz (AU915, la banda de Uruguay) ·
 BME280 (temperatura, humedad, presión) · BH1750 (iluminancia — lux, no
@@ -113,16 +113,17 @@ presupuesto.
 
 | Concepto | USD |
 |---|---|
-| 8 estaciones idénticas | 2.118,16 |
-| Gateway y servidor central (Orange Pi Zero 3) | 79,70 |
+| 4 estaciones idénticas | 1.059,08 |
+| Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
 | Herramientas y banco de pruebas | 132,03 |
 | Calibración y co-localización | 30,00 |
 | Talleres y jornadas educativas | 259,27 |
-| Tributos de importación, entrega e instalación | 870,74 |
+| Entrega de envíos e instalación | 155,00 |
 | Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 310,00 |
-| **Total del proyecto** | **3.849,84** |
-| No utilizado de los USD 4.000 | 150,16 |
+| Contingencia de doble propósito | 170,00 |
+| **Total del proyecto** | **1.935,02** |
+| No utilizado de los USD 4.000 | 2.064,98 |
+| Tributos de importación, solicitados a la Intendencia de Canelones | 387,42 |
 
 La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
 etapa 4 (todo comprado e importado) cubre lo que termine costando más de
@@ -136,11 +137,12 @@ co-localización de consistencia relativa en sesgo absoluto.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
 imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
-fabrican en los talleres. La importación se calcula envío por envío con el
-régimen de prestación única del Decreto 50/2026 (60 % del valor de cada
-envío, mínimo USD 20, que reemplaza al IVA y a los demás tributos): USD
-770,74 con la gestión de entrega, sobre unos USD 1.188 de mercadería,
-comprada en un solo pedido para pagar el mínimo una sola vez por parte. Sin línea de intervenciones
+fabrican en los talleres. Los tributos de importación quedan fuera del
+presupuesto y se solicitan a la Intendencia de Canelones: con el régimen de
+prestación única del Decreto 50/2026 (60 % del valor de cada envío, mínimo
+USD 20, que reemplaza al IVA y a los demás tributos) suman USD 387,42 sobre
+unos USD 639 de mercadería en 11 envíos, comprada en un solo pedido para
+pagar el mínimo una sola vez por parte. Sin línea de intervenciones
 físicas: el proyecto genera evidencia para evaluar medidas, no las
 ejecuta.
 
@@ -155,7 +157,7 @@ divergencias. Referencia primero: el termohigrómetro de referencia
 propio del banco, con certificado de calibración de un laboratorio
 acreditado pagado con el saldo de la contingencia; todo instrumento del
 plan es propio, ninguno prestado ni compartido. Hasta tener ese
-certificado, la intercomparación entre los ocho **establece consistencia
+certificado, la intercomparación entre las cuatro estaciones **establece consistencia
 relativa, no sesgo absoluto**, y los documentos científicos tienen que
 decirlo (un sesgo compartido por todos los nodos sería invisible). Re-validación periódica en campo
 por comparación entre vecinos; divergencia sostenida = flag de
