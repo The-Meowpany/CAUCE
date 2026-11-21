@@ -85,9 +85,14 @@ def test_status_names_the_lora_wiring_that_exists():
     assert re.search(r"main\.cpp` builds\s*\n?`?Sx1276Radio", text), (
         "STATUS.md should say main.cpp builds the radio and transport behind the config "
         "flag, so a reader can go and check it")
-    assert "never driven from `loop()`" in text or "never driven from" in text, (
-        "constructed is not transmitting; the document must still say the sync is never "
-        "driven from loop(), or the correction reads as the radio working")
+    # The LoRa half of row 12x is closed and the peer half is not. Each claim is checked
+    # against main.cpp, so the document cannot drift from the code in either direction.
+    main = MAIN_CPP.read_text(encoding="utf-8")
+    assert "g_loraSync->tick()" in main, "STATUS says the LoRa sync is driven; main.cpp must"
+    assert "LoRa `SyncManager` is now ticked from `loop()`" in text
+    assert "g_peerExchange->" not in main.split("void loop()", 1)[1], (
+        "the peer exchange is now driven from loop(); STATUS row 12x must say so")
+    assert "peer exchange is still never driven from `loop()`" in text
 
 
 def test_the_firmware_and_the_document_agree_on_signing():

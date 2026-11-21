@@ -97,8 +97,18 @@ Uruguay. A region this build does not recognise is refused and reported as
 `LORA_REGION_UNKNOWN`; it does not fall back to another band. Check power, duty cycle and
 channel use with the national regulator (URSEC in Uruguay) before deployment.
 
+Frames are signed per `lora_frame_algorithm`: `hmac` (default, with `sync_device_key`) or
+`ed25519` (with the seed in `sync_auth_seed`). It must match `device_key_algorithm` at the
+central. A node without usable key material for its algorithm logs `LORA_SIGNING_UNUSABLE` and
+does not start the link; a node that was never provisioned sends unsigned frames.
+
+LoRa carries data only while Wi-Fi is not delivering (no link, no `sync_server_url`, or a
+failing sync), and skips everything Wi-Fi already delivered, so a node with both uses the
+radio as its fallback without spending airtime twice.
+
 What is not proven: that the wiring is correct. `LORA_ENABLED` says the SPI peripheral
-initialised and the radio accepted its configuration writes, not that the air link works.
+initialised and the radio accepted its configuration writes, not that the air link works. The
+gateway's relay logic (`lora_gateway.py`) has no radio attached yet.
 
 ## Time
 

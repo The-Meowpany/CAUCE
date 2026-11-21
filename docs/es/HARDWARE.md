@@ -102,8 +102,18 @@ banda que corresponde a Uruguay. Una región que este build no reconoce se recha
 como `LORA_REGION_UNKNOWN`; no cae a otra banda. Verificar potencia, ciclo de trabajo y uso de
 canales con el regulador nacional (URSEC en Uruguay) antes del despliegue.
 
+Las tramas se firman según `lora_frame_algorithm`: `hmac` (por defecto, con `sync_device_key`)
+o `ed25519` (con la semilla de `sync_auth_seed`). Debe coincidir con `device_key_algorithm` en la
+central. Un nodo sin el material de clave que su algoritmo necesita registra
+`LORA_SIGNING_UNUSABLE` y no arranca el enlace; un nodo nunca provisionado envía tramas sin firma.
+
+LoRa transmite solo mientras el Wi-Fi no está entregando (sin enlace, sin `sync_server_url` o
+con la sincronización fallando), y saltea todo lo que el Wi-Fi ya entregó, así un nodo con ambos
+usa la radio como respaldo sin gastar tiempo de aire dos veces.
+
 Lo que no está probado: que el cableado sea correcto. `LORA_ENABLED` dice que el periférico SPI
-arrancó y que la radio aceptó sus escrituras de configuración, no que el enlace funcione.
+arrancó y que la radio aceptó sus escrituras de configuración, no que el enlace funcione. La
+lógica de reenvío del gateway (`lora_gateway.py`) todavía no tiene una radio conectada.
 
 ## Tiempo
 

@@ -5,7 +5,7 @@
 ```powershell
 cd firmware
 ```sh
-pio test -e native          # 524 tests en PC (Unity)
+pio test -e native          # 530 tests en PC (Unity)
 python -m pytest tests -q    # 801 tests del backend
 ```
 pio run -e native           # compila el demo de simulación en host
