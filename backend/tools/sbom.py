@@ -48,6 +48,7 @@ DIRECT = {
     "pydantic",
     "httpx",
     "pytest",
+    "pyserial",
 }
 
 

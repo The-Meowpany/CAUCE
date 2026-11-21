@@ -99,9 +99,9 @@ step "documentation"
 # missing from one side each, so the check passed while a document existed that no list
 # mentioned - which is the drift this check exists to catch, applied to itself.
 DOCS_EN="RELEASE_READINESS.md ROADMAP.md BENCH_PLAN.md SECURITY.md OTA.md SYNC.md \
-API.md BACKEND.md DATA_MODEL.md ARCHITECTURE.md CALIBRATION.md DEPLOYMENT.md \
-HARDWARE.md TESTING.md DASHBOARD.md LEGAL.md PILOT_SPEC.md I18N.md \
-DOMAIN_GLOSSARY.md DOCUMENTATION_INDEX.md RUNBOOK.md"
+API.md BACKEND.md DATA_MODEL.md ARCHITECTURE.md CALIBRATION.md CALIBRATION_PROCEDURE.md \
+RELEASE_ENGINEERING.md DEPLOYMENT.md HARDWARE.md TESTING.md DASHBOARD.md LEGAL.md \
+PILOT_SPEC.md I18N.md DOMAIN_GLOSSARY.md DOCUMENTATION_INDEX.md RUNBOOK.md"
 DOCS_ES="$DOCS_EN"
 # shellcheck disable=SC2086
 check_docs docs/en $DOCS_EN
