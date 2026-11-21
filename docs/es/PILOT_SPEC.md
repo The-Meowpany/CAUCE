@@ -115,46 +115,24 @@ presupuesto.
 |---|---|
 | 4 estaciones idénticas | 1.059,08 |
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
-| Herramientas y banco de pruebas | 132,03 |
-| Calibración y co-localización | 30,00 |
-| Programa educativo | 1.624,00 |
-| Logística, operación e importación | 754,26 |
-| Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 240,00 |
-| **Total del proyecto** | **3.969,01** |
-| No utilizado de los USD 4.000 | 30,99 |
+| Herramientas | 132,03 |
+| Talleres: impresora, opalina para certificados, vinilo para stickers | 205,40 |
+| Instalación e importación (tributos reservados) | 542,42 |
+| Repuestos | 49,94 |
+| Viáticos del equipo (10 % del financiamiento) | 400,00 |
+| Imprevistos (5 %) | 130,00 |
+| **Total del proyecto** | **2.598,57** |
+| No utilizado de los USD 4.000 | 1.401,43 |
 
-La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
-etapa 4 (todo comprado e importado) cubre lo que termine costando más de
-lo previsto: precios por encima de la previsión, importación por encima de
-la provisión, una antena para un sitio al que no llega el gateway,
-componentes fallidos más allá de los repuestos. Lo que quede financia
-entonces, antes de la co-localización, la calibración trazable del
-instrumento de referencia del banco, propio del proyecto (o uno certificado
-si ese no admite certificación), que es lo que convierte la
-co-localización de consistencia relativa en sesgo absoluto.
-
-El programa educativo es equipamiento del proyecto que se reutiliza en
-cada taller: seis kits de práctica (ESP32 y un juego de sensores), un
-proyector portátil, una impresora de tinta continua y una plastificadora
-para guías y etiquetas de las estaciones, un roll-up, y los boletos
-suburbanos del equipo. Cada participante recibe un certificado y stickers
-del proyecto, y quienes presentan en la jornada de cierre, una gift card
-de librería. La logística incluye además los boletos de cuatro rondas de
-mantenimiento durante el piloto.
-
-No hay impresora 3D: un escudo de radiación comercial cuesta menos que
-imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
-fabrican en los talleres. Los tributos de importación se solicitan a la
-Intendencia de Canelones y, mientras tanto, quedan reservados en el
-presupuesto para que las compras no esperen la respuesta: con el régimen de
-prestación única del Decreto 50/2026 (60 % del valor de cada envío, mínimo
-USD 20, que reemplaza al IVA y a los demás tributos) suman USD 387,42 sobre
-unos USD 639 de mercadería en 11 envíos, comprada en un solo pedido para
-pagar el mínimo una sola vez por parte. Si la Intendencia los cubre, la
-reserva paga dos talleres más y un segundo juego de repuestos. Sin línea de intervenciones
-físicas: el proyecto genera evidencia para evaluar medidas, no las
-ejecuta.
+Los talleres son abiertos y gratuitos; a quienes participan se los invita
+a sumarse al proyecto y a su organización en GitHub, y reciben un
+certificado y stickers del proyecto. Los tributos de importación (USD
+387,42 por el régimen de prestación única del Decreto 50/2026, 60 % de
+cada envío, mínimo USD 20) se solicitan a la Intendencia de Canelones y,
+mientras tanto, quedan reservados en el presupuesto. No hay impresora 3D:
+un escudo de radiación comercial cuesta menos que imprimirlo. Los bloques
+de yeso se fabrican en el proyecto. Sin línea de intervenciones físicas:
+el proyecto genera evidencia para evaluar medidas, no las ejecuta.
 
 Lo que queda después: hardware, firmware, protocolo, datos, metodología
 de calibración, plataforma.
@@ -165,7 +143,7 @@ Co-localización de las 4 estaciones dos semanas antes del despliegue;
 coeficientes `cal_*` individuales por nodo y variable; informe de
 divergencias. Referencia primero: el termohigrómetro de referencia
 propio del banco, con certificado de calibración de un laboratorio
-acreditado pagado con el saldo de la contingencia; todo instrumento del
+acreditado cuando el financiamiento lo permita; todo instrumento del
 plan es propio, ninguno prestado ni compartido. Hasta tener ese
 certificado, la intercomparación entre las cuatro estaciones **establece consistencia
 relativa, no sesgo absoluto**, y los documentos científicos tienen que
