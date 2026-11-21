@@ -213,6 +213,11 @@ a la central a través de un gateway de dos partes, ninguna de las cuales guarda
    cada ACK de vuelta para que el puente lo transmita. Un lote que la central rechaza no recibe
    ACK, así el nodo lo conserva y reintenta.
 
+Ubicación: el puente va conectado al equipo de la central, así que ese equipo tiene que estar
+dentro del alcance LoRa de los nodos que atiende y tener internet si la central está en otro
+lugar. Un sitio que no llega al gateway ni tiene Wi-Fi conserva sus datos en el nodo (LittleFS y
+la tarjeta SD) hasta una visita.
+
 Lo que no está probado: el enlace de radio. Todo lo anterior está probado en host, incluido el
 protocolo serie contra una trama de referencia compartida, y el puente compila para ESP32; todavía
 ninguna trama cruzó el aire.

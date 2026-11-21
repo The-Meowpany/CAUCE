@@ -228,6 +228,10 @@ reach the central through a gateway made of two parts, neither of which holds a 
    sends each acknowledgement back for the bridge to transmit. A batch the central refuses gets
    no acknowledgement, so the node keeps it and retries.
 
+Placement: the bridge sits on the central's host, so that host has to be within LoRa range of
+the nodes it serves and have internet if the central is elsewhere. A site that neither reaches
+the gateway nor has Wi-Fi keeps its data on the node (LittleFS and the SD card) until a visit.
+
 What is not proven: the radio link. Everything above is tested on host, including the serial
 framing against a shared known-answer frame, and the bridge cross-compiles; no frame has crossed
 the air yet.
