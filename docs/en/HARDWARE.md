@@ -19,8 +19,8 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 | pm1, pm2_5, pm10 | Plantower PMS5003 (fallback) | UART1 RX GPIO2, 9600 baud | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
 | pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (pilot) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baud | `co2_enabled` | `Mhz19Driver` |
-| uv_index | Lite-On LTR390 (fallback) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 (pilot) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (pilot) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternative, discontinued) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | cup anemometer (reed/Hall) | GPIO4, falling edge | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | resistor-ladder vane, 10k pull-up | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -166,7 +166,7 @@ range covers both a LiPo cell and a 12 V pack.
 
 ## Bill of materials (per node)
 
-The budget document of the pilot carries the priced BOM (about USD 340 per complete station);
+The budget document of the pilot carries the priced BOM (about USD 290 per complete station);
 this table lists the parts and the reason for each choice.
 
 | Subsystem | Part | Why this one |
@@ -176,7 +176,7 @@ this table lists the parts and the reason for each choice.
 | T/RH/P | BME280 | reference sensor, driver since v0 |
 | PM | SPS30 | PM4 as well, and a sensor built for long outdoor service; the PMS5003 is the cheap fallback |
 | CO2 | MH-Z19C | NDIR, not an estimate |
-| UV | VEML6075 | separate UVA and UVB; discontinued, so the LTR390 is the fallback |
+| UV | LTR390 | UV index; in production, unlike the discontinued VEML6075 |
 | Light / irradiance | BH1750 + BPW34 | lux and relative W/m2 are different quantities |
 | Wind / rain | Misol cup anemometer, vane, tipping bucket | one kit, validated on the prototype before buying the rest |
 | Soil | capacitive probe, hand-made gypsum block, DS18B20 | moisture, suction and temperature |

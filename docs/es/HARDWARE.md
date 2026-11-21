@@ -20,8 +20,8 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 | pm1, pm2_5, pm10 | Plantower PMS5003 (alternativa) | UART1 RX GPIO2, 9600 baudios | `pm_enabled`, `pm_pms5003` | `Pms5003Driver` |
 | pm1, pm2_5, pm4, pm10 | Sensirion SPS30 (piloto) | I2C 0x69 | `pm_enabled` | `Sps30Driver` |
 | co2 | Winsen MH-Z19C (NDIR) | UART2 RX 16 / TX 17, 9600 baudios | `co2_enabled` | `Mhz19Driver` |
-| uv_index | Lite-On LTR390 (alternativa) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
-| uv_index, uva_index, uvb_index | Vishay VEML6075 (piloto) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
+| uv_index | Lite-On LTR390 (piloto) | I2C 0x53 | `uv_enabled`, `uv_ltr390` | `Ltr390Driver` |
+| uv_index, uva_index, uvb_index | Vishay VEML6075 (alternativa, discontinuado) | I2C 0x10 | `uv_enabled` | `Veml6075Driver` |
 | lightning_strikes, lightning_distance | AS3935 | I2C 0x03 + IRQ GPIO25 | `lightning_enabled` | `As3935Driver` |
 | wind_speed | anemómetro de cazoletas (reed/Hall) | GPIO4, flanco de bajada | `wind_enabled` | `HallAnemometerDriver` |
 | wind_direction | veleta de escalera de resistencias, pull-up 10k | ADC GPIO34 | `vane_enabled` | `WindVaneDriver` |
@@ -173,7 +173,7 @@ cuyo rango válido por defecto cubre tanto una celda LiPo como una batería de 1
 
 ## Lista de materiales (por nodo)
 
-El documento de presupuesto del piloto lleva el BOM con precios (unos USD 340 por estación
+El documento de presupuesto del piloto lleva el BOM con precios (unos USD 290 por estación
 completa); esta tabla lista los componentes y el motivo de cada elección.
 
 | Subsistema | Componente | Por qué este |
@@ -183,7 +183,7 @@ completa); esta tabla lista los componentes y el motivo de cada elección.
 | T/HR/P | BME280 | sensor de referencia, con driver desde v0 |
 | PM | SPS30 | también PM4, y un sensor hecho para uso prolongado a la intemperie; el PMS5003 es la alternativa barata |
 | CO2 | MH-Z19C | NDIR, no una estimación |
-| UV | VEML6075 | UVA y UVB por separado; discontinuado, así que el LTR390 es la alternativa |
+| UV | LTR390 | índice UV; en producción, a diferencia del VEML6075 discontinuado |
 | Luz / irradiancia | BH1750 + BPW34 | lux y W/m2 relativos son magnitudes distintas |
 | Viento / lluvia | anemómetro, veleta y balancín Misol | un kit, validado en el prototipo antes de comprar el resto |
 | Suelo | sonda capacitiva, bloque de yeso artesanal, DS18B20 | humedad, succión y temperatura |
