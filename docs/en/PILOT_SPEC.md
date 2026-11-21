@@ -114,12 +114,12 @@ budget document.
 | Central node: gateway and server (Orange Pi Zero 3) | 79.70 |
 | Tools and bench rig | 132.03 |
 | Calibration and co-location | 30.00 |
-| Workshops and educational sessions | 259.27 |
+| Workshops, teaching materials and travel | 2,159.12 |
 | Parcel delivery and installation | 155.00 |
 | Critical spares | 49.94 |
-| Contingency, dual purpose | 170.00 |
-| **Project total** | **1,935.02** |
-| Not used of the USD 4,000 | 2,064.98 |
+| Contingency, dual purpose | 290.00 |
+| **Project total** | **3,954.87** |
+| Not used of the USD 4,000 | 45.13 |
 | Import taxes, requested from the Intendencia de Canelones | 387.42 |
 
 The contingency is sized to the price risk. Until stage 4 closes
@@ -130,6 +130,13 @@ spares. Whatever is left then funds, before co-location, a traceable
 calibration of the bench reference instrument the project owns (or a
 certified one if it cannot be certified), which is what turns co-location
 from relative consistency into absolute bias.
+
+The education chapter holds most of what the network no longer needs:
+six practice kits (ESP32 and a sensor set) that stay with the schools, an
+ink-tank printer, a cutting plotter and a laminator for guides, stickers
+and station labels, a roll-up, snacks for the workshops, and suburban bus
+fares for the team (workshops, four maintenance rounds) and for students
+travelling to the closing day.
 
 There is no 3D printer: a commercial radiation shield costs less than
 printing one. No commercial gypsum blocks are available, so they are made

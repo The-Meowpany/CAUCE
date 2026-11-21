@@ -117,12 +117,12 @@ presupuesto.
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
 | Herramientas y banco de pruebas | 132,03 |
 | Calibración y co-localización | 30,00 |
-| Talleres y jornadas educativas | 259,27 |
+| Talleres, materiales didácticos y traslados | 2.159,12 |
 | Entrega de envíos e instalación | 155,00 |
 | Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 170,00 |
-| **Total del proyecto** | **1.935,02** |
-| No utilizado de los USD 4.000 | 2.064,98 |
+| Contingencia de doble propósito | 290,00 |
+| **Total del proyecto** | **3.954,87** |
+| No utilizado de los USD 4.000 | 45,13 |
 | Tributos de importación, solicitados a la Intendencia de Canelones | 387,42 |
 
 La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
@@ -134,6 +134,14 @@ entonces, antes de la co-localización, la calibración trazable del
 instrumento de referencia del banco, propio del proyecto (o uno certificado
 si ese no admite certificación), que es lo que convierte la
 co-localización de consistencia relativa en sesgo absoluto.
+
+El capítulo educativo concentra lo que la red ya no necesita: seis kits de
+práctica (ESP32 y un juego de sensores) que quedan en las instituciones,
+una impresora de tinta continua, un plotter de corte y una plastificadora
+para guías, stickers y etiquetas de las estaciones, un roll-up, la merienda
+de los talleres y los boletos suburbanos del equipo (talleres y cuatro
+rondas de mantenimiento) y de los estudiantes que viajan a la jornada de
+cierre.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
 imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
