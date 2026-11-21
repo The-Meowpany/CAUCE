@@ -114,12 +114,12 @@ budget document.
 | Central node: gateway and server (Orange Pi Zero 3) | 79.70 |
 | Tools and bench rig | 132.03 |
 | Calibration and co-location | 30.00 |
-| Education programme | 1,573.84 |
+| Education programme | 1,243.31 |
 | Logistics, operation and import taxes | 754.26 |
 | Critical spares | 49.94 |
-| Contingency, dual purpose | 270.00 |
-| **Project total** | **3,948.85** |
-| Not used of the USD 4,000 | 51.15 |
+| Contingency, dual purpose | 210.00 |
+| **Project total** | **3,558.32** |
+| Not used of the USD 4,000 | 441.68 |
 
 The contingency is sized to the price risk. Until stage 4 closes
 (everything bought and imported) it covers what ends up costing more than
@@ -130,11 +130,10 @@ calibration of the bench reference instrument the project owns (or a
 certified one if it cannot be certified), which is what turns co-location
 from relative consistency into absolute bias.
 
-The education programme gets most of what the network no longer needs:
-six practice kits (ESP32 and a sensor set) that stay with the schools, an
-ink-tank printer and a laminator for guides, labels and certificates, a
-roll-up, snacks for the workshops, and suburban bus fares for the team and
-for students travelling to the closing day. Logistics also carries the
+The education programme is project equipment reused in every workshop:
+six practice kits (ESP32 and a sensor set), a portable projector, an
+ink-tank printer and a laminator for guides and station labels, a roll-up,
+and suburban bus fares for the team. Logistics also carries the
 fares for four maintenance rounds during the pilot.
 
 There is no 3D printer: a commercial radiation shield costs less than
@@ -145,8 +144,8 @@ on the answer: under the single-payment
 regime of Decreto 50/2026 (60 % of each parcel's value, at least USD 20,
 replacing VAT and duties) they come to USD 387.42 on about USD 639 of goods
 in 11 parcels, bought in one order so each part pays the minimum once. If the Intendencia
-covers them, the reserve pays for the traceable calibration and two more
-workshops. No physical interventions line: the project
+covers them, the reserve pays for two more workshops and a second set of
+spares. No physical interventions line: the project
 generates evidence to evaluate measures, it doesn't execute them.
 
 What remains afterwards: hardware, firmware, protocol, data,
