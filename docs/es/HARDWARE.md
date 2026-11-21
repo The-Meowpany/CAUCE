@@ -116,6 +116,16 @@ arrancó y que la radio aceptó sus escrituras de configuración, no que el enla
 gateway es un puente ESP32 + SX1276 (`pio run -e gateway`) conectado por USB al equipo de la
 central, que alimenta a `cauce_server.gateway_runner`; ver DEPLOYMENT.md, sección 2c.
 
+## Intercambio entre nodos (ESP-NOW)
+
+Con `peer_enabled=1` los vecinos en el mismo `peer_channel` guardan copias de los registros de
+los demás, así un nodo que se rompe no se lleva su historial. ESP-NOW no autentica nada, por lo
+que cada trama va firmada con la semilla Ed25519 del emisor (`sync_auth_seed`) y solo se integra
+si el emisor está en `peer_keys` y todos sus registros son propios. `tools/provision.py` imprime
+la línea `peer_keys` de un lote; todos los nodos del sitio pueden llevar la misma línea. Cada
+ronda (`peer_interval_s`, 60 s) ofrece dos registros propios a cada vecino. Los registros de
+vecinos quedan en LittleFS: el nodo que solo los guarda nunca los sincroniza ni los archiva.
+
 ## Tiempo
 
 Jerarquía: **NTP > DS3231 > oscilador interno.** Con `rtc_enabled=1` el nodo toma la hora del

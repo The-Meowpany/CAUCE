@@ -83,6 +83,20 @@ def generate_identity(node_id: str) -> dict:
             "manifest_key": generate_manifest_key()}
 
 
+def peer_keys_line(units: list[dict]) -> str:
+    """The `peer_keys=` config line that lets every unit in the batch trust the others.
+
+    Public keys only: what a neighbour needs to verify a frame, and nothing that lets it sign
+    one. Every node can carry the same line, its own entry included - a node never receives its
+    own frames, so trusting itself costs nothing.
+    """
+    entries = [f"{u['node_id']}:{u['public_key_hex']}" for u in units
+               if u.get("algorithm") == "ed25519"]
+    if len(entries) > 8:
+        raise SystemExit("peer_keys holds at most 8 neighbours; split the site")
+    return "peer_keys=" + ",".join(entries)
+
+
 def assert_unique_seeds(units: list[dict]) -> None:
     """Fail the run if two units somehow share a seed.
 
@@ -276,6 +290,9 @@ def main(argv: list[str] | None = None) -> int:
         print("this file is the only copy of the seeds; store it accordingly")
     else:
         print(json.dumps({"site_id": args.site, "units": units}, indent=2))
+
+    # Public, so it is printed: every node of the batch needs it for peer exchange.
+    print(peer_keys_line(units))
 
     for row in provision_units(args.central, args.token, units):
         print(f"provisioned {row['node_id']}"

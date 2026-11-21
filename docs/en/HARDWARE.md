@@ -111,6 +111,16 @@ initialised and the radio accepted its configuration writes, not that the air li
 gateway is an ESP32 + SX1276 bridge (`pio run -e gateway`) on USB to the central's host, feeding
 `cauce_server.gateway_runner`; see DEPLOYMENT.md, section 2c.
 
+## Peer exchange (ESP-NOW)
+
+With `peer_enabled=1` neighbours on the same `peer_channel` keep copies of each other's records,
+so a node that dies does not take its history with it. ESP-NOW authenticates nothing, so every
+frame is signed with the sender's Ed25519 seed (`sync_auth_seed`) and merged only when the
+sender is in `peer_keys` and every record in it is the sender's own. `tools/provision.py`
+prints the `peer_keys` line for a batch; every node of the site can carry the same line. One
+round per `peer_interval_s` (60 s) offers two of this node's records to each neighbour. Peer
+records stay in LittleFS: they are never synced or archived by the node that merely holds them.
+
 ## Time
 
 Hierarchy: **NTP > DS3231 > internal oscillator.** With `rtc_enabled=1` the node seeds its

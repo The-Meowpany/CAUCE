@@ -164,3 +164,20 @@ def test_node_ids_pad_to_the_count_not_to_a_constant():
     then 8 more produces colliding ids."""
     assert provision._default_node_ids("N", 3) == provision._default_node_ids("N", 3)
     assert "N-001" in provision._default_node_ids("N", 120)
+
+
+def test_the_peer_keys_line_carries_public_keys_and_never_a_seed():
+    units = [provision.generate_identity(f"CAUCE-00{i}") for i in range(1, 4)]
+    line = provision.peer_keys_line(units)
+    assert line.startswith("peer_keys=CAUCE-001:")
+    assert line.count(",") == 2
+    for unit in units:
+        assert f"{unit['node_id']}:{unit['public_key_hex']}" in line
+        assert unit["seed_hex"] not in line
+
+
+def test_the_peer_keys_line_refuses_more_than_the_node_can_hold():
+    units = [{"node_id": f"N{i}", "algorithm": "ed25519", "public_key_hex": "00" * 32}
+             for i in range(9)]
+    with pytest.raises(SystemExit):
+        provision.peer_keys_line(units)

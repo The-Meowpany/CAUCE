@@ -90,9 +90,9 @@ def test_status_names_the_lora_wiring_that_exists():
     main = MAIN_CPP.read_text(encoding="utf-8")
     assert "g_loraSync->tick()" in main, "STATUS says the LoRa sync is driven; main.cpp must"
     assert "LoRa `SyncManager` is now ticked from `loop()`" in text
-    assert "g_peerExchange->" not in main.split("void loop()", 1)[1], (
-        "the peer exchange is now driven from loop(); STATUS row 12x must say so")
-    assert "peer exchange is still never driven from `loop()`" in text
+    assert "g_peerDriver->tick()" in main.split("void loop()", 1)[1], (
+        "STATUS says the peer exchange is driven from loop(); main.cpp must")
+    assert "peer exchange is driven by `PeerExchangeDriver`" in text
 
 
 def test_the_firmware_and_the_document_agree_on_signing():
