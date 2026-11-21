@@ -2,6 +2,7 @@
 
 #include "cauce/app/ArchiveManager.h"
 #include "cauce/app/DeepSleepController.h"
+#include "cauce/app/LoRaSigning.h"
 #include "cauce/app/MeasurementScheduler.h"
 #include "cauce/core/BootDiagnostics.h"
 #include "cauce/core/DataExporter.h"
@@ -784,17 +785,42 @@ void setup() {
       }
       if (radioUp) {
         g_loraTransport = new cauce::app::LoRaSyncTransport(*g_loraRadio, g_clock);
-        // Its own SyncManager: a node with LoRa relays through a peer with a radio rather than
-        // reaching the central itself, and that is a different transport with different
-        // credentials, not a second endpoint on the HTTP one.
-        g_loraSync = new cauce::app::SyncManager(*g_store, *g_loraTransport, g_clock,
-                                                  *g_logger, g_fs, "/state/lora_sync");
-        g_loraSync->setNodeId(config.nodeId);
-        g_loraSync->setDeviceSecret(config.syncDeviceKey);
-        g_loraSync->setSyncIntervalS(config.loraSyncIntervalS);
-        g_loraSync->loadState();
-        g_logger->eventf(cauce::LogLevel::Info, "LORA_ENABLED", "region=%s spi=%d",
-                         config.loraRegion, spiUp ? 1 : 0);
+        // The frame budget comes from the spreading factor the radio was configured with, not
+        // from the transport's default, so a slower region setting never builds a frame the
+        // air interface cannot carry.
+        g_loraTransport->setRadioPayloadBytes(g_loraRadio->maxPayloadBytes());
+        // A batch blocks the loop for its airtime plus the acknowledgement wait. If the task
+        // watchdog could not be raised it is 5 s (see setup), so the wait stays well inside
+        // that; a gateway on the same LAN as the central answers in well under a second.
+        g_loraTransport->setAckTimeoutMs(3000);
+        const cauce::app::LoRaSigningStatus signing =
+            cauce::app::configureLoRaSigning(*g_loraTransport, config);
+        if (cauce::app::loraSigningUsable(signing)) {
+          // Its own SyncManager: a node with LoRa relays through a gateway rather than reaching
+          // the central itself, and that is a different transport with different credentials,
+          // not a second endpoint on the HTTP one.
+          g_loraSync = new cauce::app::SyncManager(*g_store, *g_loraTransport, g_clock,
+                                                    *g_logger, g_fs, "/state/lora_sync");
+          g_loraSync->setNodeId(config.nodeId);
+          g_loraSync->setDeviceSecret(config.syncDeviceKey);
+          g_loraSync->setSyncIntervalS(config.loraSyncIntervalS);
+          // The transport ignores the URL; SyncManager only needs to know an endpoint exists.
+          g_loraSync->configureEndpoint("lora:gateway", nullptr);
+          g_loraSync->loadState();
+          // The radio is the link. Whether a gateway is listening is learned per batch from
+          // the acknowledgement, the same way an HTTP sync learns whether the central is up.
+          g_loraSync->onNetworkConnected();
+          g_logger->eventf(cauce::LogLevel::Info, "LORA_ENABLED",
+                           "region=%s spi=%d signing=%s payload=%u", config.loraRegion,
+                           spiUp ? 1 : 0, cauce::app::loraSigningStatusName(signing),
+                           static_cast<unsigned>(g_loraTransport->radioPayloadBytes()));
+        } else {
+          // Not started: every frame would be refused by the central, and a link that
+          // transmits refused frames looks alive while delivering nothing.
+          g_logger->eventf(cauce::LogLevel::Warn, "LORA_SIGNING_UNUSABLE",
+                           "algorithm=%s status=%s", config.loraFrameAlgorithm,
+                           cauce::app::loraSigningStatusName(signing));
+        }
       } else {
         g_logger->event(cauce::LogLevel::Warn, "LORA_UNAVAILABLE the radio did not come up");
       }
@@ -1061,6 +1087,20 @@ void loop() {
   const bool linkUp =
       (g_health.netState == cauce::app::NetState::Connected ||
        g_health.netState == cauce::app::NetState::Degraded);
+  if (g_loraSync != nullptr) {
+    // Records Wi-Fi already delivered are not sent again over the air: airtime is the scarce
+    // resource on this link, and the central would only deduplicate them.
+    g_loraSync->adoptDeliveredThrough(g_syncManager->lastAckedSequence());
+    // LoRa carries the data whenever Wi-Fi is not: no link, no central configured, or a sync
+    // that is currently failing. A node with both keeps the faster path and the radio as
+    // fallback.
+    const bool wifiDelivering = linkUp && g_activeConfig.syncServerUrl[0] != '\0' &&
+                                g_syncManager->consecutiveFailures() == 0;
+    if (!wifiDelivering) {
+      esp_task_wdt_reset();
+      g_loraSync->tick();
+    }
+  }
   if (linkUp) {
     if (!g_ntpConfigured) {
       configTime(static_cast<long>(g_activeConfig.timezoneOffsetMin) * 60L, 0,

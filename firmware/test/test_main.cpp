@@ -11,6 +11,7 @@ void registerBme280Tests();
 void registerWeatherSensorsTests();
 void registerPilotSensorTests();
 void registerArchiveTests();
+void registerLoRaWiringTests();
 void registerSchedulerTests();
 void registerExportTests();
 void registerMetricsTests();
@@ -59,6 +60,7 @@ int main() {
   registerWeatherSensorsTests();
   registerPilotSensorTests();
   registerArchiveTests();
+  registerLoRaWiringTests();
   registerSchedulerTests();
   registerExportTests();
   registerMetricsTests();

@@ -47,6 +47,11 @@ class SyncManager {
   bool connected() const { return connected_; }
   bool halted() const { return halted_; }
   uint32_t lastAckedSequence() const { return lastAckedSeq_; }
+
+  // Raises the watermark to a sequence another path has already delivered to the same
+  // central, so this one does not resend it. Never lowers it, and never past what the store
+  // holds. Returns true when the watermark moved (and was persisted).
+  bool adoptDeliveredThrough(uint32_t sequence);
   uint64_t lastSyncUtcMs() const { return lastSyncUtcMs_; }
   uint32_t consecutiveFailures() const { return failures_; }
 

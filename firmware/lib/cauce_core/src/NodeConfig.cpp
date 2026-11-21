@@ -250,6 +250,7 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("lora_sync_interval_s=%lu\n",
           static_cast<unsigned long>(config.loraSyncIntervalS));
   c.write("lora_region=%s\n", config.loraRegion);
+  c.write("lora_frame_algorithm=%s\n", config.loraFrameAlgorithm);
   c.write("storage_max_bytes=%lu\n",
           static_cast<unsigned long>(config.storageMaxBytes));
   c.write("segment_max_bytes=%lu\n",
@@ -412,6 +413,8 @@ bool parseConfig(const char* text, NodeConfig& out) {
         cfg.loraSyncIntervalS = static_cast<uint32_t>(intValue);
       } else if (std::strcmp(key, "lora_region") == 0) {
         copyString(cfg.loraRegion, sizeof(cfg.loraRegion), valueText);
+      } else if (std::strcmp(key, "lora_frame_algorithm") == 0) {
+        copyString(cfg.loraFrameAlgorithm, sizeof(cfg.loraFrameAlgorithm), valueText);
       } else if (std::strcmp(key, "storage_max_bytes") == 0 &&
                  parseInt(valueText, intValue)) {
         cfg.storageMaxBytes = static_cast<uint32_t>(intValue);

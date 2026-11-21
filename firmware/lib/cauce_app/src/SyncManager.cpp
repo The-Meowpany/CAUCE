@@ -50,6 +50,15 @@ void SyncManager::setDeviceSecret(const char* asciiSecret) {
   hasDeviceKey_ = true;
 }
 
+bool SyncManager::adoptDeliveredThrough(uint32_t sequence) {
+  const uint32_t held = store_.lastSequence();
+  const uint32_t bounded = sequence > held ? held : sequence;
+  if (bounded <= lastAckedSeq_) return false;
+  lastAckedSeq_ = bounded;
+  saveWatermark();
+  return true;
+}
+
 void SyncManager::setSyncIntervalS(uint32_t intervalS) {
   tuning_.intervalS = intervalS < 60 ? 60 : intervalS;
 }

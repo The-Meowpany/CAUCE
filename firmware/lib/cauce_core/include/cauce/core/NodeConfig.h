@@ -122,6 +122,9 @@ struct NodeConfig {
   // AU915 because the pilot is in Uruguay, which uses the 915-928 MHz band. A node elsewhere
   // must set lora_region explicitly; the name is validated at boot, not guessed.
   char loraRegion[16]{"AU915"};
+  // How LoRa frames are signed: "hmac" with sync_device_key, or "ed25519" with the seed in
+  // sync_auth_seed. Must match device_key_algorithm at the central, which refuses the other.
+  char loraFrameAlgorithm[12]{"hmac"};
   uint32_t storageMaxBytes{512u * 1024u};
   uint32_t segmentMaxBytes{64u * 1024u};
   bool deepSleepEnabled{false};
