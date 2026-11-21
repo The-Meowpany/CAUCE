@@ -39,6 +39,18 @@ class IStorageRepository {
   virtual bool containsRecord(const char* nodeId, uint32_t sequence,
                               uint32_t afterSequenceHint) = 0;
   virtual uint32_t lastSequence() const = 0;
+  // Like queryAfterSequence, restricted to records produced by `nodeId` (all records when it is
+  // null or empty). The store also holds records merged from peers, whose sequence numbers are
+  // their own; a caller walking *this* node's sequence must not have foreign records occupy its
+  // result slots or move its watermark.
+  virtual size_t queryAfterSequenceFor(const char* nodeId, uint32_t afterSeqExclusive,
+                                       Measurement* out, size_t capacity,
+                                       QueryStats& stats) = 0;
+  // The highest sequence among this node's own records (see setOwnNodeId on the
+  // implementation). Falls back to lastSequence() when no node was set, or after a checkpoint
+  // open, which does not record it separately - an overstatement there costs an archive lag
+  // figure, never a record.
+  virtual uint32_t lastOwnSequence() const = 0;
   virtual uint32_t totalRecords() const = 0;
   virtual uint32_t corruptedFrames() const = 0;
   virtual uint32_t totalBytes() const = 0;

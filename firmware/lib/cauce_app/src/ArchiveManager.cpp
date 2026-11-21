@@ -141,14 +141,15 @@ void ArchiveManager::tick() {
       return;
     }
   }
-  if (store_.lastSequence() <= counters_.watermark) {
+  if (store_.lastOwnSequence() <= counters_.watermark) {
     // Nothing new. A degraded archive with nothing to write stays degraded until a write
     // actually succeeds: an idle card is not evidence of a working one.
     return;
   }
 
   QueryStats stats{};
-  const size_t n = store_.queryAfterSequence(counters_.watermark, batch_, kBatch, stats);
+  const size_t n =
+      store_.queryAfterSequenceFor(nodeId_, counters_.watermark, batch_, kBatch, stats);
   uint32_t progressed = counters_.watermark;
   for (size_t i = 0; i < n; ++i) {
     const Measurement& m = batch_[i];
@@ -189,7 +190,7 @@ void ArchiveManager::tick() {
 }
 
 uint32_t ArchiveManager::lag() const {
-  const uint32_t last = store_.lastSequence();
+  const uint32_t last = store_.lastOwnSequence();
   return last > counters_.watermark ? last - counters_.watermark : 0;
 }
 

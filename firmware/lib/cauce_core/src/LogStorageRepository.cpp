@@ -74,6 +74,10 @@ uint32_t LogStorageRepository::scanSegment(SegmentInfo& info) {
         lastSequence_ = std::max(lastSequence_, decoded.sequence);
       }
     }
+    if (ownNodeId_[0] != '\0' && std::strcmp(decoded.nodeId, ownNodeId_) == 0) {
+      lastOwnSequence_ = std::max(lastOwnSequence_, decoded.sequence);
+      ownSequenceKnown_ = true;
+    }
   }
   if (validBytes != size) {
     corruptedFrames_++;
@@ -183,6 +187,11 @@ bool LogStorageRepository::append(const Measurement& measurement) {
   totalRecords_++;
   totalBytes_ += frameLen;
   if (measurement.sequence > lastSequence_) lastSequence_ = measurement.sequence;
+  if (ownNodeId_[0] != '\0' && std::strcmp(measurement.nodeId, ownNodeId_) == 0 &&
+      (!ownSequenceKnown_ || measurement.sequence > lastOwnSequence_)) {
+    lastOwnSequence_ = measurement.sequence;
+    ownSequenceKnown_ = true;
+  }
   lastRecord_ = measurement;
   hasLastRecord_ = true;
   if (++appendedSinceCkpt_ >= kCkAppendsFlush) {
@@ -298,6 +307,42 @@ size_t LogStorageRepository::queryAfterSequence(uint32_t afterSeqExclusive,
   }
   return stats.returned;
 }
+void LogStorageRepository::setOwnNodeId(const char* nodeId) {
+  copyString(ownNodeId_, sizeof(ownNodeId_), nodeId);
+}
+
+size_t LogStorageRepository::queryAfterSequenceFor(const char* nodeId,
+                                                   uint32_t afterSeqExclusive,
+                                                   Measurement* out, size_t capacity,
+                                                   QueryStats& stats) {
+  if (nodeId == nullptr || nodeId[0] == '\0') {
+    return queryAfterSequence(afterSeqExclusive, out, capacity, stats);
+  }
+  stats = QueryStats{};
+  if (!opened_) open();
+  uint8_t buffer[kFrameSize];
+  for (const SegmentInfo& seg : segments_) {
+    size_t offset = 0;
+    while (offset + kFrameSize <= seg.bytes) {
+      if (!fs_.readRange(seg.path, offset, buffer, kFrameSize)) {
+        stats.scanIncomplete = true;
+        break;
+      }
+      offset += kFrameSize;
+      Measurement decoded{};
+      if (decodeFrame(buffer, kFrameSize, decoded) != DecodeStatus::Ok) {
+        stats.scanIncomplete = true;
+        break;
+      }
+      if (decoded.sequence > afterSeqExclusive && std::strcmp(decoded.nodeId, nodeId) == 0) {
+        stats.matched++;
+        if (stats.returned < capacity) out[stats.returned++] = decoded;
+      }
+    }
+  }
+  return stats.returned;
+}
+
 bool LogStorageRepository::latest(Measurement& out) {
   if (!hasLastRecord_) return false;
   out = lastRecord_;

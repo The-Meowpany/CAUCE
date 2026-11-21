@@ -355,7 +355,10 @@ void test_node_id_escaped_in_sync_envelope() {
   wipeSyncData();
   Rig rig;
   rig.manager.setNodeId("A\"B");
-  rig.store.append(makeM(1, 1787356800000ULL));
+  // The record belongs to the same node: a manager only ever sends its own node's records.
+  Measurement m = makeM(1, 1787356800000ULL);
+  copyString(m.nodeId, sizeof(m.nodeId), "A\"B");
+  rig.store.append(m);
   rig.manager.onNetworkConnected();
   rig.manager.tick();
   TEST_ASSERT_FALSE(rig.transport.calls.empty());
@@ -460,7 +463,6 @@ void test_sync_without_an_executor_still_carries_no_receipts() {
 }
 
 void registerSyncTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_idle_when_disconnected_or_empty);
   RUN_TEST(test_sends_all_records_and_persists_watermark);
   RUN_TEST(test_resume_without_duplicates_after_interruption);
@@ -476,5 +478,4 @@ void registerSyncTests() {
   RUN_TEST(test_downlink_command_is_executed_and_reported_back);
   RUN_TEST(test_downlink_command_is_not_executed_twice_across_boots);
   RUN_TEST(test_sync_without_an_executor_still_carries_no_receipts);
-  UNITY_END();
 }

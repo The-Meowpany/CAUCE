@@ -37,6 +37,13 @@ class LogStorageRepository final : public IStorageRepository {
   bool containsRecord(const char* nodeId, uint32_t sequence,
                       uint32_t afterSequenceHint) override;
   uint32_t lastSequence() const override { return lastSequence_; }
+  size_t queryAfterSequenceFor(const char* nodeId, uint32_t afterSeqExclusive, Measurement* out,
+                               size_t capacity, QueryStats& stats) override;
+  uint32_t lastOwnSequence() const override {
+    return ownNodeId_[0] == '\0' || !ownSequenceKnown_ ? lastSequence_ : lastOwnSequence_;
+  }
+  // Set before open(): which node's records count as this node's own.
+  void setOwnNodeId(const char* nodeId);
   uint32_t totalRecords() const override { return totalRecords_; }
   uint32_t corruptedFrames() const override { return corruptedFrames_; }
   uint32_t totalBytes() const override { return totalBytes_; }
@@ -85,6 +92,9 @@ class LogStorageRepository final : public IStorageRepository {
   std::vector<SegmentInfo> segments_;
   uint32_t nextSegmentIndex_{1};
   uint32_t lastSequence_{0};
+  uint32_t lastOwnSequence_{0};
+  bool ownSequenceKnown_{false};
+  char ownNodeId_[16]{};
   uint32_t totalRecords_{0};
   uint32_t corruptedFrames_{0};
   uint32_t totalBytes_{0};

@@ -51,7 +51,7 @@ void SyncManager::setDeviceSecret(const char* asciiSecret) {
 }
 
 bool SyncManager::adoptDeliveredThrough(uint32_t sequence) {
-  const uint32_t held = store_.lastSequence();
+  const uint32_t held = store_.lastOwnSequence();
   const uint32_t bounded = sequence > held ? held : sequence;
   if (bounded <= lastAckedSeq_) return false;
   lastAckedSeq_ = bounded;
@@ -154,7 +154,9 @@ void SyncManager::runPendingCommands() {
 bool SyncManager::syncOneBatch() {
   Measurement batch[kRecordsPerBatch];
   QueryStats stats{};
-  store_.queryAfterSequence(lastAckedSeq_, batch, kRecordsPerBatch, stats);
+  // Only this node's records: peer records merged into the same store carry their own
+  // sequence numbers, and sending them would both misattribute them and move this watermark.
+  store_.queryAfterSequenceFor(nodeId_, lastAckedSeq_, batch, kRecordsPerBatch, stats);
   if (stats.returned == 0) {
     nextAttemptMonotonicMs_ =
         clock_.monotonicMs() + static_cast<uint64_t>(tuning_.intervalS) * 1000ULL;
@@ -287,7 +289,7 @@ void SyncManager::tick() {
     if (!syncOneBatch()) return;
     Measurement probe[1];
     QueryStats probeStats{};
-    store_.queryAfterSequence(lastAckedSeq_, probe, 1, probeStats);
+    store_.queryAfterSequenceFor(nodeId_, lastAckedSeq_, probe, 1, probeStats);
     if (probeStats.matched == 0) break;
   }
 }
