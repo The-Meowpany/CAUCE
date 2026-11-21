@@ -128,7 +128,7 @@ de la provisión, el AS3935 de DFRobot si el genérico no pasa la prueba de
 muestras, una antena para un sitio al que no llega el gateway, componentes
 fallidos más allá de los repuestos. Lo que quede financia entonces, antes de
 la co-localización, la calibración trazable del instrumento de referencia del
-banco (o una referencia certificada si no se consigue una en préstamo), que es
+banco, propio del proyecto (o uno certificado si ese no admite certificación), que es
 lo que convierte la co-localización de consistencia relativa en sesgo
 absoluto; después, un segundo SPS30 de repuesto. Se financia imprimiendo con
 una Bambu Lab A1 mini (USD 271) en lugar de la A1, que hoy cuesta USD 441.
@@ -154,11 +154,13 @@ de calibración, plataforma.
 
 Co-localización de los 8 nodos dos semanas antes del despliegue;
 coeficientes `cal_*` individuales por nodo y variable; informe de
-divergencias. Referencia primero: intentar un instrumento patrón
-prestado (universidad / organismo). Si falla, intercomparación entre
-los ocho: **eso establece consistencia relativa, no sesgo absoluto**,
-y los documentos científicos tienen que decirlo (un sesgo compartido
-por todos los nodos sería invisible). Re-validación periódica en campo
+divergencias. Referencia primero: el termohigrómetro de referencia
+propio del banco, con certificado de calibración de un laboratorio
+acreditado pagado con el saldo de la contingencia; todo instrumento del
+plan es propio, ninguno prestado ni compartido. Hasta tener ese
+certificado, la intercomparación entre los ocho **establece consistencia
+relativa, no sesgo absoluto**, y los documentos científicos tienen que
+decirlo (un sesgo compartido por todos los nodos sería invisible). Re-validación periódica en campo
 por comparación entre vecinos; divergencia sostenida = flag de
 mantenimiento, no dato silencioso.
 

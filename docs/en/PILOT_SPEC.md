@@ -125,7 +125,7 @@ planned: price or exchange-rate differences, import above the provision,
 the DFRobot AS3935 if the generic one fails its sample test, an antenna for
 a site the gateway cannot reach, failed parts beyond the spares. Whatever is
 left then funds, before co-location, a traceable calibration of the bench
-reference instrument (or a certified reference if none is lent), which is
+reference instrument the project owns (or a certified one if it cannot be certified), which is
 what turns co-location from relative consistency into absolute bias; then a
 second SPS30 spare. It is funded by printing on a Bambu Lab A1 mini (USD 271)
 instead of the A1, which now costs USD 441.
@@ -150,10 +150,13 @@ calibration methodology, platform.
 
 Two-week co-location of all 8 nodes before deployment; individual
 `cal_*` coefficients per node and variable; a divergence report.
-Reference first: try to borrow a pattern instrument (university /
-agency). If that fails, eight-way intercomparison: **that establishes
-relative consistency, not absolute bias**, and the scientific docs
-must say so (a bias shared by all nodes would be invisible).
+Reference first: the bench's own reference thermohygrometer, with a
+calibration certificate from an accredited laboratory funded by the
+unspent contingency; every instrument the plan relies on is owned, none
+borrowed or shared. Until that certificate exists, eight-way
+intercomparison **establishes relative consistency, not absolute bias**,
+and the scientific docs must say so (a bias shared by all nodes would be
+invisible).
 Periodic field re-validation by neighbor comparison; sustained
 divergence = maintenance flag, not silent data.
 
