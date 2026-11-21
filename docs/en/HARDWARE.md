@@ -108,7 +108,8 @@ radio as its fallback without spending airtime twice.
 
 What is not proven: that the wiring is correct. `LORA_ENABLED` says the SPI peripheral
 initialised and the radio accepted its configuration writes, not that the air link works. The
-gateway's relay logic (`lora_gateway.py`) has no radio attached yet.
+gateway is an ESP32 + SX1276 bridge (`pio run -e gateway`) on USB to the central's host, feeding
+`cauce_server.gateway_runner`; see DEPLOYMENT.md, section 2c.
 
 ## Time
 

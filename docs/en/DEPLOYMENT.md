@@ -199,6 +199,39 @@ Node side: point `sync_server_url` at `https://CAUCE_DOMAIN`, and install
 the root certificate on the ESP32 only if you chose `internal`. From there
 the checklist item "backend reachable over TLS" is satisfied.
 
+## 2c. LoRa gateway (optional)
+
+Nodes with `lora_enabled=1` fall back to LoRa whenever Wi-Fi is not delivering. Their frames
+reach the central through a gateway made of two parts, neither of which holds a node key:
+
+1. **Bridge firmware** on an ESP32 + SX1276 (same module and pins as a node), plugged into the
+   central's host by USB:
+
+   ```
+   cd firmware
+   pio run -e gateway -t upload
+   ```
+
+   The band defaults to AU915; elsewhere build with
+   `-D CAUCE_GATEWAY_REGION=\"EU868\"` (or `US915`, `AS923`). It must match the nodes'
+   `lora_region`. At boot the bridge announces `CAUCE_GATEWAY region=... radio=up` on the serial
+   line, then a heartbeat every minute.
+
+2. **Relay process** on the host, beside the central so it can read each node's signature
+   algorithm from the database:
+
+   ```
+   python -m cauce_server.gateway_runner --port /dev/ttyUSB0 --sync-url http://127.0.0.1:8000/v1/sync
+   ```
+
+   (`--port COM5` on Windows.) It reassembles batches, posts the signed frames verbatim, and
+   sends each acknowledgement back for the bridge to transmit. A batch the central refuses gets
+   no acknowledgement, so the node keeps it and retries.
+
+What is not proven: the radio link. Everything above is tested on host, including the serial
+framing against a shared known-answer frame, and the bridge cross-compiles; no frame has crossed
+the air yet.
+
 ## 3. Prepare each node
 
 

@@ -184,6 +184,39 @@ ahí queda satisfecha la casilla "backend accesible por TLS".
 
 alcanzable por TLS".
 
+## 2c. Gateway LoRa (opcional)
+
+Los nodos con `lora_enabled=1` pasan a LoRa cuando el Wi-Fi no está entregando. Sus tramas llegan
+a la central a través de un gateway de dos partes, ninguna de las cuales guarda claves de nodos:
+
+1. **Firmware puente** en un ESP32 + SX1276 (mismo módulo y pines que un nodo), conectado por USB
+   al equipo de la central:
+
+   ```
+   cd firmware
+   pio run -e gateway -t upload
+   ```
+
+   La banda por defecto es AU915; en otro país compilar con
+   `-D CAUCE_GATEWAY_REGION=\"EU868\"` (o `US915`, `AS923`). Debe coincidir con el
+   `lora_region` de los nodos. Al arrancar el puente anuncia `CAUCE_GATEWAY region=... radio=up`
+   por el puerto serie, y después un latido por minuto.
+
+2. **Proceso de reenvío** en el equipo, junto a la central para poder leer el algoritmo de firma
+   de cada nodo desde la base de datos:
+
+   ```
+   python -m cauce_server.gateway_runner --port /dev/ttyUSB0 --sync-url http://127.0.0.1:8000/v1/sync
+   ```
+
+   (`--port COM5` en Windows.) Reensambla los lotes, envía las tramas firmadas tal cual y manda
+   cada ACK de vuelta para que el puente lo transmita. Un lote que la central rechaza no recibe
+   ACK, así el nodo lo conserva y reintenta.
+
+Lo que no está probado: el enlace de radio. Todo lo anterior está probado en host, incluido el
+protocolo serie contra una trama de referencia compartida, y el puente compila para ESP32; todavía
+ninguna trama cruzó el aire.
+
 ## 3. Preparar cada nodo
 
 

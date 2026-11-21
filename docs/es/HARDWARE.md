@@ -112,8 +112,9 @@ con la sincronización fallando), y saltea todo lo que el Wi-Fi ya entregó, as�
 usa la radio como respaldo sin gastar tiempo de aire dos veces.
 
 Lo que no está probado: que el cableado sea correcto. `LORA_ENABLED` dice que el periférico SPI
-arrancó y que la radio aceptó sus escrituras de configuración, no que el enlace funcione. La
-lógica de reenvío del gateway (`lora_gateway.py`) todavía no tiene una radio conectada.
+arrancó y que la radio aceptó sus escrituras de configuración, no que el enlace funcione. El
+gateway es un puente ESP32 + SX1276 (`pio run -e gateway`) conectado por USB al equipo de la
+central, que alimenta a `cauce_server.gateway_runner`; ver DEPLOYMENT.md, sección 2c.
 
 ## Tiempo
 
