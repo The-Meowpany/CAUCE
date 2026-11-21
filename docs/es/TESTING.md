@@ -6,7 +6,7 @@
 cd firmware
 ```sh
 pio test -e native          # 563 tests en PC (Unity)
-python -m pytest tests -q    # 832 tests del backend
+python -m pytest tests -q    # 840 tests del backend
 ```
 pio run -e native           # compila el demo de simulación en host
 pio run -e esp32dev         # compila el firmware objetivo
@@ -14,7 +14,7 @@ pio run -e esp32dev         # compila el firmware objetivo
 
 ```bash
 cd backend
-python -m pytest tests -q   # 832 tests de backend
+python -m pytest tests -q   # 840 tests de backend
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ```
 

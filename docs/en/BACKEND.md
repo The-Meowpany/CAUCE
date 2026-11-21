@@ -18,6 +18,11 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | POST | `/v1/provision` | Admin-gated device-key registration, one key per node |
 | GET | `/v1/nodes` · `/v1/nodes/{id}` | List (also `cursor`-paginated) / detail + latest measurement |
 | GET | `/v1/nodes/{id}/measurements` | Filterable series (`variable`,`quality`,`from_utc_ms`,`to_utc_ms`,`limit≤10000`,`offset`) with `total` |
+| POST/GET/DELETE | `/v1/tokens` · GET/DELETE `/v1/tokens/{name}` | Per-principal API tokens with `read`/`write`/`admin` scopes and an optional `site_id`; the plaintext is returned once (admin only) |
+| POST | `/v1/sync/challenge` | Nonce for certificate-based sync authentication (`SECURITY.md`) |
+| POST | `/v1/nodes/{id}/revoke` · GET `/v1/nodes/{id}/revocation` | Retire a node identity; a retired node's syncs are refused |
+| GET | `/v1/ota/manifest` | Release descriptor for nodes: HMAC per node, plus the forwarded `ed25519_signature`; 503 when the release would not fit a node's parser (`OTA.md`) |
+| GET | `/v1/live` | The three header figures of the index page as JSON (unauthenticated, throttled per client) |
 | POST | `/v1/maintenance/retention` | Delete rows older than N days + VACUUM (cron-friendly; nodes resend retained rows unless purged there too) |
 | GET | `/v1/maintenance/retention` | Retention config plus last run: `older_than_days`, `deleted_measurements`, `vacuumed`, `last_run_utc_ms` |
 | GET | `/v1/nodes/{id}/coverage` | Expected-versus-received accounting for a node and variable: `coverage_pct`, longest gap, top gaps with a reason |
@@ -34,7 +39,7 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | PUT | `/v1/sites/{id}/location` | Set site coordinates (validated lat/lon) |
 | POST/GET/DELETE | `/v1/alerts/rules` · PATCH `/v1/alerts/rules/{id}` · GET `/v1/alerts/log` · POST+GET `/v1/alerts/check` | Threshold/stale rules (webhook/Telegram, validated inputs, enable toggle), delivery log with attempts, manual stale pass + pending redelivery |
 | POST/GET | `/v1/interventions` | Intervention registry (`end_before_start`→422) |
-| GET | `/v1/analytics/summary` | Descriptive stats per node+variable; `granularity=auto|raw|hourly` switches between raw rows and the hourly buckets |
+| GET | `/v1/analytics/summary` | Descriptive stats per node+variable; `granularity=auto|raw|15min|hourly|daily` switches between raw rows and the materialized buckets |
 | GET | `/v1/analytics/compare` | Two nodes side by side + mean difference |
 | GET | `/v1/analytics/before-after` | Pre/post split by intervention window; warns under 30 samples per period; with control sites it also returns `control_group.difference_in_differences` |
 | GET | `/v1/analytics/period-compare` | Same node, two windows |
@@ -42,7 +47,8 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/v1/analytics/summary-fast` | Same stats from materialized hourly aggregates (O(buckets)) |
 | GET | `/v1/analytics/series` | One row per materialized bucket for charts; `granularity=15min|hourly|daily`, calibrated, gaps left absent, capped at 5000 buckets (`truncated`) |
 | POST | `/v1/nodes/{id}/time-reconstruct` | Backfills timestamps of leading time-uncertain records from the first anchor + median interval; flags rows (`ts_reconstructed=1`) and states the margin-of-error caveat out loud |
-| GET | `/v1/export-all.csv` | Full-history CSV stream |
+| GET | `/v1/export-all.csv` | Full-history CSV stream (only the caller's site for a site-scoped token) |
+| GET | `/v1/nodes/{id}/export.csv` | One node's full history as CSV |
 | GET | `/v1/nodes/{id}/coverage.csv` | Coverage summary row followed by the gap table (same fields as the JSON endpoint) |
 | GET | `/system` | Fleet view: per-node firmware, flags and visit badge, 7-day coverage table, retention state |
 | GET | `/` | HTML dashboard in your language (Accept-Language: en/es/pt) |
@@ -51,6 +57,7 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | GET | `/compare` | Side-by-side node comparison with overlaid chart (?a=&b=&variable=&days=) |
 | GET | `/nodes/{id}/events` | Human heat-events page: form, event table or explained empty state |
 | GET | `/nodes/{id}/report` | Printable evidence report: stats, qualities, heat events |
+| GET | `/heat` | Every node's heat events in one table (?hours=&threshold=&min_duration_min=) |
 | GET | `/map` | SVG site map, nodes colored by latest temperature |
 | GET | `/colocation` | All-node overlay chart (?variable=&days=) with divergence table |
 | GET | `/alerts` | Rules CRUD, delivery log, manual check trigger |

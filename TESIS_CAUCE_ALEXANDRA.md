@@ -4,7 +4,7 @@
 
 ## Abstract
 
-This work presents the design, implementation and empirical evaluation of CAUCE, a distributed infrastructure of ESP32 microcontrollers that acquires, validates, stores and serves environmental data entirely at the network edge, without requiring permanent Internet connectivity or a central server for any essential function. The exchange of information between nodes and optional central infrastructure is formalized as **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*), a protocol comprising three verifiable subsystems: (i) a versioned REST resource interface on each node, (ii) an idempotent batch synchronization protocol keyed by `(node_id, sequence)` with persistent watermarks and honest acknowledgements, and (iii) a CRC-32-framed append-only binary storage format with corruption-sealing semantics. On top of that core the implementation adds a runtime calibration overlay, bounded-cost analytics through materialized 15-minute, hourly and daily aggregates with automatic granularity selection, an at-least-once downlink command channel with end-to-end idempotency, a fragmented binary carrier for narrowband radio with gateway forwarding and acknowledgement, TLS termination, and per-principal authorization with capability scopes and site scoping. The system is validated through 563 firmware unit/integration tests running on host, 832 backend API tests including cryptographic verification vectors and cross-language wire-format vectors, an automated end-to-end pipeline executing a real C++ synchronization client against a live FastAPI server with direct SQLite assertions, cross-compilation to the ESP32 target, and a continuous integration workflow with five parallel jobs. Results demonstrate that the conjunction of scientific data validation, tamper-evident local storage, embedded web service, authenticated device identity and effectively-once remote ingestion -at-least-once delivery made idempotent by `(node_id, sequence)` deduplication, rather than a stronger transport guarantee- is achievable on a sub-USD 35 microcontroller platform without an RTOS, while maintaining a fully operational local dashboard during all background operations including over-the-air firmware updates. Node-signed radio frames (HMAC-SHA-256 or Ed25519), certificate-based node authentication and a sequence-based node-to-node merge over ESP-NOW are implemented and host-tested; the product firmware drives both the LoRa sync and an authenticated peer exchange, and no radio link has been measured yet. The system is a hybrid with full edge autonomy, not a mesh.
+This work presents the design, implementation and empirical evaluation of CAUCE, a distributed infrastructure of ESP32 microcontrollers that acquires, validates, stores and serves environmental data entirely at the network edge, without requiring permanent Internet connectivity or a central server for any essential function. The exchange of information between nodes and optional central infrastructure is formalized as **ALEXANDRA** (*Autonomous Local EXchange for Distributed Resource Architecture*), a protocol comprising three verifiable subsystems: (i) a versioned REST resource interface on each node, (ii) an idempotent batch synchronization protocol keyed by `(node_id, sequence)` with persistent watermarks and honest acknowledgements, and (iii) a CRC-32-framed append-only binary storage format with corruption-sealing semantics. On top of that core the implementation adds a runtime calibration overlay, bounded-cost analytics through materialized 15-minute, hourly and daily aggregates with automatic granularity selection, an at-least-once downlink command channel with end-to-end idempotency, a fragmented binary carrier for narrowband radio with gateway forwarding and acknowledgement, TLS termination, and per-principal authorization with capability scopes and site scoping. The system is validated through 563 firmware unit/integration tests running on host, 840 backend API tests including cryptographic verification vectors and cross-language wire-format vectors, an automated end-to-end pipeline executing a real C++ synchronization client against a live FastAPI server with direct SQLite assertions, cross-compilation to the ESP32 target, and a continuous integration workflow with five parallel jobs. Results demonstrate that the conjunction of scientific data validation, tamper-evident local storage, embedded web service, authenticated device identity and effectively-once remote ingestion -at-least-once delivery made idempotent by `(node_id, sequence)` deduplication, rather than a stronger transport guarantee- is achievable on a sub-USD 35 microcontroller platform without an RTOS, while maintaining a fully operational local dashboard during all background operations including over-the-air firmware updates. Node-signed radio frames (HMAC-SHA-256 or Ed25519), certificate-based node authentication and a sequence-based node-to-node merge over ESP-NOW are implemented and host-tested; the product firmware drives both the LoRa sync and an authenticated peer exchange, and no radio link has been measured yet. The system is a hybrid with full edge autonomy, not a mesh.
 
 **Keywords:** embedded systems; microcontrollers; edge computing; IoT; distributed systems; offline-first; eventual consistency; wireless sensor networks; ESP32; environmental monitoring; HMAC authentication; append-only storage; idempotent synchronization.
 
@@ -20,7 +20,7 @@ The contribution is twofold:
 
 **Technological**: CAUCE executes on a microcontroller with 520 KB SRAM and no operating system a complete pipeline of acquisition, statistical validation, integrity-verifiable persistence, embedded web API, local user interface and idempotent eventual synchronization — functions conventionally delegated to higher layers. Additionally, the system implements per-device HMAC-SHA-256 batch signing, progressive (non-blocking) over-the-air update state machine, materialized hourly analytics aggregates on the central server, and automated temporal reconstruction of records captured without trusted clock source.
 
-**Methodological**: the system is covered by automated tests executable without hardware (563 firmware + 832 backend = 1395 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
+**Methodological**: the system is covered by automated tests executable without hardware (563 firmware + 840 backend = 1403 verifications), an end-to-end integration pipeline exercising the actual C++ synchronization client against a live server, and a continuous integration workflow — enabling reproducible study of its properties and clean separation between verified facts and design aspirations.
 
 # 2. Problem Statement
 
@@ -440,10 +440,10 @@ Candidate domains with minimal change: agriculture (soil moisture, conductivity)
 | Cadence | Default 60 s; configurable 10–3600 s | NodeConfig |
 | Local query latency | HTTP LAN served from local flash/RAM | architecture |
 | Synchronization | Batches ≤32 declared; progressive drain; backoff ≤1800 s; HMAC signed | SyncManager |
-| Energy | No deep sleep; Wi-Fi always-on → high consumption profile; advisory-only policy | STATUS.md |
+| Energy | Deep sleep implemented and host-tested but off by default until bench power measurement; Wi-Fi always-on in the default profile → high consumption | STATUS.md |
 | Central scalability | O(1) amortized ingest per record (PK dedup); summary-fast reads O(hourly buckets) and `granularity=auto` selects them past 7 days; only explicit `granularity=raw` pays O(n) — adequate for 10¹–10² node pilots | backend design |
-| Maintainability | 1395 automated tests (563 firmware, 832 backend); CI 5 jobs; reproducible docs | repository |
-| Cost | Minimal node (BME280 only) 13–32 USD; complete pilot station ≈255 USD with 24 variables | HARDWARE.md, pilot budget |
+| Maintainability | 1403 automated tests (563 firmware, 840 backend); CI 5 jobs; reproducible docs | repository |
+| Cost | Minimal node (BME280 only) 13–32 USD; complete pilot station ≈256 USD with 24 variables | HARDWARE.md, pilot budget |
 
 Formulas implemented —rate-of-change: r = Δv / Δt_min; sample deviation: s = √(Σ(xᵢ−x̄)²/(n−1)); interpolated percentile: P(p) linear between order statistics; trapezoidal exposure: E = Σ(tᵢ₊₁−tᵢ) for consecutive above-threshold pairs, in hours; bounded exponential backoff: tₙ = min(t₀·2^(n−1), t_max).
 
@@ -490,9 +490,6 @@ on the node, which is why they reappear here as the first two items.
    fragmentation, acknowledgement and the whole forwarding loop exist and are
    verified end to end against the server; only the air interface is
    unproven.
-11. **Storage tier**: archiving peer records on the card. The archive keeps
-    this node's own records; with peer exchange enabled, records merged from
-    other nodes stay in LittleFS only.
 6. **OTA closure**: the ESP32 HTTP reader, manifest signing and post-boot
    boot-counter confirmation ship, with the attempt counter persisted in flash
    and the download no longer blocking the scheduler. Only the physical flash
@@ -510,6 +507,10 @@ on the node, which is why they reappear here as the first two items.
     compact LoRa carrier ship; what remains is the actuation handlers, which
     should stay validation-only until there is hardware whose actuation is safe
     to repeat.
+11. **Storage tier**: archiving peer records on the card. The archive keeps
+    this node's own records; with peer exchange enabled, records merged from
+    other nodes stay in LittleFS only.
+
 # 26. Conclusions
 
 - **What CAUCE is**: a distributed hybrid infrastructure of ESP32-based microstations whose primary use case is hyperlocal environmental monitoring, built as a generalizable edge acquisition–custody–exchange platform.
@@ -517,7 +518,7 @@ on the node, which is why they reappear here as the first two items.
 - **How much processing happens at the edge**: the entire lifecycle except multi-node transversal analytics —acquisition, statistical validation with auditable states, filtering, integral storage, local visualization, exportation and authentication—.
 - **What degree of decentralization it has**: full data-and-function autonomy per node (strict offline-first), with optional non-irreducible central coordination; formally hybrid, not peer-to-peer.
 - **What role ALEXANDRA plays**: formal exchange contract -versioned REST resources per node, idempotent `(node_id, sequence)` batches with honest ack and persistent watermark, HMAC-signed with per-device keys, versioned at-rest format, opaque cursors for stable iteration, and at-least-once downlink with flash-persisted exactly-once application-; twelve principles are implemented and tested, together with node-signed radio frames relayed by a keyless gateway, Ed25519 signatures and certificate-based node authentication, and a sequence-based peer merge. One implementation debt is recorded explicitly: both radio paths - LoRa from node to gateway bridge to relay, and signed ESP-NOW between neighbours - are complete and verified on host, and neither has carried a frame over the air (§19, §25).
-- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —1395 verifications (563 firmware, 832 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
+- **What the project demonstrates** (H1, H2): the §2.2 conjunction is achievable on a sub-USD 35 microcontroller with automated coverage —1403 verifications (563 firmware, 840 backend) including E2E against a live server— covering even the adversarial scenario of complete client-state loss without duplicates or omissions.
 - **Limitations**: pending physical validation including unmeasured radio links, static peer trust, symmetric OTA manifests, today's continuous-power requirement, scanning and row-bound queries scaled to pilot size, and a calibration layer whose uncertainty is not quantified.
 - **Generalization potential**: high —the core is domain-neutral— conditioned on new domains preserving the single-producer-per-record property that grounds ALEXANDRA's simplicity.
 
@@ -632,20 +633,24 @@ Frozen detection: streak ≥6 readings identical within ε = 0.01. Maximum toler
 
 ## Annex D. Automated verification inventory
 
-| Suite (firmware/test/) | Count |
+All firmware suites run in one Unity binary (`pio test -e native`); the grouping below is by
+area, with the files that make it up.
+
+| Area (firmware/test/) | Count |
 |---|---|
-| `test_api` | 15 |
-| `test_export` | 6 |
-| `test_metrics` | 8 |
-| `test_network` | 8 |
-| `test_ota` (includes rollback policy and the LoRa/transport suites pulled in by the same binary) | 47 |
-| `test_security` | 16 |
-| `test_sync` | 12 |
-| `test_main` (validation, codec, storage, config, BME280, scheduler, diagnostics, deep sleep) | 36 |
-| **Total firmware (host)** | **461** |
-| Backend (pytest): ingestion idempotency/auth/rate-limit, cursors, filters, analytics incl. calibration and hourly/daily granularity, dashboard i18n, CSV export, simulator roundtrip, TLS deployment contract, downlink commands, LoRa frame codec, calibration uncertainty, API scopes, daily aggregates, LoRa gateway loop, security regressions | **192** |
-| Integration E2E | 4 phases + SQLite assertions |
-| **Grand total** | **394+** |
+| Sensors and drivers (`test_pilot_sensors`, `test_weather_sensors`, `test_bme280`) | 62 |
+| LoRa radio and carrier (`test_sx1276`, `test_lora`, `test_lora_batch`, `test_lora_wiring`, `test_serial_bridge`) | 83 |
+| Peer exchange (`test_peer_exchange`, `test_esp32_peer_link`, `test_peer_driver`, `test_replication`) | 77 |
+| Cryptography and identity (`test_node_auth`, `test_node_auth_wire`, `test_ed25519_points`, `test_ed25519_group`, `test_sha512`, `test_certificate_verifier`, `test_node_credential`, `test_sync_transport_auth`, `test_security`) | 107 |
+| OTA (`test_ota`, `test_ota_boot`, `test_ota_rollback`, `test_manifest_key`) | 46 |
+| Storage and export (`test_storage`, `test_storage_contains`, `test_codec`, `test_export`, `test_archive`, `test_text_buffer`) | 57 |
+| Sync and network (`test_sync`, `test_network`) | 23 |
+| Node API, config and commands (`test_api`, `test_config`, `test_commands`, `test_actuator`) | 49 |
+| Core (`test_validation`, `test_diagnostics`, `test_boot_diagnostics`, `test_deep_sleep`, `test_metrics`, `test_scheduler_integration`, `test_suite_isolation`) | 59 |
+| **Total firmware (host)** | **563** |
+| Backend (pytest, 53 files): ingestion idempotency, signing and certificates, scopes and site scoping, analytics with 15-minute/hourly/daily aggregates, calibration and uncertainty, LoRa relay, dashboard and i18n, CSV export, OTA release signing, documentation-claim checks | 840 |
+| Integration E2E (`scripts/run-e2e.ps1`) | 3 phases + SQLite assertions |
+| **Grand total** | **1403 + E2E** |
 
 ## Annex E. Node configuration (extract)
 

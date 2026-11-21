@@ -3,9 +3,10 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (563 firmware + 832 backend tests, E2E green)
+## Implemented and verified (563 firmware + 840 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
+| **Audit fixes**: the ESP-NOW known-peer table was written by the Wi-Fi receive callback and read by `loop()` with no lock, so a 120-byte peer credential could be copied out torn, and an announcement arriving between the two reads of the clock made a fresh neighbour look 49 days stale; both now run under one spinlock with a signed age. `sign_release.py` signed releases no node can parse (URL over 127 characters, version over 15) and wrote the release key before restricting it to 0600; it now refuses those releases and creates the key exclusively with 0600, and the central answers `503 ota_manifest_exceeds_node_limits` instead of serving one. The full-config buffer test now fills every string field, not only the certificate | 8 backend tests; the full-config test; the peer-table lock is ESP32-only and cross-compiled |
 | **Ed25519 release key for OTA**: with `ota_public_key` set, a node requires an Ed25519 signature by an offline release key over `version|sha256|url|totalSize` and refuses an HMAC-only manifest; `tools/sign_release.py` generates the key and signs release files, and the central only forwards `ed25519_signature`, so it can serve firmware but not authorise it | 4 firmware tests in `test_ota.cpp` against a signature made by `cryptography` (RFC 8032 TEST 1 key), 3 backend tests |
 | **CA-vouched neighbours**: a 120-byte peer credential (node id, Ed25519 public key, expiry, CA signature under `cauce-peer-v1`) is returned with every issued certificate, broadcast in the ESP-NOW announcement, verified once per neighbour and added to the keyring until it expires; `peer_keys` still works and a listed key wins | 4 firmware tests in `test_peer_driver.cpp` and 3 backend tests sharing one known-answer credential, so issuer and verifier cannot drift |
 | **Site-scoped reads everywhere**: per-node analytics, coverage, diagnostics, revocation, certificate status and CSV exports refuse a node outside the caller's site (an unassigned node included); node list, fleet, sites, interventions, alert rules and log and the full CSV export are filtered to it; alert targets hidden from read-only principals. Editing an alert rule and running the alert check were open with no admin token configured and now fail closed | 13 tests in `test_site_scoped_reads.py` |
@@ -122,6 +123,10 @@ not. It overrides any aspirational claim elsewhere.
 
 ## Not implemented yet
 
+- Authentication on the HTML dashboard. The `/v1` API honours the token and site scoping, but
+  `/`, `/map`, `/compare`, `/system`, the node pages and `/v1/live` render every node to anyone
+  who can reach the port. Until they are gated, privacy depends on the network or the reverse
+  proxy, and a site-scoped operator can still see other sites there.
 - Archiving records merged from peers. The archive keeps this node's own records; peer records
   stay in LittleFS and are archived by the node that measured them.
 - Revoking a peer credential before it expires. A retired node's credential stays trusted by
@@ -181,7 +186,9 @@ not. It overrides any aspirational claim elsewhere.
   which would have been the worst version of the feature: the column exists, the operator set
   it, and a routine rotation removed it. `tools/provision.py` generates the key per unit
   (`--no-manifest-key` to opt out) and refuses two units sharing one. 5 firmware + 9 backend
-  tests.
+  tests. **Asymmetric since then:** a node that pins `ota_public_key` accepts only releases
+  signed by the offline Ed25519 release key, so neither secret above can authorise firmware for
+  it. What remains is operational: where that key is kept and how it is rotated.
 - **Two subsystems had tests and no caller.** `Esp32PeerExchange` and the whole LoRa stack -
   driver, frame format, fragmentation, acknowledgement and forwarding loop - were reachable only
   from the test binary. A component with tests and no caller is not half-done; it exists only

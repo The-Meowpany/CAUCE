@@ -39,8 +39,13 @@ What we actually do today, and what we openly don't.
   being allowed: there is no credential to check, so allowing it would
   leave the port open to anyone who can reach it. Reads stay open,
   because the dashboard is meant to be reachable on a trusted LAN.
-  Setting the token closes reads as well. This is the one asymmetry,
-  and it is deliberate — see `backend/cauce_server/security.py`.
+  Setting the token closes the `/v1` API reads as well. This is the one
+  asymmetry, and it is deliberate — see `backend/cauce_server/security.py`.
+  **The HTML dashboard is not behind the token.** Its pages and
+  `/v1/live` render every node's readings to anyone who can reach the
+  port, so site-scoped tokens confine the API, not the dashboard. A
+  deployment that needs the data private puts authentication in the
+  reverse proxy in front of the central.
 - **Node-supplied names are constrained, and the dashboard's script
   blocks are escaped for their context.** `variable` and `sensor_id`
   are stored verbatim, so they are restricted to `[A-Za-z0-9_.-]`, and

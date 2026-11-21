@@ -40,8 +40,13 @@ Lo que realmente hacemos hoy, y lo que abiertamente no.
   permitirla dejaría el puerto abierto a cualquiera que llegue. Las
   lecturas siguen abiertas, porque el dashboard tiene que ser alcanzable
   en una LAN de confianza. Definir el token cierra también las
-  lecturas. Esta es la única asimetría, y es deliberada — ver
-  `backend/cauce_server/security.py`.
+  lecturas de la API `/v1`. Esta es la única asimetría, y es deliberada —
+  ver `backend/cauce_server/security.py`. **El dashboard HTML no está
+  detrás del token.** Sus páginas y `/v1/live` muestran las lecturas de
+  todos los nodos a quien llegue al puerto, así que los tokens acotados
+  por sitio limitan la API, no el dashboard. Un despliegue que necesite
+  los datos privados pone autenticación en el proxy inverso delante de
+  la central.
 - **Los nombres que manda un nodo están restringidos, y los bloques de
   script del dashboard van escapados para su contexto.** `variable` y
   `sensor_id` se guardan tal cual, así que se limitan a
