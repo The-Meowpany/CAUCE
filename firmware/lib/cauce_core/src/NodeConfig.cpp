@@ -51,7 +51,9 @@ struct Cursor {
   Cursor(char* initialPos, size_t initialRemaining)
       : pos(initialPos), remaining(initialRemaining), overflow(false) {}
 
-  void write(const char* fmt, ...) {
+  // Checked like printf, so a format and its arguments that disagree fail the build rather than
+  // read whatever is next on the stack.
+  __attribute__((format(printf, 2, 3))) void write(const char* fmt, ...) {
     if (remaining == 0) {
       overflow = true;
       return;
@@ -132,9 +134,16 @@ constexpr FloatKey kSensorFloats[] = {
 };
 
 void appendSensorKeys(Cursor& c, const NodeConfig& config) {
-  for (const auto& k : kSensorFlags) c.write("%s=%d\n", k.key, (config.*k.field) ? 1 : 0);
+  // The member is read into a local before the call: a pointer-to-member expression inside a
+  // variadic argument list is correct C++, but it is the one shape static analysers misread as a
+  // missing format argument.
+  for (const auto& k : kSensorFlags) {
+    const int enabled = (config.*k.field) ? 1 : 0;
+    c.write("%s=%d\n", k.key, enabled);
+  }
   for (const auto& k : kSensorFloats) {
-    c.write("%s=%.4f\n", k.key, static_cast<double>(config.*k.field));
+    const double value = config.*k.field;
+    c.write("%s=%.4f\n", k.key, value);
   }
   c.write("wind_pulses_per_rev=%u\n", static_cast<unsigned>(config.windPulsesPerRevolution));
 }
@@ -330,6 +339,7 @@ bool parseConfig(const char* text, NodeConfig& out) {
 
         long long intValue = 0;
         float floatValue = 0.0f;
+        bool badSensorValue = false;
       if (std::strcmp(key, "schema_version") == 0 && parseInt(valueText, intValue)) {
         cfg.schemaVersion = static_cast<uint8_t>(intValue);
       } else if (std::strcmp(key, "node_id") == 0) {
@@ -433,8 +443,8 @@ bool parseConfig(const char* text, NodeConfig& out) {
                                std::strcmp(valueText, "true") == 0;
       } else if (std::strcmp(key, "admin_token_sha256") == 0) {
         copyString(cfg.adminTokenSha256, sizeof(cfg.adminTokenSha256), valueText);
-      } else if (bool badValue = false; parseSensorKey(key, valueText, cfg, badValue)) {
-        if (badValue) malformed++;
+      } else if (parseSensorKey(key, valueText, cfg, badSensorValue)) {
+        if (badSensorValue) malformed++;
       } else if (std::strncmp(key, "thr_", 4) == 0) {
         for (uint8_t v = 0; v < kVariableCount; ++v) {
           const Variable var = static_cast<Variable>(v);
