@@ -116,22 +116,25 @@ el documento de presupuesto.
 |---|---|
 | 4 estaciones idénticas | 1.166,80 |
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 72,45 |
-| Herramientas e instrumental de prueba, placas CAUCE-Node | 181,98 |
-| Importación del equipamiento (prestación única y entrega) | 539,13 |
-| Calibración: certificado del LATU, materiales de instalación | 309,49 |
-| Talleres e impresión de materiales | 309,20 |
-| Transporte y viáticos del equipo | 814,38 |
-| Imprevistos | 606,57 |
+| Herramientas, instrumental de prueba, impresora, placas CAUCE-Node | 266,77 |
+| Tributos de importación del equipamiento | 479,13 |
+| Materiales e insumos (instalación, armado, tinta, papel, vinilo) | 296,81 |
+| Talleres: boletos de los jóvenes que presentan en el cierre del fondo | 66,20 |
+| Transporte y viáticos (boletos y alimentación del equipo, entrega de envíos) | 1.231,98 |
+| Imprevistos | 419,86 |
 | **Total del proyecto** | **4.000,00** |
 
 Las bases limitan el equipamiento y la infraestructura al 50 % del
 proyecto. La organización patrocinadora no cobra gastos administrativos;
 las comisiones bancarias y de tarjeta salen de los imprevistos. El equipamiento, contado
-con su importación, suma USD 1.960,36 (49,0 %); los tributos de
+con sus tributos de importación, suma USD 1.985,15 (49,6 %); los tributos de
 importación (USD 479,13 por el Decreto 50/2026, 60 % de cada envío, mínimo
 USD 20) están dentro de los USD 4.000. Los talleres son abiertos y
 gratuitos; a quienes participan se los invita a sumarse al proyecto y a su
 organización en GitHub, y reciben un certificado y stickers del proyecto.
+Nada se terceriza: el equipo imprime guías, certificados y stickers con
+su propia impresora, y el equipamiento queda en el proyecto al terminar el
+período.
 La ejecución termina el 15/04/2027 y el informe final se presenta el
 22/04/2027. No hay impresora 3D: un escudo de radiación comercial cuesta
 menos que imprimirlo. Los bloques de yeso se fabrican en el proyecto. Sin
@@ -147,7 +150,7 @@ Co-localización de las 4 estaciones dos semanas antes del despliegue;
 coeficientes `cal_*` individuales por nodo y variable; informe de
 divergencias. Referencia primero: el termohigrómetro de referencia
 propio del banco, con certificado de calibración de un laboratorio
-acreditado (LATU), incluido en el presupuesto; todo instrumento del
+acreditado cuando el financiamiento lo permita; todo instrumento del
 plan es propio, ninguno prestado ni compartido. Hasta tener ese
 certificado, la intercomparación entre las cuatro estaciones **establece consistencia
 relativa, no sesgo absoluto**, y los documentos científicos tienen que

@@ -113,21 +113,23 @@ panel, pipe, box, antenna), at the BROU selling rate of UYU 41.95: USD
 |---|---|
 | 4 identical stations | 1,166.80 |
 | Central node: gateway and server (Orange Pi Zero 3) | 72.45 |
-| Tools and test instruments, CAUCE-Node boards | 181.98 |
-| Import of the equipment (single-payment tax and delivery) | 539.13 |
-| Calibration: LATU certificate, installation materials | 309.49 |
-| Workshops and printed materials | 309.20 |
-| Team transport and subsistence | 814.38 |
-| Contingency | 606.57 |
+| Tools, test instruments, printer, CAUCE-Node boards | 266.77 |
+| Import taxes on the equipment | 479.13 |
+| Materials and supplies (installation, assembly, ink, paper, vinyl) | 296.81 |
+| Workshops: fares for the youths presenting at the fund's closing event | 66.20 |
+| Transport and subsistence (team fares, meals, parcel delivery) | 1,231.98 |
+| Contingency | 419.86 |
 | **Project total** | **4,000.00** |
 
 The call caps equipment and infrastructure at 50 % of the project. The
 sponsoring organisation charges no administrative costs; bank and card
-fees come out of the contingency. Equipment, counted with its import, is USD
-1,960.36 (49.0 %); import taxes (USD 479.13 under Decreto 50/2026, 60 % of
+fees come out of the contingency. Equipment, counted with its import taxes, is
+USD 1,985.15 (49.6 %); import taxes (USD 479.13 under Decreto 50/2026, 60 % of
 each parcel, at least USD 20) sit inside the USD 4,000. Workshops are open
 and free; participants are invited to join the project and its GitHub
-organisation, and get a certificate and project stickers. Execution runs
+organisation, and get a certificate and project stickers. Nothing is
+outsourced: the team prints guides, certificates and stickers on its own
+printer, and the equipment stays with the project after the grant period. Execution runs
 until 2027-04-15; the final report is presented on 2027-04-22. There is no
 3D printer: a commercial radiation shield costs less than printing one.
 Gypsum blocks are made in-house. No physical interventions line: the
@@ -141,7 +143,8 @@ calibration methodology, platform.
 Two-week co-location of all 4 stations before deployment; individual
 `cal_*` coefficients per node and variable; a divergence report.
 Reference first: the bench's own reference thermohygrometer, with a
-calibration certificate from LATU, in the budget; every instrument the plan relies on is owned, none
+calibration certificate from an accredited laboratory when funding
+allows; every instrument the plan relies on is owned, none
 borrowed or shared. Until that certificate exists, intercomparison
 of the four stations **establishes relative consistency, not absolute bias**,
 and the scientific docs must say so (a bias shared by all nodes would be
