@@ -130,6 +130,13 @@ what turns co-location from relative consistency into absolute bias; then a
 second SPS30 spare. It is funded by printing on a Bambu Lab A1 mini (USD 271)
 instead of the A1, which now costs USD 441.
 
+About half of the budget (USD 1,947) still rests on estimates with no price
+checked, so a risk-weighted contingency would be about USD 489. The budget
+document covers that in layers - the contingency, the conditional catering
+line, and the adjustment levers - and requires quotes for its five heaviest
+estimated lines (wind and rain kit, battery, workshop and installation
+travel, teaching materials) before the stage 4 purchase.
+
 The import provision covers an effective cost of up to ~30 % on roughly
 USD 1,368 of imported goods; the budget document lists the adjustment
 levers if the real figure is higher. No physical interventions line:

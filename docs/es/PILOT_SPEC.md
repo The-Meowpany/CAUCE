@@ -133,6 +133,14 @@ lo que convierte la co-localización de consistencia relativa en sesgo
 absoluto; después, un segundo SPS30 de repuesto. Se financia imprimiendo con
 una Bambu Lab A1 mini (USD 271) en lugar de la A1, que hoy cuesta USD 441.
 
+Cerca de la mitad del presupuesto (USD 1.947) todavía descansa en
+estimaciones sin precio consultado, así que una contingencia ponderada por
+riesgo rondaría los USD 489. El documento de presupuesto la cubre por capas
+(la contingencia, la partida condicional de refrigerios y las palancas de
+ajuste) y exige cotizar sus cinco líneas estimadas de mayor peso (kit de
+viento y lluvia, batería, traslados de talleres e instalación, materiales
+didácticos) antes de la compra de la etapa 4.
+
 La provisión de importación cubre un costo efectivo de hasta ~30 % sobre
 unos USD 1.368 de mercadería importada; el documento de presupuesto
 lista las palancas de ajuste si la cifra real es mayor. Sin línea de
