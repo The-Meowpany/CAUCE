@@ -19,6 +19,8 @@
 #include "cauce/drivers/Ds18b20Driver.h"
 #include "cauce/drivers/Ds3231Rtc.h"
 #include "cauce/drivers/GypsumAcDriver.h"
+#include "cauce/drivers/Ltr390Driver.h"
+#include "cauce/drivers/Pms5003Driver.h"
 #include "cauce/drivers/HallAnemometerDriver.h"
 #include "cauce/drivers/Mhz19Driver.h"
 #include "cauce/drivers/SimulatedSensorDriver.h"
@@ -91,6 +93,10 @@ static constexpr uint8_t LIGHTNING_IRQ_PIN = 25;
 static constexpr uint8_t ONE_WIRE_PIN = 13;
 static constexpr int CO2_UART_RX_PIN = 16;
 static constexpr int CO2_UART_TX_PIN = 17;
+// PMS5003 TX into UART1. GPIO2 is a strapping pin, but it only matters when GPIO0 is held low
+// to enter the bootloader, and the sensor idles high. Its RX, SET and RESET stay unwired: the
+// sensor powers up streaming and needs no commands.
+static constexpr int PM_UART_RX_PIN = 2;
 static constexpr uint8_t VANE_ADC_PIN = 34;
 static constexpr uint8_t SOIL_MOISTURE_ADC_PIN = 35;
 static constexpr uint8_t BATTERY_ADC_PIN = 36;
@@ -111,9 +117,9 @@ static cauce::drivers::Bme280Driver* g_bme = nullptr;
 static cauce::drivers::Bh1750Driver* g_light = nullptr;
 static cauce::drivers::Ccs811Driver* g_voc = nullptr;
 static cauce::drivers::HallAnemometerDriver* g_wind = nullptr;
-static cauce::drivers::Sps30Driver* g_pm = nullptr;
+static cauce::drivers::ISensorDriver* g_pm = nullptr;
 static cauce::drivers::Mhz19Driver* g_co2 = nullptr;
-static cauce::drivers::Veml6075Driver* g_uv = nullptr;
+static cauce::drivers::ISensorDriver* g_uv = nullptr;
 static cauce::drivers::As3935Driver* g_lightning = nullptr;
 static cauce::drivers::Ds18b20Driver* g_soilTemp = nullptr;
 static cauce::drivers::RainGaugeDriver* g_rain = nullptr;
@@ -585,7 +591,12 @@ void setup() {
       g_archive->begin();
     }
     if (sensors.pmEnabled) {
-      g_pm = new cauce::drivers::Sps30Driver(*g_bus, g_clock, "SPS30-1");
+      if (sensors.pmPms5003) {
+        static cauce::hal::Esp32Uart pmUart(Serial1, PM_UART_RX_PIN, -1);
+        g_pm = new cauce::drivers::Pms5003Driver(pmUart, g_clock, "PMS5003-1");
+      } else {
+        g_pm = new cauce::drivers::Sps30Driver(*g_bus, g_clock, "SPS30-1");
+      }
       if (!addIfPresent(g_pm)) {
         delete g_pm;
         g_pm = nullptr;
@@ -600,7 +611,11 @@ void setup() {
       }
     }
     if (sensors.uvEnabled) {
-      g_uv = new cauce::drivers::Veml6075Driver(*g_bus, "VEML6075-1");
+      if (sensors.uvLtr390) {
+        g_uv = new cauce::drivers::Ltr390Driver(*g_bus, "LTR390-1");
+      } else {
+        g_uv = new cauce::drivers::Veml6075Driver(*g_bus, "VEML6075-1");
+      }
       if (!addIfPresent(g_uv)) {
         delete g_uv;
         g_uv = nullptr;

@@ -11,6 +11,8 @@
 #include "cauce/drivers/Ds18b20Driver.h"
 #include "cauce/drivers/Ds3231Rtc.h"
 #include "cauce/drivers/GypsumAcDriver.h"
+#include "cauce/drivers/Ltr390Driver.h"
+#include "cauce/drivers/Pms5003Driver.h"
 #include "cauce/drivers/Mhz19Driver.h"
 #include "cauce/drivers/Sps30Driver.h"
 #include "cauce/drivers/Veml6075Driver.h"
@@ -750,6 +752,132 @@ void test_pilot_gypsum_ac_switch_survives_a_roundtrip() {
   TEST_ASSERT_FALSE(defaults.soilPotentialAc);
 }
 
+// A PMS5003 in active mode: every read finds a fresh frame on the line, as the real sensor
+// streams one per second whatever was discarded before.
+class StreamingPms final : public hal::IUart {
+ public:
+  bool begin(uint32_t) override { return true; }
+  size_t write(const uint8_t*, size_t length) override { return length; }
+  size_t read(uint8_t* buffer, size_t length, uint32_t) override {
+    if (silent) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < noise.size() && n < length; ++i) buffer[n++] = noise[i];
+    for (size_t i = 0; i < frame.size() && n < length; ++i) buffer[n++] = frame[i];
+    return n;
+  }
+  void discardInput() override {}
+
+  static std::vector<uint8_t> makeFrame(uint16_t pm1, uint16_t pm25, uint16_t pm10) {
+    std::vector<uint8_t> f(32, 0);
+    f[0] = 0x42;
+    f[1] = 0x4D;
+    f[3] = 28;
+    const uint16_t atm[3] = {pm1, pm25, pm10};
+    for (int i = 0; i < 3; ++i) {
+      f[10 + 2 * i] = static_cast<uint8_t>(atm[i] >> 8);
+      f[11 + 2 * i] = static_cast<uint8_t>(atm[i] & 0xFF);
+      // CF=1 values deliberately different, so reading the wrong block fails the test.
+      f[4 + 2 * i] = 0x7F;
+    }
+    uint16_t sum = 0;
+    for (int i = 0; i < 30; ++i) sum = static_cast<uint16_t>(sum + f[i]);
+    f[30] = static_cast<uint8_t>(sum >> 8);
+    f[31] = static_cast<uint8_t>(sum & 0xFF);
+    return f;
+  }
+
+  std::vector<uint8_t> noise;
+  std::vector<uint8_t> frame;
+  bool silent{false};
+};
+
+void test_pilot_pms5003_reports_atmospheric_pm_after_warmup() {
+  hal::ManualClock clock(kEpoch);
+  StreamingPms uart;
+  uart.noise = {0x00, 0x42, 0x13};  // a torn frame before the real one
+  uart.frame = StreamingPms::makeFrame(7, 12, 18);
+  Pms5003Driver pms(uart, clock, "PMS-1");
+  TEST_ASSERT_TRUE(pms.begin());
+  Reading r;
+  TEST_ASSERT_FALSE(pms.read(Variable::Pm25, r));  // the fan is still spinning up
+  clock.advanceMs(Pms5003Driver::kWarmupMs);
+  TEST_ASSERT_TRUE(pms.read(Variable::Pm1, r));
+  TEST_ASSERT_EQUAL_FLOAT(7.0f, r.value);
+  TEST_ASSERT_TRUE(pms.read(Variable::Pm25, r));
+  TEST_ASSERT_EQUAL_FLOAT(12.0f, r.value);
+  TEST_ASSERT_TRUE(pms.read(Variable::Pm10, r));
+  TEST_ASSERT_EQUAL_FLOAT(18.0f, r.value);
+  TEST_ASSERT_FALSE(pms.read(Variable::Pm4, r));  // not measured by this part
+  TEST_ASSERT_EQUAL(3, pms.metadata().variableCount);
+}
+
+void test_pilot_pms5003_refuses_a_bad_checksum_and_a_silent_line() {
+  std::vector<uint8_t> frame = StreamingPms::makeFrame(1, 2, 3);
+  Pms5003Driver::Frame out;
+  TEST_ASSERT_TRUE(Pms5003Driver::parse(frame.data(), frame.size(), out));
+  frame[12] ^= 0x01;
+  TEST_ASSERT_FALSE(Pms5003Driver::parse(frame.data(), frame.size(), out));
+
+  hal::ManualClock clock(kEpoch);
+  StreamingPms uart;
+  uart.silent = true;
+  Pms5003Driver absent(uart, clock, "PMS-1");
+  TEST_ASSERT_FALSE(absent.begin());
+  TEST_ASSERT_EQUAL(static_cast<int>(SensorStatus::NotConnected),
+                    static_cast<int>(absent.health()));
+}
+
+void test_pilot_ltr390_converts_uvs_counts_to_a_uv_index() {
+  hal::ScriptedI2cBus bus;
+  hal::RegisterFileDevice device;
+  device.setRegister(Ltr390Driver::kRegPartId, 0xB2);
+  bus.attach(Ltr390Driver::kAddress, &device);
+  Ltr390Driver uv(bus, "LTR390-1");
+  TEST_ASSERT_TRUE(uv.begin());
+  TEST_ASSERT_EQUAL_HEX8(Ltr390Driver::kMainCtrlUvsEnable, device.getRegister(Ltr390Driver::kRegMainCtrl));
+  TEST_ASSERT_EQUAL_HEX8(Ltr390Driver::kGain18, device.getRegister(Ltr390Driver::kRegGain));
+
+  Reading r;
+  TEST_ASSERT_FALSE(uv.read(Variable::UvIndex, r));  // conversion not finished yet
+  // 13800 counts = UV index 6 at gain 18, 20 bits.
+  device.setRegister(Ltr390Driver::kRegMainStatus, Ltr390Driver::kDataReady);
+  device.setRegister(Ltr390Driver::kRegUvsData, 13800 & 0xFF);
+  device.setRegister(Ltr390Driver::kRegUvsData + 1, (13800 >> 8) & 0xFF);
+  device.setRegister(Ltr390Driver::kRegUvsData + 2, 0);
+  TEST_ASSERT_TRUE(uv.read(Variable::UvIndex, r));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 6.0f, r.value);
+}
+
+void test_pilot_ltr390_refuses_another_part_at_its_address() {
+  hal::ScriptedI2cBus bus;
+  hal::RegisterFileDevice device;
+  device.setRegister(Ltr390Driver::kRegPartId, 0x12);
+  bus.attach(Ltr390Driver::kAddress, &device);
+  Ltr390Driver uv(bus, "LTR390-1");
+  TEST_ASSERT_FALSE(uv.begin());
+  hal::ScriptedI2cBus empty;
+  Ltr390Driver missing(empty, "LTR390-1");
+  TEST_ASSERT_FALSE(missing.begin());
+}
+
+void test_pilot_cheap_sensor_switches_survive_a_roundtrip() {
+  NodeConfig original{};
+  copyString(original.nodeId, sizeof(original.nodeId), "CAUCE-004");
+  original.pmEnabled = true;
+  original.pmPms5003 = true;
+  original.uvEnabled = true;
+  original.uvLtr390 = true;
+  char text[8192];
+  TEST_ASSERT_TRUE(serializeConfig(original, text, sizeof(text)));
+  NodeConfig parsed{};
+  TEST_ASSERT_TRUE(parseConfig(text, parsed));
+  TEST_ASSERT_TRUE(parsed.pmPms5003);
+  TEST_ASSERT_TRUE(parsed.uvLtr390);
+  NodeConfig defaults{};
+  TEST_ASSERT_FALSE(defaults.pmPms5003);
+  TEST_ASSERT_FALSE(defaults.uvLtr390);
+}
+
 void registerPilotSensorTests() {
   RUN_TEST(test_pilot_every_variable_has_a_name_a_unit_and_round_trips);
   RUN_TEST(test_pilot_existing_variable_numbers_did_not_move);
@@ -791,4 +919,9 @@ void registerPilotSensorTests() {
   RUN_TEST(test_pilot_gypsum_ac_matches_the_dc_reading_with_zero_net_current);
   RUN_TEST(test_pilot_gypsum_ac_refuses_an_undriven_end_and_a_missing_expander);
   RUN_TEST(test_pilot_gypsum_ac_switch_survives_a_roundtrip);
+  RUN_TEST(test_pilot_pms5003_reports_atmospheric_pm_after_warmup);
+  RUN_TEST(test_pilot_pms5003_refuses_a_bad_checksum_and_a_silent_line);
+  RUN_TEST(test_pilot_ltr390_converts_uvs_counts_to_a_uv_index);
+  RUN_TEST(test_pilot_ltr390_refuses_another_part_at_its_address);
+  RUN_TEST(test_pilot_cheap_sensor_switches_survive_a_roundtrip);
 }

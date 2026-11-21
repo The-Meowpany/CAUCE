@@ -76,9 +76,14 @@ struct NodeConfig {
   float windDiameterMetres{0.15f};
   uint8_t windPulsesPerRevolution{3};
   // Pilot station suite. Same rule as above: off until the node says the part is fitted.
-  bool pmEnabled{false};         // Sensirion SPS30, I2C
+  bool pmEnabled{false};         // Sensirion SPS30 (I2C), or the PMS5003 below
+  // Plantower PMS5003 on UART1 (its TX to GPIO2) instead of the SPS30: PM1, PM2.5 and PM10,
+  // no PM4, at a sixth of the price.
+  bool pmPms5003{false};
   bool co2Enabled{false};        // Winsen MH-Z19C, UART
-  bool uvEnabled{false};         // Vishay VEML6075, I2C
+  bool uvEnabled{false};         // Vishay VEML6075 (I2C), or the LTR390 below
+  // Lite-On LTR390 instead of the VEML6075: the UV index only, without UVA and UVB apart.
+  bool uvLtr390{false};
   bool lightningEnabled{false};  // AS3935, I2C
   // Indoor/outdoor gain of the AS3935's analogue front end. Outdoors is the pilot case; the
   // indoor setting is far more sensitive and turns mains noise into false strikes outside.
