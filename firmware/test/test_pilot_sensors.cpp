@@ -200,11 +200,41 @@ void test_pilot_sensor_switches_and_calibrations_survive_a_roundtrip() {
   TEST_ASSERT_FLOAT_WITHIN(0.0001f, 4.2f, parsed.batteryDividerRatio);
 }
 
+template <size_t N>
+void fillField(char (&field)[N], char c) {
+  std::memset(field, c, N - 1);
+  field[N - 1] = '\0';
+}
+
 void test_pilot_a_full_config_fits_the_node_buffer() {
+  // Every string field at its maximum length, not just the certificate: a key added later is
+  // exactly what pushes the serialised config past the buffer the node writes it into.
   NodeConfig full{};
-  std::memset(full.syncCertificate, 'c', sizeof(full.syncCertificate) - 1);
-  full.syncCertificate[sizeof(full.syncCertificate) - 1] = '\0';
-  full.thresholds.rangeMax[static_cast<uint8_t>(Variable::Pm25)] = 500.0f;
+  fillField(full.nodeId, 'n');
+  fillField(full.siteId, 's');
+  fillField(full.landCover, 'l');
+  fillField(full.shadeCondition, 'h');
+  fillField(full.wifiSsid, 'w');
+  fillField(full.wifiPassword, 'p');
+  fillField(full.ntpServer, 't');
+  fillField(full.syncServerUrl, 'u');
+  fillField(full.syncDeviceKey, 'a');
+  fillField(full.syncAuthSeedHex, 'a');
+  fillField(full.syncCertificate, 'c');
+  fillField(full.caPublicKeyHex, 'a');
+  fillField(full.otaManifestKey, 'a');
+  fillField(full.otaPublicKey, 'a');
+  fillField(full.otaManifestUrl, 'o');
+  fillField(full.peerStatePath, 'q');
+  fillField(full.peerKeys, 'k');
+  fillField(full.peerCredentialHex, 'a');
+  fillField(full.loraRegion, 'r');
+  fillField(full.loraFrameAlgorithm, 'f');
+  for (size_t i = 0; i < sizeof(full.thresholds.rangeMax) / sizeof(full.thresholds.rangeMax[0]);
+       ++i) {
+    full.thresholds.rangeMin[i] = -12345.67f;
+    full.thresholds.rangeMax[i] = 12345.67f;
+  }
   char text[8192];
   TEST_ASSERT_TRUE(serializeConfig(full, text, sizeof(text)));
 }

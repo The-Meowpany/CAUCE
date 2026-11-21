@@ -255,6 +255,9 @@ const uint8_t kBroadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // this, only discovery registered, and every data frame a neighbour sent was discarded.
 PeerFrameRing s_rxRing;
 portMUX_TYPE s_rxMux = portMUX_INITIALIZER_UNLOCKED;
+// The known-peer table is written by the receive callback, on the Wi-Fi task, and read by poll()
+// from loop(). Without the lock a 120-byte credential can be copied out half old and half new.
+portMUX_TYPE s_peerMux = portMUX_INITIALIZER_UNLOCKED;
 
 void onEspNowReceive(const uint8_t* address, const uint8_t* payload, int length) {
   if (payload == nullptr || length < 1) return;
@@ -281,11 +284,19 @@ void Esp32PeerDiscovery::onPeerFound(const uint8_t* address, const uint8_t* payl
                                      int length) {
   if (address == nullptr || payload == nullptr || length < 1) return;
   if (payload[0] != kAnnounceTag) return;
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&s_peerMux);
+  recordAnnouncement(address, payload, length, now);
+  portEXIT_CRITICAL(&s_peerMux);
+}
+
+void Esp32PeerDiscovery::recordAnnouncement(const uint8_t* address, const uint8_t* payload,
+                                            int length, uint32_t now) {
   // A peer that announces again is refreshed, not added a second time: without this every
   // announcement took a new slot and a single neighbour filled the table.
   for (size_t i = 0; i < kMaxKnownPeers; ++i) {
     if (s_peers[i].inUse && std::memcmp(s_peers[i].address, address, 6) == 0) {
-      s_peers[i].lastSeenMs = millis();
+      s_peers[i].lastSeenMs = now;
       if (length == kAnnounceWithCredentialLength) {
         std::memcpy(s_peers[i].credential, payload + kAnnounceLength, 120);
         s_peers[i].hasCredential = true;
@@ -299,7 +310,7 @@ void Esp32PeerDiscovery::onPeerFound(const uint8_t* address, const uint8_t* payl
   for (size_t i = 0; i < kMaxKnownPeers; ++i) {
     if (!s_peers[i].inUse) {
       std::memcpy(s_peers[i].address, address, 6);
-      s_peers[i].lastSeenMs = millis();
+      s_peers[i].lastSeenMs = now;
       s_peers[i].inUse = true;
       s_peers[i].hasCredential = length == kAnnounceWithCredentialLength;
       if (s_peers[i].hasCredential) {
@@ -363,12 +374,14 @@ size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
   if (out == nullptr || capacity == 0) return 0;
 
   size_t written = 0;
+  portENTER_CRITICAL(&s_peerMux);
   for (size_t i = 0; i < kMaxKnownPeers && written < capacity; ++i) {
     if (!s_peers[i].inUse) continue;
     // A peer that has not announced in this long is presumed gone. Without the expiry the
     // table fills after eight neighbours ever being seen and discovery stops working for the
     // rest of the node's life.
-    if (now - s_peers[i].lastSeenMs > 60000u) {
+    // Signed: an announcement that landed after `now` was read is fresh, not 49 days old.
+    if (static_cast<int32_t>(now - s_peers[i].lastSeenMs) > 60000) {
       s_peers[i].inUse = false;
       if (s_foundCount > 0) s_foundCount = static_cast<uint8_t>(s_foundCount - 1);
       continue;
@@ -384,6 +397,7 @@ size_t Esp32PeerDiscovery::poll(Peer* out, size_t capacity) {
     }
     ++written;
   }
+  portEXIT_CRITICAL(&s_peerMux);
   return written;
 }
 

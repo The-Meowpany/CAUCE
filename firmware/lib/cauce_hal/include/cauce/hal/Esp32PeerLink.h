@@ -170,6 +170,9 @@ class Esp32PeerDiscovery final : public IPeerDiscovery {
   static constexpr size_t kMaxKnownPeers = 8;
 
  private:
+  // Called with the table lock held.
+  static void recordAnnouncement(const uint8_t* address, const uint8_t* payload, int length,
+                                 uint32_t now);
   struct KnownPeer {
     uint8_t address[6]{};
     uint32_t lastSeenMs{0};
