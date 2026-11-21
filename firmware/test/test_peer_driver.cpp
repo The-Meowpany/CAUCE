@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -403,11 +404,93 @@ void test_peer_driver_trusts_a_neighbour_its_ca_vouched_for() {
   TEST_ASSERT_EQUAL_UINT32(0, driver.credentialsRejected());
 }
 
+void test_keyring_revocation_refuses_old_credentials_but_not_a_reissued_one() {
+  PeerKeyring keyring;
+  uint8_t key[32] = {0x22};
+  TEST_ASSERT_TRUE(keyring.addVouched("CAUCE-002", key, 1000));
+  TEST_ASSERT_TRUE(keyring.revoke("CAUCE-002", 1000));
+  TEST_ASSERT_NULL(keyring.find("CAUCE-002"));
+  // The same credential, announced again, does not get back in.
+  TEST_ASSERT_FALSE(keyring.addVouched("CAUCE-002", key, 1000));
+  TEST_ASSERT_FALSE(keyring.addVouched("CAUCE-002", key, 999));
+  // A credential issued after re-provisioning expires later and is trusted.
+  TEST_ASSERT_TRUE(keyring.addVouched("CAUCE-002", key, 5000));
+  TEST_ASSERT_NOT_NULL(keyring.find("CAUCE-002"));
+}
+
+void test_keyring_revocation_drops_a_listed_key_and_survives_a_reparse() {
+  PeerKeyring keyring;
+  const std::string line = std::string("CAUCE-003:") + kKeyA;
+  TEST_ASSERT_TRUE(keyring.parse(line.c_str()));
+  TEST_ASSERT_TRUE(keyring.revoke("CAUCE-003", 2000));
+  TEST_ASSERT_NULL(keyring.find("CAUCE-003"));
+  // peer_keys is parsed again at boot; the revocation still wins over the line.
+  TEST_ASSERT_TRUE(keyring.parse(line.c_str()));
+  TEST_ASSERT_NULL(keyring.find("CAUCE-003"));
+
+  char text[PeerKeyring::kRevokedTextBytes];
+  TEST_ASSERT_TRUE(keyring.serializeRevoked(text, sizeof(text)));
+  TEST_ASSERT_EQUAL_STRING("CAUCE-003:2000", text);
+  PeerKeyring rebooted;
+  TEST_ASSERT_TRUE(rebooted.parseRevoked(text));
+  TEST_ASSERT_TRUE(rebooted.parse(line.c_str()));
+  TEST_ASSERT_NULL(rebooted.find("CAUCE-003"));
+  TEST_ASSERT_FALSE(rebooted.parseRevoked("CAUCE-003"));  // no floor: refused, not guessed
+}
+
+void test_keyring_revocations_lapse_once_no_credential_can_match() {
+  PeerKeyring keyring;
+  TEST_ASSERT_TRUE(keyring.revoke("CAUCE-004", 3000));
+  TEST_ASSERT_TRUE(keyring.revoke("CAUCE-004", 2000));  // an earlier floor never narrows it
+  TEST_ASSERT_TRUE(keyring.isRevoked("CAUCE-004", 2500));
+  keyring.expire(2999);
+  TEST_ASSERT_EQUAL(1u, keyring.revokedCount());
+  keyring.expire(3001);
+  TEST_ASSERT_EQUAL(0u, keyring.revokedCount());
+  for (size_t i = 0; i < PeerKeyring::kMaxRevoked; ++i) {
+    char id[16];
+    std::snprintf(id, sizeof(id), "N-%u", static_cast<unsigned>(i));
+    TEST_ASSERT_TRUE(keyring.revoke(id, 9000));
+  }
+  TEST_ASSERT_FALSE(keyring.revoke("ONE-TOO-MANY", 9000));
+}
+
+void test_peer_driver_ignores_a_revoked_neighbours_credential() {
+  hal::MemoryFileSystem fs;
+  LogStorageRepository store(fs, "/data");
+  store.setOwnNodeId("CAUCE-001");
+  store.open();
+  PeerWatermarks marks(fs, "/state/peer_marks");
+  CountingRadio radio;
+  ScriptedDiscovery discovery;
+  hal::Peer neighbour = peerAt(2);
+  decodeHex(kCredentialHex, neighbour.credential, kPeerCredentialBytes);
+  neighbour.hasCredential = true;
+  discovery.pending.push_back(neighbour);
+  Esp32PeerExchange exchange(store, marks, &radio, &discovery);
+  PeerKeyring keyring;
+  TEST_ASSERT_TRUE(keyring.revoke("CAUCE-002", 1800000000000ULL));
+  exchange.setAuthentication(&keyring, kSeed);
+  hal::ManualClock clock(kDriverT0);
+  PeerExchangeDriver driver(exchange, discovery, store, clock, "CAUCE-001", 60);
+  uint8_t ca[32];
+  decodeHex(kCaPublicHex, ca, sizeof(ca));
+  driver.setAuthority(ca, &keyring);
+
+  driver.tick();
+  TEST_ASSERT_NULL(keyring.find("CAUCE-002"));
+  TEST_ASSERT_EQUAL_UINT32(0, driver.credentialsAccepted());
+}
+
 void registerPeerDriverTests() {
   RUN_TEST(test_peer_credential_from_the_central_verifies_on_the_node);
   RUN_TEST(test_peer_credential_refuses_tampering_another_ca_and_expiry);
   RUN_TEST(test_keyring_keeps_listed_keys_over_vouched_ones_and_expires_vouched_only);
   RUN_TEST(test_peer_driver_trusts_a_neighbour_its_ca_vouched_for);
+  RUN_TEST(test_keyring_revocation_refuses_old_credentials_but_not_a_reissued_one);
+  RUN_TEST(test_keyring_revocation_drops_a_listed_key_and_survives_a_reparse);
+  RUN_TEST(test_keyring_revocations_lapse_once_no_credential_can_match);
+  RUN_TEST(test_peer_driver_ignores_a_revoked_neighbours_credential);
   RUN_TEST(test_peer_ring_hands_frames_back_in_arrival_order);
   RUN_TEST(test_peer_ring_keeps_the_oldest_when_full_and_counts_the_drop);
   RUN_TEST(test_peer_ring_refuses_oversize_frames_and_drops_one_it_cannot_return);

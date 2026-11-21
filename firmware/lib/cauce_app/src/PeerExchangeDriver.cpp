@@ -42,6 +42,17 @@ void PeerExchangeDriver::considerCredential(Slot& slot, const hal::Peer& peer) {
       std::memcmp(slot.verifiedCredential, peer.credential, kPeerCredentialBytes) == 0) {
     return;
   }
+  // Id and expiry sit at fixed offsets in the credential (PeerCredential.h) and are checked
+  // before the signature: verifying costs real time on this CPU, and a revoked neighbour keeps
+  // announcing every 20 s.
+  char claimedId[17] = {};
+  std::memcpy(claimedId, peer.credential, 16);
+  uint64_t claimedNotAfter = 0;
+  for (int i = 7; i >= 0; --i) claimedNotAfter = (claimedNotAfter << 8) | peer.credential[48 + i];
+  if (keyring_->isRevoked(claimedId, claimedNotAfter)) {
+    slot.credentialVerified = false;
+    return;
+  }
   const uint64_t now = clock_.utcTimeValid() ? clock_.utcMs() : 0;
   PeerCredential credential;
   if (verifyPeerCredential(peer.credential, caPublicKey_, now, credential) !=

@@ -1,5 +1,7 @@
 #include "cauce/core/PeerKeyring.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace cauce {
@@ -52,12 +54,14 @@ bool PeerKeyring::parse(const char* text) {
     }
     ++count_;
   }
+  dropRevoked();
   return true;
 }
 
 bool PeerKeyring::addVouched(const char* nodeId, const uint8_t key[kPublicKeyBytes],
                              uint64_t notAfterUtcMs) {
   if (nodeId == nullptr || nodeId[0] == '\0' || std::strlen(nodeId) >= 16) return false;
+  if (isRevoked(nodeId, notAfterUtcMs)) return false;
   for (size_t i = 0; i < count_; ++i) {
     if (std::strcmp(entries_[i].nodeId, nodeId) != 0) continue;
     if (!entries_[i].vouched) return true;  // listed by the operator: keep that key
@@ -84,6 +88,109 @@ void PeerKeyring::expire(uint64_t nowUtcMs) {
     ++kept;
   }
   count_ = kept;
+  // Past its floor a revocation matches nothing a retired identity could still present.
+  size_t keptRevoked = 0;
+  for (size_t i = 0; i < revokedCount_; ++i) {
+    if (nowUtcMs > revoked_[i].notAfterFloorUtcMs) continue;
+    if (keptRevoked != i) revoked_[keptRevoked] = revoked_[i];
+    ++keptRevoked;
+  }
+  revokedCount_ = keptRevoked;
+}
+
+bool PeerKeyring::revokedId(const char* nodeId) const {
+  for (size_t i = 0; i < revokedCount_; ++i) {
+    if (std::strcmp(revoked_[i].nodeId, nodeId) == 0) return true;
+  }
+  return false;
+}
+
+bool PeerKeyring::isRevoked(const char* nodeId, uint64_t notAfterUtcMs) const {
+  if (nodeId == nullptr) return false;
+  for (size_t i = 0; i < revokedCount_; ++i) {
+    if (std::strcmp(revoked_[i].nodeId, nodeId) == 0 &&
+        notAfterUtcMs <= revoked_[i].notAfterFloorUtcMs) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PeerKeyring::revoke(const char* nodeId, uint64_t notAfterFloorUtcMs) {
+  if (nodeId == nullptr || nodeId[0] == '\0' ||
+      std::strlen(nodeId) >= sizeof(revoked_[0].nodeId)) {
+    return false;
+  }
+  Revocation* slot = nullptr;
+  for (size_t i = 0; i < revokedCount_; ++i) {
+    if (std::strcmp(revoked_[i].nodeId, nodeId) == 0) slot = &revoked_[i];
+  }
+  if (slot == nullptr) {
+    if (revokedCount_ >= kMaxRevoked) return false;
+    slot = &revoked_[revokedCount_++];
+    *slot = Revocation{};
+    std::memcpy(slot->nodeId, nodeId, std::strlen(nodeId) + 1);
+  }
+  // A later floor only widens what is refused; an earlier one never narrows it.
+  if (notAfterFloorUtcMs > slot->notAfterFloorUtcMs) slot->notAfterFloorUtcMs = notAfterFloorUtcMs;
+  dropRevoked();
+  return true;
+}
+
+void PeerKeyring::dropRevoked() {
+  size_t kept = 0;
+  for (size_t i = 0; i < count_; ++i) {
+    const Entry& e = entries_[i];
+    const bool drop = e.vouched ? isRevoked(e.nodeId, e.notAfterUtcMs) : revokedId(e.nodeId);
+    if (drop) continue;
+    if (kept != i) entries_[kept] = entries_[i];
+    ++kept;
+  }
+  count_ = kept;
+}
+
+bool PeerKeyring::serializeRevoked(char* out, size_t capacity) const {
+  if (out == nullptr || capacity == 0) return false;
+  size_t used = 0;
+  out[0] = '\0';
+  for (size_t i = 0; i < revokedCount_; ++i) {
+    const int n = std::snprintf(out + used, capacity - used, "%s%s:%llu", i > 0 ? "," : "",
+                                revoked_[i].nodeId,
+                                static_cast<unsigned long long>(revoked_[i].notAfterFloorUtcMs));
+    if (n <= 0 || static_cast<size_t>(n) >= capacity - used) return false;
+    used += static_cast<size_t>(n);
+  }
+  return true;
+}
+
+bool PeerKeyring::parseRevoked(const char* text) {
+  revokedCount_ = 0;
+  if (text == nullptr) return true;
+  const char* p = text;
+  while (*p != '\0') {
+    while (*p == ',' || *p == ' ' || *p == '\n') ++p;
+    if (*p == '\0') break;
+    const char* colon = std::strchr(p, ':');
+    const size_t idLength = colon ? static_cast<size_t>(colon - p) : 0;
+    if (colon == nullptr || idLength == 0 || idLength >= sizeof(revoked_[0].nodeId) ||
+        revokedCount_ >= kMaxRevoked) {
+      revokedCount_ = 0;
+      return false;
+    }
+    char* end = nullptr;
+    const unsigned long long floor = std::strtoull(colon + 1, &end, 10);
+    if (end == colon + 1 || (*end != '\0' && *end != ',' && *end != '\n')) {
+      revokedCount_ = 0;
+      return false;
+    }
+    Revocation& r = revoked_[revokedCount_++];
+    r = Revocation{};
+    std::memcpy(r.nodeId, p, idLength);
+    r.notAfterFloorUtcMs = floor;
+    p = end;
+  }
+  dropRevoked();
+  return true;
 }
 
 size_t PeerKeyring::vouchedCount() const {

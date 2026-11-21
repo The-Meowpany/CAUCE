@@ -66,7 +66,18 @@ def retire(node_id: str, reason: str | None) -> dict:
     Idempotent because the operator's intent is "this node must not be able to
     contribute", and that intent is already satisfied. Refusing the second call would
     only teach the operator to catch the exception.
+
+    Its neighbours are told as well, through the command channel: they may hold its peer
+    credential, which the central alone cannot withdraw.
     """
+    from .commands import revoke_peer_everywhere
+
+    result = _retire_row(node_id, reason)
+    result["peers_notified"] = revoke_peer_everywhere(node_id)
+    return result
+
+
+def _retire_row(node_id: str, reason: str | None) -> dict:
     now_ms = _now_ms()
     cleaned = (reason or "").strip()[:MAX_REASON_BYTES] or None
     with transaction() as conn:

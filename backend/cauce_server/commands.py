@@ -39,6 +39,8 @@ COMMAND_KINDS: tuple[str, ...] = (
     "set_sync_interval",
     "request_resync",
     "set_led_mode",
+    # Not hardware: tells a node to stop trusting a retired neighbour's peer credential.
+    "revoke_peer",
 )
 
 MAX_COMMANDS_PER_POLL = 8
@@ -111,6 +113,31 @@ def enqueue_command(
         "acked_utc_ms": None,
         "result": None,
     }, True
+
+
+def revoke_peer_everywhere(node_id: str) -> int:
+    """Queues `revoke_peer` for every other node that could trust `node_id`.
+
+    The payload's `not_after_ms` is the expiry of the last certificate issued to the node,
+    which is also the expiry of every peer credential it could still present; a node
+    re-provisioned afterwards gets a later one and is trusted again. The command lives until
+    that moment, so a node offline for a week still receives it. Recipients are the nodes of
+    the same site, or every node when the retired one had none.
+    """
+    rows = query("SELECT site_id FROM nodes WHERE node_id=?", (node_id,))
+    site = rows[0]["site_id"] if rows else None
+    floor = query("SELECT MAX(not_after_utc_ms) AS f FROM certificates WHERE node_id=?",
+                  (node_id,))[0]["f"]
+    now = _utc_ms()
+    if floor is None or floor <= now:
+        return 0  # no credential it holds is still valid, so there is nothing to revoke
+    targets = query(
+        "SELECT node_id FROM nodes WHERE node_id<>? AND revoked_at_utc_ms IS NULL"
+        " AND (? IS NULL OR site_id=?)", (node_id, site, site))
+    for row in targets:
+        enqueue_command(row["node_id"], f"revoke-peer-{node_id}-{floor}", "revoke_peer",
+                        {"node_id": node_id, "not_after_ms": floor}, floor - now)
+    return len(targets)
 
 
 def pending_commands(node_id: str, limit: int = MAX_COMMANDS_PER_POLL) -> list[dict]:

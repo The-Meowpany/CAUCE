@@ -284,6 +284,35 @@ bool cmdRequestResync(const char* payload, char* detail, size_t cap) {
          g_actuator->requestResync(millis(), detail, cap);
 }
 
+constexpr const char* kPeerRevokedPath = "/state/peer_revoked";
+
+// Sent by the central to the nodes of a site when one of them is retired. Persisted, because
+// the retired node's credential stays signature-valid until it expires and a reboot that
+// forgot the revocation would trust it again on its next announcement.
+bool cmdRevokePeer(const char* payload, char* detail, size_t cap) {
+  char nodeId[16];
+  uint64_t floor = 0;
+  if (!cauce::app::NodeAuthenticator::jsonStringField(payload, "node_id", nodeId,
+                                                      sizeof(nodeId)) ||
+      !cauce::app::NodeAuthenticator::jsonUintField(payload, "not_after_ms", floor)) {
+    snprintf(detail, cap, "refused:node_id_or_not_after_missing");
+    return false;
+  }
+  if (!g_peerKeyring.revoke(nodeId, floor)) {
+    snprintf(detail, cap, "refused:revocation_list_full");
+    return false;
+  }
+  char list[cauce::PeerKeyring::kRevokedTextBytes];
+  if (!g_peerKeyring.serializeRevoked(list, sizeof(list)) ||
+      !g_fs.writeWholeFile(kPeerRevokedPath, reinterpret_cast<const uint8_t*>(list),
+                           std::strlen(list))) {
+    snprintf(detail, cap, "applied_not_persisted:%s", nodeId);
+    return true;
+  }
+  snprintf(detail, cap, "revoked:%s", nodeId);
+  return true;
+}
+
 bool cmdSetLedMode(const char* payload, char* detail, size_t cap) {
   uint32_t mode = 0;
   if (!jsonUintField(payload, "mode", mode)) {
@@ -742,6 +771,7 @@ void setup() {
   g_commands->setHandler("set_sync_interval", cmdSetSyncInterval);
   g_commands->setHandler("request_resync", cmdRequestResync);
   g_commands->setHandler("set_led_mode", cmdSetLedMode);
+  g_commands->setHandler("revoke_peer", cmdRevokePeer);
   g_syncManager->setCommandExecutor(g_commands);
 
   // Peer-to-peer and LoRa, both behind their configuration flags.
@@ -840,6 +870,16 @@ void setup() {
       uint8_t seed[32];
       const bool haveSeed = cauce::decodeSeedHex(config.syncAuthSeedHex, seed, sizeof(seed));
       const bool keyringOk = g_peerKeyring.parse(config.peerKeys);
+      // Revocations outrank peer_keys: a retired node stays out even if its line is still
+      // in the config.
+      const size_t revokedSize = g_fs.fileSize(kPeerRevokedPath);
+      if (revokedSize > 0 && revokedSize < cauce::PeerKeyring::kRevokedTextBytes) {
+        char revoked[cauce::PeerKeyring::kRevokedTextBytes] = {};
+        if (g_fs.readRange(kPeerRevokedPath, 0, reinterpret_cast<uint8_t*>(revoked),
+                           revokedSize)) {
+          g_peerKeyring.parseRevoked(revoked);
+        }
+      }
       g_peerExchange->setAuthentication(&g_peerKeyring, haveSeed ? seed : nullptr);
       volatile uint8_t* wipe = seed;
       for (size_t i = 0; i < sizeof(seed); ++i) wipe[i] = 0;
