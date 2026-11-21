@@ -69,6 +69,11 @@ class OtaManager {
   void setMinFreeHeapBytes(uint32_t minBytes);
   void setMinBatteryV(float minVolts);
   void setManifestKey(const uint8_t key[32]);
+  // The public half of the offline release key. When set, a manifest must carry a valid
+  // Ed25519 signature by it and the HMAC is not consulted: a node that knows the release key
+  // must not be talked back down to a secret the central also holds.
+  void setReleasePublicKey(const uint8_t key[32]);
+  bool hasReleasePublicKey() const { return hasReleaseKey_; }
   // Symmetric with setManifestKey, and it exists because the manager now refuses to update
   // without a key. A test that wants to exercise the download path needs a key; a test that
   // wants to prove the refusal needs to be able to take it away again, and there was no way
@@ -114,6 +119,8 @@ class OtaManager {
   FeedFn feed_{nullptr};
   uint8_t manifestKey_[32];
   bool hasManifestKey_{false};
+  uint8_t releaseKey_[32]{};
+  bool hasReleaseKey_{false};
 
   Sha256Ctx shaCtx_{};
   size_t downloadReceived_{0};

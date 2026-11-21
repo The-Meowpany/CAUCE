@@ -4,6 +4,8 @@
 
 #include <unity.h>
 
+#include "cauce/core/Ed25519Points.h"
+
 #include "cauce/app/OtaJson.h"
 #include "cauce/app/OtaManager.h"
 #include "cauce/core/SecurityUtils.h"
@@ -624,7 +626,127 @@ void test_no_watchdog_hook_is_safe_and_the_download_still_completes() {
   TEST_ASSERT_EQUAL_UINT32(900, rig.installer.received.size());
 }
 
+// --- Ed25519 release key --------------------------------------------------------------
+//
+// The vector below was signed by Python's `cryptography` with the RFC 8032 TEST 1 seed, the
+// same way tools/sign_release.py signs a release. The firmware verifying it with its own
+// Ed25519 is the cross-language check; backend/tests/test_ota_release_key.py pins the same
+// signature from the Python side.
+const char* kReleasePublicHex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+const char* kReleaseSignatureHex =
+    "315204c4d4d30f3c7154293b76c52a59e569fdfca8a35156899fe8426e4ccc72"
+    "fca3a4b2b003bedbfbe55457f57fb02a9c55e84e377d12b6627b89e7ff516504";
+const uint8_t kReleaseSeed[32] = {0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+                                  0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+                                  0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+                                  0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60};
+
+void releaseKeyBytes(uint8_t out[32]) {
+  for (size_t i = 0; i < 32; ++i) {
+    char b[3] = {kReleasePublicHex[2 * i], kReleasePublicHex[2 * i + 1], '\0'};
+    out[i] = static_cast<uint8_t>(std::strtoul(b, nullptr, 16));
+  }
+}
+
+void vectorRelease(OtaRelease& r) {
+  r = OtaRelease{};
+  copyString(r.version, sizeof(r.version), "0.2.0");
+  std::string sha;
+  for (int i = 0; i < 32; ++i) sha += "ab";
+  copyString(r.sha256Hex, sizeof(r.sha256Hex), sha.c_str());
+  copyString(r.url, sizeof(r.url), "http://central.local/fw/cauce-0.2.0.bin");
+  r.totalSize = 1234567;
+  copyString(r.manifestEd25519Hex, sizeof(r.manifestEd25519Hex), kReleaseSignatureHex);
+}
+
+void test_a_release_signed_offline_in_python_verifies_on_the_node() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  uint8_t key[32];
+  releaseKeyBytes(key);
+  rig.manager.setReleasePublicKey(key);
+  vectorRelease(rig.catalog.release);
+  rig.catalog.hasRelease = true;
+  rig.manager.tick();
+  // 0.2.0 is older than the running 1.0.0, so a verified manifest ends as UpToDate; a refused
+  // one would end as CheckFailed with the signature named in the log.
+  TEST_ASSERT_EQUAL(OtaState::UpToDate, rig.manager.state());
+  TEST_ASSERT_FALSE(rig.logContains("OTA_MANIFEST_SIGNATURE_INVALID"));
+}
+
+void test_a_release_key_refuses_a_tampered_manifest_and_an_hmac_only_one() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  uint8_t key[32];
+  releaseKeyBytes(key);
+  rig.manager.setReleasePublicKey(key);
+
+  vectorRelease(rig.catalog.release);
+  copyString(rig.catalog.release.url, sizeof(rig.catalog.release.url),
+             "http://attacker.local/fw/cauce-0.2.0.bin");
+  rig.catalog.hasRelease = true;
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+  TEST_ASSERT_TRUE(rig.logContains("OTA_MANIFEST_SIGNATURE_INVALID"));
+
+  // A correct HMAC is not enough once the node knows the release key: the central holds
+  // the HMAC secret, and the point of the release key is that the central cannot sign.
+  const std::string fw = makeFirmware(31, 700);
+  fillRelease(rig.catalog.release, fw);
+  rig.catalog.release.manifestEd25519Hex[0] = '\0';
+  rig.reader.payload = fw;
+  otaClock.advanceMs(21600001);
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+  TEST_ASSERT_EQUAL(0, rig.reader.openCalls);
+}
+
+void test_a_release_signed_with_the_release_key_installs() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  rig.manager.clearManifestKey();  // no HMAC secret at all: the release key is enough
+  uint8_t key[32];
+  releaseKeyBytes(key);
+  rig.manager.setReleasePublicKey(key);
+  const std::string fw = makeFirmware(32, 900);
+  fillRelease(rig.catalog.release, fw);
+  char canonical[256];
+  std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", rig.catalog.release.version,
+                rig.catalog.release.sha256Hex, rig.catalog.release.url,
+                static_cast<unsigned>(rig.catalog.release.totalSize));
+  uint8_t signature[64];
+  TEST_ASSERT_TRUE(ed25519Sign(signature, kReleaseSeed,
+                               reinterpret_cast<const uint8_t*>(canonical),
+                               std::strlen(canonical)));
+  static const char* hd = "0123456789abcdef";
+  for (int i = 0; i < 64; ++i) {
+    rig.catalog.release.manifestEd25519Hex[i * 2] = hd[(signature[i] >> 4) & 0xF];
+    rig.catalog.release.manifestEd25519Hex[i * 2 + 1] = hd[signature[i] & 0xF];
+  }
+  rig.catalog.release.manifestEd25519Hex[128] = '\0';
+  rig.catalog.hasRelease = true;
+  rig.reader.payload = fw;
+  rig.manager.tick();
+  drainOta(rig.manager, otaClock);
+  TEST_ASSERT_EQUAL(OtaState::RebootPending, rig.manager.state());
+}
+
+void test_manifest_json_carries_the_ed25519_signature_and_refuses_a_short_one() {
+  OtaRelease out{};
+  const std::string base =
+      "{\"version\":\"1.2.3\","
+      "\"sha256\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\","
+      "\"url\":\"http://x/fw.bin\",\"total_size\":12345,\"ed25519_signature\":\"";
+  TEST_ASSERT_TRUE(parseOtaManifestJson((base + kReleaseSignatureHex + "\"}").c_str(), out));
+  TEST_ASSERT_EQUAL_STRING(kReleaseSignatureHex, out.manifestEd25519Hex);
+  TEST_ASSERT_FALSE(parseOtaManifestJson((base + "abcd\"}").c_str(), out));
+}
+
 void registerOtaTests() {
+  RUN_TEST(test_a_release_signed_offline_in_python_verifies_on_the_node);
+  RUN_TEST(test_a_release_key_refuses_a_tampered_manifest_and_an_hmac_only_one);
+  RUN_TEST(test_a_release_signed_with_the_release_key_installs);
+  RUN_TEST(test_manifest_json_carries_the_ed25519_signature_and_refuses_a_short_one);
   RUN_TEST(test_compare_semver_pairs);
   RUN_TEST(test_sha256_streaming_matches_one_shot);
   RUN_TEST(test_happy_path_applies_and_reports_reboot_pending);

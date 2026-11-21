@@ -55,6 +55,9 @@ struct NodeConfig {
   // other choice. `main.cpp` reports that once at boot rather than failing closed, because
   // failing closed would strand every deployed node on its next update.
   char otaManifestKey[65]{};
+  // Public half of the offline Ed25519 release key, 64 hex characters. When set, firmware is
+  // accepted only if signed by it (tools/sign_release.py), and ota_manifest_key is ignored.
+  char otaPublicKey[65]{};
   char otaManifestUrl[160]{};
   bool loraEnabled{false};
   // Optional environmental sensors. All off by default, for the same reason peerEnabled is: a

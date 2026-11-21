@@ -730,8 +730,15 @@ def ota_manifest(
             manifest_key = hashlib.sha256(key_material.encode("utf-8")).digest()
             signature = hmac.new(manifest_key, canonical.encode("utf-8"),
                                  hashlib.sha256).hexdigest()
+    # Forwarded, never produced: the release key lives offline (tools/sign_release.py), so
+    # this process cannot sign firmware, only pass on a signature somebody else made.
+    ed25519_signature = release.get("ed25519_signature")
+    if not (isinstance(ed25519_signature, str) and len(ed25519_signature) == 128
+            and all(c in "0123456789abcdef" for c in ed25519_signature.lower())):
+        ed25519_signature = None
     return {"version": version, "sha256": sha256, "url": url,
-            "total_size": total_size, "hmac": signature}
+            "total_size": total_size, "hmac": signature,
+            "ed25519_signature": ed25519_signature}
 
 
 @router.get("/nodes")

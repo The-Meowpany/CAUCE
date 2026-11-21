@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "cauce/core/Ed25519Points.h"
 #include "cauce/core/SecurityUtils.h"
 #include "cauce/core/Sha256Stream.h"
 #include "cauce/core/Types.h"
@@ -11,6 +12,24 @@
 namespace cauce::app {
 
 namespace {
+
+int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// Exactly 2 * length hex characters into `out`; false on any other character.
+bool hexToBytes(const char* hex, uint8_t* out, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    const int hi = hexNibble(hex[2 * i]);
+    const int lo = hi < 0 ? -1 : hexNibble(hex[2 * i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return true;
+}
 
 bool parseSemver(const char* text, int parts[3]) {
   if (!text) return false;
@@ -102,6 +121,11 @@ void OtaManager::setManifestKey(const uint8_t key[32]) {
   hasManifestKey_ = true;
 }
 
+void OtaManager::setReleasePublicKey(const uint8_t key[32]) {
+  std::memcpy(releaseKey_, key, sizeof(releaseKey_));
+  hasReleaseKey_ = true;
+}
+
 void OtaManager::setRebootHook(RebootFn reboot) { reboot_ = reboot; }
 
 void OtaManager::feedWatchdog() {
@@ -174,12 +198,29 @@ void OtaManager::runCheck() {
   // OTA_NO_MANIFEST_KEY and a node that stays on its current firmware. That is the intended
   // trade - refusing to update is recoverable, having silently accepted every manifest is
   // not.
-  if (!hasManifestKey_) {
+  if (!hasManifestKey_ && !hasReleaseKey_) {
     scheduleFailure(OtaState::CheckFailed, "OTA_NO_MANIFEST_KEY", LogLevel::Error);
     return;
   }
 
-  {
+  if (hasReleaseKey_) {
+    // Same canonical string as the HMAC path and as tools/sign_release.py. The signing key
+    // never leaves the release engineer's machine, so a compromised central can serve a
+    // manifest but cannot make one this node accepts.
+    char canonical[256];
+    std::snprintf(canonical, sizeof(canonical), "%s|%s|%s|%u", release.version,
+                  release.sha256Hex, release.url,
+                  static_cast<unsigned>(release.totalSize));
+    uint8_t signature[64];
+    if (std::strlen(release.manifestEd25519Hex) != 128 ||
+        !hexToBytes(release.manifestEd25519Hex, signature, sizeof(signature)) ||
+        !ed25519Verify(releaseKey_, reinterpret_cast<const uint8_t*>(canonical),
+                       std::strlen(canonical), signature)) {
+      scheduleFailure(OtaState::CheckFailed, "OTA_MANIFEST_SIGNATURE_INVALID",
+                      LogLevel::Error);
+      return;
+    }
+  } else {
     // Must stay byte-identical to backend/cauce_server/api.py::ota_manifest: key is
     // SHA-256(device_key) as 32 raw bytes, message is version|sha256|url|totalSize. The two
     // disagreed once already - different key derivation AND a different canonical string -

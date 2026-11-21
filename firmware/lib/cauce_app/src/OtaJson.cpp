@@ -85,6 +85,13 @@ bool parseOtaManifestJson(const char* json, OtaRelease& out) {
       return false;
     }
   }
+  tmp.manifestEd25519Hex[0] = '\0';
+  if (findValue(json, "ed25519_signature", val, quoted) && quoted) {
+    if (!copyJsonString(val, tmp.manifestEd25519Hex, sizeof(tmp.manifestEd25519Hex)) ||
+        std::strlen(tmp.manifestEd25519Hex) != 128) {
+      return false;
+    }
+  }
   out = tmp;
   return true;
 }

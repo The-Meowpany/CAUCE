@@ -10,6 +10,8 @@ struct OtaRelease {
   char sha256Hex[65];
   char url[128];
   char manifestHmacHex[65];
+  // Ed25519 signature by the offline release key, 128 hex characters, or empty.
+  char manifestEd25519Hex[129];
   uint32_t totalSize;
 };
 

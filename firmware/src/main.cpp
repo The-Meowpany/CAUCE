@@ -926,6 +926,13 @@ g_otaManager->setFeedHook(&feedOtaWatchdog);
       g_logger->event(cauce::LogLevel::Warn,
                       "OTA_UNSIGNED_NO_DEVICE_KEY updates will be refused");
     }
+    // The offline release key outranks both secrets above. The config parser already refused
+    // anything but 64 hex characters, so a set field decodes.
+    uint8_t releaseKey[32];
+    if (config.otaPublicKey[0] != '\0' && hexDecode(config.otaPublicKey, releaseKey, 32)) {
+      g_otaManager->setReleasePublicKey(releaseKey);
+      g_logger->event(cauce::LogLevel::Info, "OTA_RELEASE_KEY ed25519 signatures required");
+    }
   }
 
   esp_task_wdt_reset();
