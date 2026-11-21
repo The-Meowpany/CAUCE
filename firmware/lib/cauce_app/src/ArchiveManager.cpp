@@ -13,6 +13,8 @@ namespace {
 
 constexpr const char* kWatermarkPath = "/archive/watermark";
 constexpr const char* kUntimedPath = "/archive/untimed.csv";
+constexpr const char* kPeerUntimedPath = "/archive/peers-untimed.csv";
+constexpr const char* kPeerMarksPath = "/archive/peer_marks";
 constexpr const char* kHeader =
     "node_id,sensor_id,sequence,timestamp_utc,timestamp_utc_ms,variable,value,unit,quality,"
     "reason_bits,time_uncertain\n";
@@ -32,7 +34,8 @@ const char* archiveStateName(ArchiveState state) {
 
 ArchiveManager::ArchiveManager(IStorageRepository& store, hal::IFileSystem& card,
                                hal::IClock& clock, Logger& logger, const char* nodeId)
-    : store_(store), card_(card), clock_(clock), logger_(logger) {
+    : store_(store), card_(card), clock_(clock), logger_(logger),
+      cardPeerMarks_(card, kPeerMarksPath) {
   copyString(nodeId_, sizeof(nodeId_), nodeId);
 }
 
@@ -89,9 +92,20 @@ bool ArchiveManager::saveWatermark() {
                               static_cast<size_t>(n));
 }
 
-bool ArchiveManager::appendRecord(const Measurement& m) {
+bool ArchiveManager::appendRecord(const Measurement& m, bool peer) {
   char path[48];
   dailyPath(m, path, sizeof(path));
+  if (peer) {
+    // /archive/YYYY-MM-DD.csv -> /archive/peers-YYYY-MM-DD.csv, kept apart so this node's own
+    // files stay exactly what they were: one producer per file.
+    if (std::strcmp(path, kUntimedPath) == 0) {
+      copyString(path, sizeof(path), kPeerUntimedPath);
+    } else {
+      char day[32];
+      copyString(day, sizeof(day), path + std::strlen("/archive/"));
+      std::snprintf(path, sizeof(path), "/archive/peers-%s", day);
+    }
+  }
   if (!card_.exists(path)) {
     if (!card_.appendBytes(path, reinterpret_cast<const uint8_t*>(kHeader),
                            std::strlen(kHeader))) {
@@ -142,8 +156,9 @@ void ArchiveManager::tick() {
     }
   }
   if (store_.lastOwnSequence() <= counters_.watermark) {
-    // Nothing new. A degraded archive with nothing to write stays degraded until a write
-    // actually succeeds: an idle card is not evidence of a working one.
+    // Nothing new of our own. A degraded archive with nothing to write stays degraded until a
+    // write actually succeeds: an idle card is not evidence of a working one.
+    if (peerSource_ != nullptr && !archivePeerBatch()) fail("peer_append");
     return;
   }
 
@@ -187,6 +202,61 @@ void ArchiveManager::tick() {
   }
   state_ = ArchiveState::Ok;
   retryDelayMs_ = kFirstRetryMs;
+}
+
+bool ArchiveManager::archivePeerBatch() {
+  if (!peerMarksLoaded_) {
+    cardPeerMarks_.load();
+    peerMarksLoaded_ = true;
+  }
+  for (size_t tried = 0; tried < PeerWatermarks::kMaxPeers; ++tried) {
+    const size_t slot = nextPeer_;
+    nextPeer_ = (nextPeer_ + 1) % PeerWatermarks::kMaxPeers;
+    const char* peer = peerSource_->nodeIdAt(slot);
+    if (peer == nullptr || std::strcmp(peer, nodeId_) == 0) continue;
+    // Never past what has been merged: the merge watermark is what storage is known to hold.
+    const uint32_t merged = peerSource_->get(peer, 0xFFFFFFFFu);
+    const uint32_t done = cardPeerMarks_.get(peer, merged);
+    if (merged <= done) continue;
+
+    if (done == 0 && cardPeerMarks_.peerCount() >= PeerWatermarks::kMaxPeers) {
+      // The card still tracks neighbours that are no longer merged. Make room for this one
+      // rather than refusing it forever, which would leave the archive degraded for good.
+      for (size_t i = 0; i < PeerWatermarks::kMaxPeers; ++i) {
+        const char* tracked = cardPeerMarks_.nodeIdAt(i);
+        if (tracked != nullptr && peerSource_->get(tracked, 0xFFFFFFFFu) == 0) {
+          char gone[16];
+          copyString(gone, sizeof(gone), tracked);
+          cardPeerMarks_.forget(gone);
+        }
+      }
+    }
+    QueryStats stats{};
+    const size_t n = store_.queryAfterSequenceFor(peer, done, batch_, kBatch, stats);
+    uint32_t progressed = done;
+    for (size_t i = 0; i < n; ++i) {
+      const Measurement& m = batch_[i];
+      // A neighbour only offers part of its history, so gaps here are expected and are not
+      // counted: they belong to the neighbour's own archive.
+      if (m.sequence <= progressed) continue;
+      if (!appendRecord(m, true)) {
+        if (progressed > done && cardPeerMarks_.advance(peer, progressed)) {
+          (void)cardPeerMarks_.persist();
+        }
+        return false;
+      }
+      progressed = m.sequence;
+      counters_.peerArchived++;
+    }
+    // Merged but no longer in storage (retention got there first): skip ahead rather than
+    // asking for the same empty range every tick.
+    const uint32_t reached = progressed > done ? progressed : merged;
+    // advance() only updates memory. A watermark that is not on the card makes the next boot
+    // copy the same lines again; a duplicated line is recoverable by sequence, but it is still
+    // a failed write worth reporting.
+    return cardPeerMarks_.advance(peer, reached) && cardPeerMarks_.persist();
+  }
+  return true;
 }
 
 uint32_t ArchiveManager::lag() const {

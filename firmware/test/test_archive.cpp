@@ -4,6 +4,7 @@
 #include <unity.h>
 
 #include "cauce/app/ArchiveManager.h"
+#include "cauce/app/PeerWatermarks.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Logger.h"
 #include "cauce/hal/ManualClock.h"
@@ -225,6 +226,40 @@ void test_an_unreadable_watermark_starts_degraded_instead_of_rewriting_history()
   TEST_ASSERT_EQUAL(0u, countLines(rig.card.read("/archive/2026-08-22.csv")));
 }
 
+void test_peer_records_go_to_their_own_files_when_a_peer_source_is_set() {
+  Rig rig;
+  rig.store.setOwnNodeId("CAUCE-001");
+  rig.store.append(record(1, kT0 + 1000));
+  rig.store.append(record(5, kT0 + 2000, "CAUCE-002"));
+  rig.store.append(record(6, kT0 + 3000, "CAUCE-002"));
+  rig.store.append(record(7, 0, "CAUCE-002", true));
+  PeerWatermarks merged(rig.flash, "/state/peer_marks");
+  TEST_ASSERT_TRUE(merged.advance("CAUCE-002", 7));
+  rig.archive.setPeerSource(&merged);
+  rig.archive.begin();
+  rig.archive.tick();  // own records first
+  rig.archive.tick();  // then the neighbour's
+  const std::string own = rig.card.read("/archive/2026-08-22.csv");
+  TEST_ASSERT_TRUE(own.find("CAUCE-002") == std::string::npos);
+  const std::string peers = rig.card.read("/archive/peers-2026-08-22.csv");
+  TEST_ASSERT_EQUAL(3u, countLines(peers));  // header + two timed records
+  TEST_ASSERT_TRUE(peers.find("CAUCE-002,") != std::string::npos);
+  TEST_ASSERT_EQUAL(2u, countLines(rig.card.read("/archive/peers-untimed.csv")));
+  TEST_ASSERT_EQUAL(3u, rig.archive.counters().peerArchived);
+  // Peer gaps are the neighbour's to account for, not this node's.
+  TEST_ASSERT_EQUAL(0u, rig.archive.counters().gapRecords);
+
+  // Nothing is copied twice, even by a fresh manager reading the card's watermarks.
+  rig.archive.tick();
+  TEST_ASSERT_EQUAL(3u, rig.archive.counters().peerArchived);
+  ArchiveManager again{rig.store, rig.card, rig.clock, rig.logger, "CAUCE-001"};
+  again.setPeerSource(&merged);
+  again.begin();
+  again.tick();
+  again.tick();
+  TEST_ASSERT_EQUAL(0u, again.counters().peerArchived);
+}
+
 void registerArchiveTests() {
   RUN_TEST(test_archive_line_is_csv_with_iso_time_and_units);
   RUN_TEST(test_archive_files_are_per_utc_day_and_untimed_records_are_kept_apart);
@@ -235,5 +270,6 @@ void registerArchiveTests() {
   RUN_TEST(test_a_fresh_card_receives_everything_littlefs_still_holds);
   RUN_TEST(test_records_lost_before_archiving_are_counted_as_a_gap);
   RUN_TEST(test_peer_records_are_left_to_their_own_node);
+  RUN_TEST(test_peer_records_go_to_their_own_files_when_a_peer_source_is_set);
   RUN_TEST(test_an_unreadable_watermark_starts_degraded_instead_of_rewriting_history);
 }

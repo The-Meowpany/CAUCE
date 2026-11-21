@@ -24,8 +24,8 @@ class PeerWatermarks {
   // silent drop is indistinguishable from a bug.
   bool advance(const char* nodeId, uint32_t sequence);
 
-  // Writes the file. Called by `advance` and available for an explicit flush; a node that
-  // merges once an hour does not need a flash write per frame.
+  // Writes the file. `advance` does not call it; the caller flushes when it chooses, because a
+  // node that merges once an hour does not need a flash write per frame.
   bool persist() const;
 
   // Reads the file. A malformed entry is skipped rather than aborting the load: a truncated
@@ -33,6 +33,11 @@ class PeerWatermarks {
   void load();
 
   size_t peerCount() const { return count_; }
+  // The peer in slot `index`, or null for an empty slot. Slots are not compacted, so a caller
+  // walks all kMaxPeers of them.
+  const char* nodeIdAt(size_t index) const {
+    return index < kMaxPeers && entries_[index].inUse ? entries_[index].nodeId : nullptr;
+  }
 
   // Forgets one peer, for a node that has been gone long enough to be presumed replaced.
   bool forget(const char* nodeId);

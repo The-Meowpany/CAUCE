@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "cauce/app/PeerWatermarks.h"
 #include "cauce/core/IStorageRepository.h"
 #include "cauce/core/Logger.h"
 #include "cauce/core/Measurement.h"
@@ -28,6 +29,8 @@ struct ArchiveCounters {
   // a hole in the archive that nobody can see is the worst kind.
   uint32_t gapRecords{0};
   uint32_t watermark{0};
+  // Records merged from neighbours and copied to the card (see setPeerSource).
+  uint32_t peerArchived{0};
 };
 
 // Copies records from the operational store (LittleFS) to the archive card (microSD) as daily
@@ -41,6 +44,9 @@ struct ArchiveCounters {
 //   /archive/YYYY-MM-DD.csv   one file per UTC day
 //   /archive/untimed.csv      records taken before any trusted clock
 //   /archive/watermark        last sequence written, as decimal text
+//   /archive/peers-YYYY-MM-DD.csv, /archive/peers-untimed.csv
+//                             records merged from neighbours, same columns; node_id says whose
+//   /archive/peer_marks       last sequence written per neighbour
 class ArchiveManager {
  public:
   static constexpr size_t kBatch = 16;
@@ -63,6 +69,13 @@ class ArchiveManager {
   // Records stored but not yet on the card.
   uint32_t lag() const;
 
+  // Also archives the records this node holds for its neighbours, in files of their own. A
+  // node that dies takes its own card with it; the copies its neighbours kept in LittleFS
+  // would otherwise be the only ones left, and LittleFS retention removes them eventually.
+  // `merged` names the neighbours and how far their records reach. Own records always go
+  // first: a neighbour's backlog never delays this node's archive.
+  void setPeerSource(const PeerWatermarks* merged) { peerSource_ = merged; }
+
   // One CSV line, without the newline. Exposed for tests.
   static size_t formatLine(const Measurement& m, char* out, size_t capacity);
   static void dailyPath(const Measurement& m, char* out, size_t capacity);
@@ -70,7 +83,9 @@ class ArchiveManager {
  private:
   bool loadWatermark();
   bool saveWatermark();
-  bool appendRecord(const Measurement& m);
+  bool appendRecord(const Measurement& m, bool peer = false);
+  // One batch for one neighbour, round-robin. False only on a card failure.
+  bool archivePeerBatch();
   void fail(const char* what);
 
   IStorageRepository& store_;
@@ -83,6 +98,10 @@ class ArchiveManager {
   uint32_t retryDelayMs_{kFirstRetryMs};
   uint32_t nextAttemptMs_{0};
   char nodeId_[16]{};
+  const PeerWatermarks* peerSource_{nullptr};
+  PeerWatermarks cardPeerMarks_;
+  bool peerMarksLoaded_{false};
+  size_t nextPeer_{0};
   // A member rather than a local: sixteen records are over a kilobyte, which the loop task's
   // stack should not have to find on every pass.
   Measurement batch_[kBatch]{};

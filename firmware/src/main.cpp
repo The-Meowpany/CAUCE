@@ -856,6 +856,7 @@ void setup() {
     CAUCE_SETUP_STEP("peer_exchange");
     g_peerMarks = new cauce::app::PeerWatermarks(g_fs, config.peerStatePath);
     g_peerMarks->load();
+    if (g_archive != nullptr) g_archive->setPeerSource(g_peerMarks);
     if (config.peerEnabled) {
       g_peerRadio = new cauce::hal::Esp32PeerRadio();
       g_peerDiscovery = new cauce::hal::Esp32PeerDiscovery(config.peerChannel);
