@@ -52,6 +52,9 @@ jobs:
       - name: Build LoRa gateway bridge
         run: pio run -e gateway
         working-directory: firmware
+      - name: Build bench self-test image
+        run: pio run -e bench
+        working-directory: firmware
 
   lint:
     runs-on: ubuntu-latest
