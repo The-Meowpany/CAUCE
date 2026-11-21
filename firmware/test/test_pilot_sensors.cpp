@@ -224,6 +224,7 @@ void test_pilot_a_full_config_fits_the_node_buffer() {
   fillField(full.caPublicKeyHex, 'a');
   fillField(full.otaManifestKey, 'a');
   fillField(full.otaPublicKey, 'a');
+  fillField(full.otaPublicKeyNext, 'a');
   fillField(full.otaManifestUrl, 'o');
   fillField(full.peerStatePath, 'q');
   fillField(full.peerKeys, 'k');

@@ -58,6 +58,8 @@ struct NodeConfig {
   // Public half of the offline Ed25519 release key, 64 hex characters. When set, firmware is
   // accepted only if signed by it (tools/sign_release.py), and ota_manifest_key is ignored.
   char otaPublicKey[65]{};
+  // The release key being rotated in, accepted alongside otaPublicKey. Empty outside a rotation.
+  char otaPublicKeyNext[65]{};
   char otaManifestUrl[160]{};
   bool loraEnabled{false};
   // Optional environmental sensors. All off by default, for the same reason peerEnabled is: a

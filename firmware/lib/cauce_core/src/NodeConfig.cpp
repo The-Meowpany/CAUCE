@@ -254,6 +254,7 @@ bool serializeConfig(const NodeConfig& config, char* out, size_t capacity) {
   c.write("ota_manifest_key=%s\n", config.otaManifestKey);
   c.write("ota_manifest_url=%s\n", config.otaManifestUrl);
   c.write("ota_public_key=%s\n", config.otaPublicKey);
+  c.write("ota_public_key_next=%s\n", config.otaPublicKeyNext);
   c.write("lora_enabled=%d\n", config.loraEnabled ? 1 : 0);
   c.write("peer_enabled=%d\n", config.peerEnabled ? 1 : 0);
   c.write("peer_channel=%u\n", static_cast<unsigned>(config.peerChannel));
@@ -391,6 +392,12 @@ bool parseConfig(const char* text, NodeConfig& out) {
         // at this line.
         if (valueText[0] != '\0' &&
             !copyIfHexOfLength(valueText, 64, cfg.otaPublicKey, sizeof(cfg.otaPublicKey))) {
+          badCredentialLine = true;
+        }
+      } else if (std::strcmp(key, "ota_public_key_next") == 0) {
+        if (valueText[0] != '\0' &&
+            !copyIfHexOfLength(valueText, 64, cfg.otaPublicKeyNext,
+                               sizeof(cfg.otaPublicKeyNext))) {
           badCredentialLine = true;
         }
       } else if (std::strcmp(key, "ota_manifest_url") == 0) {

@@ -977,7 +977,12 @@ g_otaManager->setFeedHook(&feedOtaWatchdog);
     uint8_t releaseKey[32];
     if (config.otaPublicKey[0] != '\0' && hexDecode(config.otaPublicKey, releaseKey, 32)) {
       g_otaManager->setReleasePublicKey(releaseKey);
-      g_logger->event(cauce::LogLevel::Info, "OTA_RELEASE_KEY ed25519 signatures required");
+      uint8_t nextKey[32];
+      const bool rotating = config.otaPublicKeyNext[0] != '\0' &&
+                            hexDecode(config.otaPublicKeyNext, nextKey, 32);
+      if (rotating) g_otaManager->setNextReleasePublicKey(nextKey);
+      g_logger->eventf(cauce::LogLevel::Info, "OTA_RELEASE_KEY",
+                       "ed25519 signatures required next_key=%d", rotating ? 1 : 0);
     }
   }
 

@@ -73,6 +73,10 @@ class OtaManager {
   // Ed25519 signature by it and the HMAC is not consulted: a node that knows the release key
   // must not be talked back down to a secret the central also holds.
   void setReleasePublicKey(const uint8_t key[32]);
+  // A second accepted release key, for rotating the offline one without a window in which
+  // nodes refuse every release: install the next key everywhere, then start signing with it,
+  // then retire the old one. Only valid alongside setReleasePublicKey.
+  void setNextReleasePublicKey(const uint8_t key[32]);
   bool hasReleasePublicKey() const { return hasReleaseKey_; }
   // Symmetric with setManifestKey, and it exists because the manager now refuses to update
   // without a key. A test that wants to exercise the download path needs a key; a test that
@@ -121,6 +125,8 @@ class OtaManager {
   bool hasManifestKey_{false};
   uint8_t releaseKey_[32]{};
   bool hasReleaseKey_{false};
+  uint8_t nextReleaseKey_[32]{};
+  bool hasNextReleaseKey_{false};
 
   Sha256Ctx shaCtx_{};
   size_t downloadReceived_{0};

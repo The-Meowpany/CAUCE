@@ -701,6 +701,29 @@ void test_a_release_key_refuses_a_tampered_manifest_and_an_hmac_only_one() {
   TEST_ASSERT_EQUAL(0, rig.reader.openCalls);
 }
 
+void test_a_release_signed_with_the_next_key_is_accepted_during_a_rotation() {
+  otaClock = hal::ManualClock(1787356800000ULL);
+  OtaRig rig;
+  // The vector is signed with the TEST 1 key; install it as the *next* key, with an unrelated
+  // current one, which is the state of a fleet halfway through a rotation.
+  uint8_t current[32] = {0x01};
+  uint8_t next[32];
+  releaseKeyBytes(next);
+  rig.manager.setReleasePublicKey(current);
+  vectorRelease(rig.catalog.release);
+  rig.catalog.hasRelease = true;
+  rig.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::CheckFailed, rig.manager.state());
+
+  OtaRig rotating;
+  rotating.manager.setReleasePublicKey(current);
+  rotating.manager.setNextReleasePublicKey(next);
+  vectorRelease(rotating.catalog.release);
+  rotating.catalog.hasRelease = true;
+  rotating.manager.tick();
+  TEST_ASSERT_EQUAL(OtaState::UpToDate, rotating.manager.state());
+}
+
 void test_a_release_signed_with_the_release_key_installs() {
   otaClock = hal::ManualClock(1787356800000ULL);
   OtaRig rig;
@@ -746,6 +769,7 @@ void registerOtaTests() {
   RUN_TEST(test_a_release_signed_offline_in_python_verifies_on_the_node);
   RUN_TEST(test_a_release_key_refuses_a_tampered_manifest_and_an_hmac_only_one);
   RUN_TEST(test_a_release_signed_with_the_release_key_installs);
+  RUN_TEST(test_a_release_signed_with_the_next_key_is_accepted_during_a_rotation);
   RUN_TEST(test_manifest_json_carries_the_ed25519_signature_and_refuses_a_short_one);
   RUN_TEST(test_compare_semver_pairs);
   RUN_TEST(test_sha256_streaming_matches_one_shot);

@@ -126,6 +126,11 @@ void OtaManager::setReleasePublicKey(const uint8_t key[32]) {
   hasReleaseKey_ = true;
 }
 
+void OtaManager::setNextReleasePublicKey(const uint8_t key[32]) {
+  std::memcpy(nextReleaseKey_, key, sizeof(nextReleaseKey_));
+  hasNextReleaseKey_ = true;
+}
+
 void OtaManager::setRebootHook(RebootFn reboot) { reboot_ = reboot; }
 
 void OtaManager::feedWatchdog() {
@@ -212,10 +217,14 @@ void OtaManager::runCheck() {
                   release.sha256Hex, release.url,
                   static_cast<unsigned>(release.totalSize));
     uint8_t signature[64];
-    if (std::strlen(release.manifestEd25519Hex) != 128 ||
-        !hexToBytes(release.manifestEd25519Hex, signature, sizeof(signature)) ||
-        !ed25519Verify(releaseKey_, reinterpret_cast<const uint8_t*>(canonical),
-                       std::strlen(canonical), signature)) {
+    const auto* message = reinterpret_cast<const uint8_t*>(canonical);
+    const size_t messageLength = std::strlen(canonical);
+    const bool decoded = std::strlen(release.manifestEd25519Hex) == 128 &&
+                         hexToBytes(release.manifestEd25519Hex, signature, sizeof(signature));
+    if (!decoded ||
+        !(ed25519Verify(releaseKey_, message, messageLength, signature) ||
+          (hasNextReleaseKey_ &&
+           ed25519Verify(nextReleaseKey_, message, messageLength, signature)))) {
       scheduleFailure(OtaState::CheckFailed, "OTA_MANIFEST_SIGNATURE_INVALID",
                       LogLevel::Error);
       return;
