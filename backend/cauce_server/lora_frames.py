@@ -61,6 +61,27 @@ VARIABLES = {
     2: "pressure",
     3: "illuminance",
     4: "battery_voltage",
+    # Must match `Variable` in firmware/lib/cauce_core/include/cauce/core/Types.h. 5 and 6
+    # were missing, so a LoRa record of wind or VOC decoded as "unknown".
+    5: "wind_speed",
+    6: "tvoc",
+    7: "co2",
+    8: "pm1",
+    9: "pm2_5",
+    10: "pm4",
+    11: "pm10",
+    12: "uv_index",
+    13: "uva_index",
+    14: "uvb_index",
+    15: "solar_irradiance",
+    16: "wind_direction",
+    17: "rainfall",
+    18: "soil_moisture",
+    19: "soil_water_potential",
+    20: "soil_temperature",
+    21: "leaf_wetness",
+    22: "lightning_strikes",
+    23: "lightning_distance",
 }
 QUALITIES = {
     0: "VALID",

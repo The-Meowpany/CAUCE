@@ -131,7 +131,7 @@ BUDGETS: dict[str, dict[str, dict]] = {
             "adc_reference": 0.02,
         },
         "assumption": (
-            "A resistively-divided LiPo cell read by the ESP32 ADC, with a 1 % divider and no "
+            "A resistively-divided battery (a LiPo cell or the pilot's 12 V pack) read by the ESP32 ADC, with a 1 % divider and no "
             "reference calibration. This is a battery-gauge reading for deciding whether a node "
             "needs attention, not a voltmeter: it says 'roughly 3.6 V, down from 4.1' and it "
             "cannot be compared against a cell's rated voltage to judge state of charge. It "
@@ -196,6 +196,189 @@ BUDGETS: dict[str, dict[str, dict]] = {
             "A relative pressure reading. Comparing against a station that reports "
             "sea-level pressure will disagree by roughly 1 hPa per 8.5 m of altitude "
             "and no calibration here can fix that."
+        ),
+    },
+    # Pilot station suite. Same rule as the channels above: the datasheet figure is listed,
+    # and whatever nobody has measured yet is listed beside it under its own name.
+    "co2": {
+        "unit": "ppm",
+        "components": {
+            # MH-Z19C: +/-(50 ppm + 5 % of reading).
+            "sensor_datasheet": 50.0,
+            "sensor_datasheet_pct_of_reading": 5.0,
+            # Automatic baseline correction is off, so drift between calibrations is real.
+            "baseline_drift": 30.0,
+            "quantisation": 1.0,
+        },
+        "assumption": (
+            "An MH-Z19C NDIR cell with automatic baseline correction disabled, zeroed against "
+            "outdoor air during co-location. NDIR measures CO2 itself, unlike the CCS811 "
+            "estimate this project refuses to publish, but the cell is still not traceable: "
+            "the figure is comparable between nodes only after the co-location procedure, "
+            "and a reading is not a regulatory measurement."
+        ),
+    },
+    **{
+        name: {
+            "unit": "µg/m³",
+            "components": {
+                # SPS30: +/-10 ug/m3 up to 100 ug/m3 (the absolute term), +/-10 % above.
+                "sensor_datasheet": 10.0,
+                "sensor_datasheet_pct_of_reading": 10.0,
+                # Optical sizing reads hygroscopic growth as mass above ~80 %RH.
+                "humidity_growth_pct_of_reading": 30.0,
+                "quantisation": 0.1,
+            },
+            "assumption": (
+                f"A Sensirion SPS30 reporting {label} mass concentration by optical counting. "
+                "Above roughly 80 % relative humidity, water uptake makes particles read "
+                "larger and the mass reads high; the humidity term covers that and dominates "
+                "on humid days. Useful for comparing nodes and episodes; not comparable "
+                "against a gravimetric reference or an air-quality limit without a "
+                "co-location against one."
+            ),
+        }
+        for name, label in (("pm1", "PM1"), ("pm2_5", "PM2.5"), ("pm4", "PM4"),
+                            ("pm10", "PM10"))
+    },
+    **{
+        name: {
+            "unit": "UVI",
+            "components": {
+                # Vishay's open-air coefficients; a cover window changes them.
+                "coefficient_fit_pct_of_reading": 20.0,
+                "angular_response_pct_of_reading": 10.0,
+                "quantisation": 0.01,
+            },
+            "assumption": (
+                "A VEML6075 converted with the application note's open-air coefficients. "
+                "Behind any window or diffuser the coefficients are wrong and must be refitted. "
+                "An indicator of UV exposure at one node, not comparable with a calibrated "
+                "UV radiometer."
+            ),
+        }
+        for name in ("uv_index", "uva_index", "uvb_index")
+    },
+    "solar_irradiance": {
+        "unit": "W/m²",
+        "components": {
+            # A photodiode is not a thermopile: its spectral response is narrower than sunlight.
+            "spectral_mismatch_pct_of_reading": 25.0,
+            "uncalibrated_gain_pct_of_reading": 30.0,
+            "quantisation": 1.0,
+        },
+        "assumption": (
+            "A BPW34 photodiode behind a transimpedance stage with a gain taken from its "
+            "datasheet, never compared against a pyranometer. It is relative irradiance: it "
+            "ranks sunny and cloudy hours within one node and is not comparable between nodes "
+            "until each gain has been fitted against a reference."
+        ),
+    },
+    "wind_direction": {
+        "unit": "°",
+        "components": {
+            # Sixteen sectors: half a sector is the resolution floor.
+            "quantisation": 11.25,
+            "mounting_alignment": 10.0,
+        },
+        "assumption": (
+            "A resistor-ladder vane with sixteen positions, aligned to north by hand. The "
+            "alignment term is an estimate of a compass mounting, not a measured one; it is "
+            "recorded per node as vane_offset_deg. Direction in calm air is the last position "
+            "the vane held and says nothing about wind."
+        ),
+    },
+    "rainfall": {
+        "unit": "mm",
+        "components": {
+            # Tipping buckets under-catch at high intensity and in wind.
+            "bucket_volume_pct_of_reading": 5.0,
+            "wind_undercatch_pct_of_reading": 10.0,
+            "quantisation": 0.14,
+        },
+        "assumption": (
+            "A tipping-bucket gauge checked against a measured volume of water before "
+            "deployment, per the pilot acceptance test. Wind and high rain rates make it read "
+            "low, and the total is not corrected for that. A blocked funnel reads exactly like "
+            "a dry day, so a node reporting no rain while its neighbours do is a maintenance "
+            "flag before it is weather."
+        ),
+    },
+    "soil_moisture": {
+        "unit": "%",
+        "components": {
+            "two_point_calibration": 5.0,
+            "soil_type_pct_of_reading": 20.0,
+            "quantisation": 0.1,
+        },
+        "assumption": (
+            "A capacitive probe mapped between its dry and wet readings. The percentage is "
+            "relative to those two points, not volumetric water content, and the response "
+            "depends on soil type: comparable over time at one node, not between soils."
+        ),
+    },
+    "soil_water_potential": {
+        "unit": "kPa",
+        "components": {
+            "soil_calibration_pct_of_reading": 25.0,
+            "temperature_effect_pct_of_reading": 10.0,
+            "quantisation": 1.0,
+        },
+        "assumption": (
+            "A gypsum block read through a resistive divider with a linear fit per soil type. "
+            "The block responds slowly and dissolves over seasons; it is not equivalent to a "
+            "TEROS 21 or a tensiometer, and the fit must be redone when the block is replaced."
+        ),
+    },
+    "soil_temperature": {
+        "unit": "°C",
+        "components": {
+            "sensor_datasheet": 0.5,
+            "probe_depth": 0.3,
+            "quantisation": 0.0625,
+        },
+        "assumption": (
+            "A DS18B20 probe at a recorded depth. The datasheet figure holds from -10 to 85 C; "
+            "the depth term covers the burial depth differing between nodes, which matters "
+            "more than the sensor near the surface."
+        ),
+    },
+    "leaf_wetness": {
+        "unit": "%",
+        "components": {
+            "two_point_calibration": 10.0,
+            "surface_condition_pct_of_reading": 20.0,
+            "quantisation": 0.1,
+        },
+        "assumption": (
+            "A resistive or capacitive grid mapped between dry and wet readings. It indicates "
+            "whether the surface is wet and roughly how much; it is not a water film thickness "
+            "and is not comparable between grids of different make."
+        ),
+    },
+    "lightning_strikes": {
+        "unit": "count",
+        "components": {
+            # Detection efficiency is not published for the AS3935.
+            "unquantified_detection_efficiency_pct_of_reading": 50.0,
+        },
+        "assumption": (
+            "An AS3935 counting the strikes it classifies as lightning, with disturbers masked. "
+            "The detection efficiency is not specified, so counts are an indicator of activity "
+            "near one node, not a strike density comparable with a lightning network."
+        ),
+    },
+    "lightning_distance": {
+        "unit": "km",
+        "components": {
+            # The chip reports distance in coarse bins from 1 to 40 km.
+            "estimator_bins": 5.0,
+            "storm_model_pct_of_reading": 30.0,
+        },
+        "assumption": (
+            "The AS3935's own distance estimate to the leading edge of a storm, in coarse bins. "
+            "It is the distance to the storm, not to an individual strike, and it is not "
+            "comparable between nodes."
         ),
     },
 }

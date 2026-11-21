@@ -118,8 +118,8 @@ def test_an_unknown_variable_has_no_budget_rather_than_a_zero_one():
     # "We have no numbers for this quantity" and "this quantity is exact" are
     # different, and conflating them is how a report quotes a precision nobody
     # established.
-    assert budget_for("soil_moisture") is None
-    assert budget_summary("soil_moisture") is None
+    assert budget_for("sap_flow") is None
+    assert budget_summary("sap_flow") is None
 
 
 def test_a_budget_dict_names_the_variable_and_its_components():

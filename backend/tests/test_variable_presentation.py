@@ -128,11 +128,10 @@ def test_every_channel_the_firmware_can_emit_is_in_the_registry():
         Path(__file__).resolve().parents[2] / "firmware/lib/cauce_core/src/Types.cpp"
     ).read_text(encoding="utf-8")
 
-    # Only the variableName() switch. Scanning every `return "..."` in the file also picks up
-    # the unit strings, and "lx" and "ppb" are not channels - a check that demands they appear
-    # in the registry would be demanding nonsense.
-    body = source[source.index("const char* variableName"):source.index("const char* variableUnit")]
-    emitted = set(re.findall(r'return\s+"([a-z_0-9]+)";', body)) - {"unknown"}
+    # The name column of the variable table: `{Variable::X, "name", "unit"}`. Only the first
+    # string of each row, because the units ("lx", "ppb") are not channels.
+    emitted = set(re.findall(r'\{Variable::\w+,\s*"([a-z_0-9]+)"', source))
+    assert emitted, "the variable table in Types.cpp was not found; this check is now blind"
     missing = emitted - set(variables.BY_NAME)
     assert not missing, (
         f"the firmware reports {sorted(missing)} but the presentation registry has no entry "
@@ -166,10 +165,15 @@ def test_battery_voltage_is_not_offered_as_an_environmental_reading():
     assert variables.is_environmental("wind_speed") is True
 
 
-def test_no_co2_channel_exists_anywhere_in_the_registry():
-    """The CCS811's eCO2 is an estimate derived from VOC, not a measurement of CO2."""
+def test_co2_is_only_ever_the_ndir_measurement():
+    """The CCS811's eCO2 is an estimate derived from VOC, not a measurement of CO2.
+
+    A co2 channel exists now, fed by an NDIR cell. The estimate still has no name to be
+    published under, and the channel's own label says which instrument it comes from.
+    """
     names = {v.name for v in variables.VARIABLES}
-    assert "co2" not in names
     assert "eco2" not in names
+    assert "co2" in names
+    assert "NDIR" in variables.label_for("co2", "en")
     assert "tvoc" in names, (
-        "the part's real measurement - total VOC - is what should be reported instead")
+        "the CCS811's real measurement - total VOC - is what it reports")
