@@ -117,12 +117,12 @@ presupuesto.
 | Nodo central: gateway y servidor (Orange Pi Zero 3) | 79,70 |
 | Herramientas y banco de pruebas | 132,03 |
 | Calibración y co-localización | 30,00 |
-| Programa educativo | 1.243,31 |
+| Programa educativo | 1.624,00 |
 | Logística, operación e importación | 754,26 |
 | Repuestos críticos | 49,94 |
-| Contingencia de doble propósito | 210,00 |
-| **Total del proyecto** | **3.558,32** |
-| No utilizado de los USD 4.000 | 441,68 |
+| Contingencia de doble propósito | 240,00 |
+| **Total del proyecto** | **3.969,01** |
+| No utilizado de los USD 4.000 | 30,99 |
 
 La contingencia se dimensiona por el riesgo de los precios. Hasta cerrar la
 etapa 4 (todo comprado e importado) cubre lo que termine costando más de
@@ -138,7 +138,9 @@ El programa educativo es equipamiento del proyecto que se reutiliza en
 cada taller: seis kits de práctica (ESP32 y un juego de sensores), un
 proyector portátil, una impresora de tinta continua y una plastificadora
 para guías y etiquetas de las estaciones, un roll-up, y los boletos
-suburbanos del equipo. La logística incluye además los boletos de cuatro rondas de
+suburbanos del equipo. Cada participante recibe un certificado y stickers
+del proyecto, y quienes presentan en la jornada de cierre, una gift card
+de librería. La logística incluye además los boletos de cuatro rondas de
 mantenimiento durante el piloto.
 
 No hay impresora 3D: un escudo de radiación comercial cuesta menos que
