@@ -12,24 +12,27 @@ namespace cauce::drivers {
 //
 // A DC divider pushes current through the block in one direction on every read, which
 // polarises it and drifts the reading over a season. Here the two ends of the divider are
-// driven by an MCP23008 I2C expander instead of 3V3 and ground, because the node has no free
+// driven by an MCP23017 I2C expander instead of 3V3 and ground, because the node has no free
 // GPIO left for them:
 //
-//   GP0 --[ R_ref ]--+-- GP1 side: [ block ] -- GP1
-//                    |
-//                  ADC (the pin the DC read used)
+//   GPA0 --[ R_ref ]--+-- [ block ] -- GPA1
+//                     |
+//                   ADC (the pin the DC read used)
 //
-// Phase A drives GP0 high and GP1 low, which is exactly the old DC circuit. Phase B swaps them.
+// Phase A drives GPA0 high and GPA1 low, which is exactly the old DC circuit. Phase B swaps them.
 // Both phases last one ADC conversion, then both pins go low, so the net charge through the
 // block is zero. The two readings are folded back into the millivolts the DC circuit would have
 // shown, so a per-soil fit made against the DC read still applies unchanged.
 class GypsumAcDriver final : public ISensorDriver {
  public:
+  // MCP23017 with IOCON.BANK = 0, its power-on state. Port A only. 0x0A is IOCON in this map,
+  // not an output latch: the MCP23008's register numbers would reconfigure the part instead of
+  // driving it, which is why the addresses are pinned by a test.
   static constexpr uint8_t kDefaultAddress = 0x20;  // A2..A0 tied to ground
-  static constexpr uint8_t kRegIodir = 0x00;
-  static constexpr uint8_t kRegOlat = 0x0A;
-  static constexpr uint8_t kPinA = 0x01;  // GP0, reference-resistor end
-  static constexpr uint8_t kPinB = 0x02;  // GP1, far end of the block
+  static constexpr uint8_t kRegIodir = 0x00;        // IODIRA
+  static constexpr uint8_t kRegOlat = 0x14;         // OLATA
+  static constexpr uint8_t kPinA = 0x01;  // GPA0, reference-resistor end
+  static constexpr uint8_t kPinB = 0x02;  // GPA1, far end of the block
 
   GypsumAcDriver(hal::II2cBus& bus, hal::IAnalogInput& adc, uint8_t adcChannel, const char* id,
                  float kpaPerMv, float offsetKpa, float supplyMv = 3300.0f,

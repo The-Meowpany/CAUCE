@@ -112,7 +112,7 @@ struct NodeConfig {
   // Gypsum block suction, kPa = scale * mV + offset, fitted per soil type.
   float soilPotentialKpaPerMv{0.6f};
   float soilPotentialOffsetKpa{0.0f};
-  // Read the block with alternating polarity through an MCP23008 at 0x20 instead of as a DC
+  // Read the block with alternating polarity through an MCP23017 at 0x20 instead of as a DC
   // divider. Needs the expander wired as in HARDWARE.md; the fit above stays valid.
   bool soilPotentialAc{false};
   bool batteryMonitorEnabled{false};

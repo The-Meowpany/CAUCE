@@ -634,7 +634,7 @@ void test_pilot_rtc_refuses_an_impossible_date() {
   TEST_ASSERT_FALSE(rtc.readUtcMs(out));
 }
 
-// An MCP23008 driving the two ends of a divider made of R_ref and the block, with the ADC on the
+// An MCP23017 driving the two ends of a divider made of R_ref and the block, with the ADC on the
 // midpoint. The voltage the ADC sees follows whatever the expander is driving, as on the board.
 class FakeGypsumBoard final : public hal::ScriptedI2cDevice, public hal::IAnalogInput {
  public:
@@ -663,7 +663,7 @@ class FakeGypsumBoard final : public hal::ScriptedI2cDevice, public hal::IAnalog
     uint8_t value;
   };
   std::vector<Write> writes;
-  uint8_t iodir{0xFF};  // MCP23008 power-on: every pin an input
+  uint8_t iodir{0xFF};  // MCP23017 power-on: every pin an input
   uint8_t olat{0x00};
   bool farEndOpen{false};
 
@@ -671,6 +671,12 @@ class FakeGypsumBoard final : public hal::ScriptedI2cDevice, public hal::IAnalog
   float ref_;
   float block_;
 };
+
+void test_pilot_gypsum_ac_uses_the_mcp23017_register_map() {
+  // IODIRA and OLATA with IOCON.BANK = 0. 0x0A would be IOCON on this part.
+  TEST_ASSERT_EQUAL_HEX8(0x00, GypsumAcDriver::kRegIodir);
+  TEST_ASSERT_EQUAL_HEX8(0x14, GypsumAcDriver::kRegOlat);
+}
 
 void test_pilot_gypsum_ac_latches_low_before_enabling_outputs() {
   hal::ScriptedI2cBus bus;
@@ -780,6 +786,7 @@ void registerPilotSensorTests() {
   RUN_TEST(test_pilot_rtc_calendar_conversion_round_trips);
   RUN_TEST(test_pilot_rtc_write_then_read_and_the_stop_flag);
   RUN_TEST(test_pilot_rtc_refuses_an_impossible_date);
+  RUN_TEST(test_pilot_gypsum_ac_uses_the_mcp23017_register_map);
   RUN_TEST(test_pilot_gypsum_ac_latches_low_before_enabling_outputs);
   RUN_TEST(test_pilot_gypsum_ac_matches_the_dc_reading_with_zero_net_current);
   RUN_TEST(test_pilot_gypsum_ac_refuses_an_undriven_end_and_a_missing_expander);
