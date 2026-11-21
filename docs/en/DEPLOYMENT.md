@@ -135,6 +135,7 @@ Three secrets, and conflating any two of them removes a separation you want:
 |---|---|---|
 | `CAUCE_SYNC_TOKEN` | Nodes authenticate to `/v1/sync`. Shared | Sync is open, which is the pre-auth behaviour |
 | `CAUCE_API_TOKEN` | The admin API. Shared | Every write answers `503 admin_api_not_configured` |
+| `CAUCE_DASHBOARD_PUBLIC` | `1` leaves the HTML pages open while `CAUCE_API_TOKEN` is set | The pages ask for the token (HTTP Basic, token as password) |
 | `CAUCE_CA_KEY` | An Ed25519 **seed** that signs node certificates | The three certificate endpoints answer `503 certificate_authority_not_configured` |
 
 `CAUCE_CA_KEY` is a 32-byte seed in hex, and it is deliberately **not** the same value as

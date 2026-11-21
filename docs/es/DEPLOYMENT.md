@@ -117,6 +117,7 @@ que quieres conservar:
 |---|---|---|
 | `CAUCE_SYNC_TOKEN` | Autentican a los nodos en `/v1/sync`. Compartido | El sync queda abierto, que es el comportamiento previo a la autenticación |
 | `CAUCE_API_TOKEN` | La API de administración. Compartido | Toda escritura responde `503 admin_api_not_configured` |
+| `CAUCE_DASHBOARD_PUBLIC` | `1` deja abiertas las páginas HTML aunque `CAUCE_API_TOKEN` esté definido | Las páginas piden el token (HTTP Basic, el token como contraseña) |
 | `CAUCE_CA_KEY` | Una **semilla** Ed25519 que firma certificados de nodo | Los tres endpoints de certificados responden `503 certificate_authority_not_configured` |
 
 `CAUCE_CA_KEY` es una semilla de 32 bytes en hex, y deliberadamente **no** es el mismo

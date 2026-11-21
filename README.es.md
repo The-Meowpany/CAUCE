@@ -26,11 +26,11 @@ comparable con la incertidumbre a la vista, no meteorología oficial.
 
 ```powershell
 cd firmware
-pio test -e native          # 563 tests en host (Unity)
+pio test -e native          # 569 tests en host (Unity)
 pio run -e esp32dev         # build ESP32
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 840 tests
+python -m pytest tests -q   # 853 tests
 ..\scripts\run-e2e.ps1      # nodo C++ ↔ FastAPI ↔ SQLite (3 fases)
 ..\scripts\verify-all.ps1   # todo lo anterior en un gate
 ```
@@ -58,11 +58,11 @@ El central se comporta igual, con una excepción deliberada. Sin
 admin_api_not_configured`: no hay credencial que verificar, y permitirla
 dejaría el puerto abierto a cualquiera que llegue. Las lecturas siguen
 abiertas para que el dashboard funcione en una LAN de confianza; definir
-el token cierra también las lecturas de la API `/v1`. Las páginas HTML
-del dashboard (`/`, `/map`, `/compare`, `/system`, las páginas de nodo)
-y `/v1/live` siguen abiertas incluso así, de modo que una central con
-token no es privada: mantenerla en una red de confianza o detrás de la
-autenticación del proxy inverso. Generar uno con:
+el token las cierra también, dashboard HTML incluido: el navegador pide
+una contraseña, y el token es esa contraseña (HTTP Basic; el usuario se
+ignora). Un token acotado por sitio ve los nodos de su sitio.
+`CAUCE_DASHBOARD_PUBLIC=1` deja las páginas abiertas para una pantalla
+de pared mientras la API sigue cerrada. Generar uno con:
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -162,7 +162,7 @@ docs/en/ + docs/es/     espejos inglés/español (índice abajo)
 
 ## Estado
 
-563 firmware + 840 backend tests + build ESP32 + E2E = **1403 chequeos
+569 firmware + 853 backend tests + build ESP32 + E2E = **1422 chequeos
 automatizados en verde**. Qué existe y qué no: [STATUS.md](STATUS.md)
 (inglés).
 

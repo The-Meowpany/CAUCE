@@ -41,11 +41,16 @@ What we actually do today, and what we openly don't.
   because the dashboard is meant to be reachable on a trusted LAN.
   Setting the token closes the `/v1` API reads as well. This is the one
   asymmetry, and it is deliberate — see `backend/cauce_server/security.py`.
-  **The HTML dashboard is not behind the token.** Its pages and
-  `/v1/live` render every node's readings to anyone who can reach the
-  port, so site-scoped tokens confine the API, not the dashboard. A
-  deployment that needs the data private puts authentication in the
-  reverse proxy in front of the central.
+  **The HTML dashboard is behind the same token.** A browser cannot
+  send a bearer header, so the pages answer an HTTP Basic challenge
+  and take the token as the password; the same credential then reaches
+  the `/v1` reads the pages make. On a write it is honoured only with
+  `X-Requested-With`, which a cross-site form cannot set and a
+  cross-site script cannot send without a CORS preflight this server
+  never answers, because a browser repeats a Basic credential on
+  cross-site requests too. A site-scoped token opens its own nodes and
+  a filtered index, and is refused on the fleet-wide pages.
+  `CAUCE_DASHBOARD_PUBLIC=1` reopens the pages, never the API.
 - **Node-supplied names are constrained, and the dashboard's script
   blocks are escaped for their context.** `variable` and `sensor_id`
   are stored verbatim, so they are restricted to `[A-Za-z0-9_.-]`, and

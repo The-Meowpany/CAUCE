@@ -64,8 +64,27 @@ url, totalSize}` o false. El backend central lo sirve vía
 `GET /v1/ota/manifest` desde un archivo JSON de releases
 (`CAUCE_OTA_RELEASES`): `{version, sha256, url, total_size}` más un
 `hmac` por nodo cuando `node_id` es de un dispositivo provisionado
-(HMAC sobre `version|url|total_size` con la device key). Sin archivo de
-releases el endpoint responde 404 y los nodos se quedan quietos.
+(HMAC sobre `version|sha256|url|total_size` con la manifest key), y la
+`ed25519_signature` que `backend/tools/sign_release.py` escribió en el
+archivo, reenviada tal cual. Sin archivo de releases el endpoint
+responde 404 y los nodos se quedan quietos; un release cuyos campos no
+caben en el parser del nodo (versión de más de 15 caracteres, URL de
+más de 127) responde 503.
+
+### Clave de release y su rotación
+
+Un nodo con `ota_public_key` acepta solo releases firmados por la clave de release offline y
+rechaza manifiestos con solo HMAC. Para reemplazar esa clave sin un período en que los nodos
+rechacen todo release:
+
+1. `python tools/sign_release.py keygen --out release-key-2.json` en la máquina offline.
+2. Poner la clave impresa en `ota_public_key_next` de cada nodo. Los nodos aceptan cualquiera de
+   las dos.
+3. Firmar los releases nuevos solo con la clave nueva.
+4. Cuando todos los nodos la tengan, pasar la clave nueva a `ota_public_key`, vaciar
+   `ota_public_key_next` y destruir el archivo de la clave vieja.
+
+Los archivos de clave nunca van a la central ni a una máquina que sirva releases.
 
 Del lado del nodo, `Esp32ManifestSource` hace fetch a esa URL (con
 `?node_id=`) y la parsea con `parseOtaManifestJson` sin dependencias —

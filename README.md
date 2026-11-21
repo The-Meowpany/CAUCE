@@ -26,11 +26,11 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 563 host tests (Unity)
+pio test -e native          # 569 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
-python -m pytest tests -q   # 840 tests
+python -m pytest tests -q   # 853 tests
 ..\scripts\run-e2e.ps1      # C++ node → FastAPI → SQLite (3 phases)
 ..\scripts\verify-all.ps1   # everything above in one gate
 ```
@@ -59,10 +59,10 @@ The central behaves the same way, with one deliberate exception.
 admin_api_not_configured`, because there is no credential to check and
 allowing it would leave the port open to anyone who can reach it. Reads
 stay open so the dashboard works on a trusted LAN; setting the token
-closes the `/v1` API reads too. The HTML dashboard pages (`/`, `/map`,
-`/compare`, `/system`, the node pages) and `/v1/live` stay open even
-then, so a central with the token set is still not private: keep it on
-a trusted network or behind the reverse proxy's own authentication. Generate one with:
+closes them too, the HTML dashboard included: the browser asks for a
+password, and the token is it (HTTP Basic; the user name is ignored). A
+site-scoped token sees its own site's nodes. `CAUCE_DASHBOARD_PUBLIC=1`
+keeps the pages open for a wall screen while the API stays closed. Generate one with:
 
 ```powershell
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -159,7 +159,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-563 firmware + 840 backend tests + ESP32 build + E2E = **1403 automated
+569 firmware + 853 backend tests + ESP32 build + E2E = **1422 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).

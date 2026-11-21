@@ -3,9 +3,14 @@
 This document is the source of truth about what is implemented and what is
 not. It overrides any aspirational claim elsewhere.
 
-## Implemented and verified (563 firmware + 840 backend tests, E2E green)
+## Implemented and verified (569 firmware + 853 backend tests, E2E green)
 | Component | Evidence |
 |---|---|
+| **Dashboard behind the token**: with `CAUCE_API_TOKEN` set, every HTML page and `/v1/live` answer an HTTP Basic challenge and take the token as the password; a site-scoped token sees a filtered index and its own nodes and is refused on fleet-wide pages; `CAUCE_DASHBOARD_PUBLIC=1` reopens the pages only. A Basic credential authorises a write only with `X-Requested-With`, so the browser repeating it cross-site cannot be used for CSRF. The alerts page could not write at all with a token set, because its `fetch` calls sent no credential; it now can | 7 tests in `test_dashboard_auth.py` |
+| **Peer credential revocation**: retiring a node queues `revoke_peer` for the rest of its site, carrying the expiry of its last certificate and living until then; nodes refuse every credential of that id expiring by that date, also drop a `peer_keys` line for it, persist the list in `/state/peer_revoked`, skip the signature check for a revoked announcement, and let entries lapse once nothing can match them. A re-provisioned node is trusted again on its later credential | 4 firmware tests, 2 backend tests |
+| **Peer records on the microSD**: the archive copies records merged from neighbours to `/archive/peers-YYYY-MM-DD.csv` after its own, with per-neighbour watermarks on the card and no gap accounting for them | 1 firmware test |
+| **Release-key rotation**: `ota_public_key_next` is accepted alongside `ota_public_key`; the four-step procedure is in `OTA.md` | 1 firmware test |
+| **Uncertainty on aggregated means**: `mean_stderr` and `mean_ci95` on every aggregated summary, the larger of s/√n and the between-bucket estimate. Fixed along the way: a negative calibration scale swapped min and max but left the percentiles in the wrong order | 4 backend tests |
 | **Audit fixes**: the ESP-NOW known-peer table was written by the Wi-Fi receive callback and read by `loop()` with no lock, so a 120-byte peer credential could be copied out torn, and an announcement arriving between the two reads of the clock made a fresh neighbour look 49 days stale; both now run under one spinlock with a signed age. `sign_release.py` signed releases no node can parse (URL over 127 characters, version over 15) and wrote the release key before restricting it to 0600; it now refuses those releases and creates the key exclusively with 0600, and the central answers `503 ota_manifest_exceeds_node_limits` instead of serving one. The full-config buffer test now fills every string field, not only the certificate | 8 backend tests; the full-config test; the peer-table lock is ESP32-only and cross-compiled |
 | **Ed25519 release key for OTA**: with `ota_public_key` set, a node requires an Ed25519 signature by an offline release key over `version|sha256|url|totalSize` and refuses an HMAC-only manifest; `tools/sign_release.py` generates the key and signs release files, and the central only forwards `ed25519_signature`, so it can serve firmware but not authorise it | 4 firmware tests in `test_ota.cpp` against a signature made by `cryptography` (RFC 8032 TEST 1 key), 3 backend tests |
 | **CA-vouched neighbours**: a 120-byte peer credential (node id, Ed25519 public key, expiry, CA signature under `cauce-peer-v1`) is returned with every issued certificate, broadcast in the ESP-NOW announcement, verified once per neighbour and added to the keyring until it expires; `peer_keys` still works and a listed key wins | 4 firmware tests in `test_peer_driver.cpp` and 3 backend tests sharing one known-answer credential, so issuer and verifier cannot drift |
@@ -123,14 +128,8 @@ not. It overrides any aspirational claim elsewhere.
 
 ## Not implemented yet
 
-- Authentication on the HTML dashboard. The `/v1` API honours the token and site scoping, but
-  `/`, `/map`, `/compare`, `/system`, the node pages and `/v1/live` render every node to anyone
-  who can reach the port. Until they are gated, privacy depends on the network or the reverse
-  proxy, and a site-scoped operator can still see other sites there.
-- Archiving records merged from peers. The archive keeps this node's own records; peer records
-  stay in LittleFS and are archived by the node that measured them.
-- Revoking a peer credential before it expires. A retired node's credential stays trusted by
-  its neighbours until its `not_after`; the CA has no revocation list the nodes fetch.
+- Per-user accounts on the dashboard. It is gated by tokens, which the operator issues and
+  rotates; there are no named logins or sessions.
 
 - Volumetric 3D viewer: discarded by design decision - the central keeps
   the dependency-free 2D schematic SVG map with IDW field and shared-scale

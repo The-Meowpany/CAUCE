@@ -126,11 +126,11 @@ The old seed is dead. Do not reuse it.
 
 **Recognise it:** the central keeps offering it; the node never acknowledges.
 
-**Check:** `request_resync`, `set_sampling_interval`, `set_sync_interval` and
-`set_led_mode` are the implemented kinds. Anything else is reported as an unknown
+**Check:** `request_resync`, `set_sampling_interval`, `set_sync_interval`,
+`set_led_mode` and `revoke_peer` are the implemented kinds. Anything else is reported as an unknown
 kind and will never be acknowledged — that is the central's bug, not the node's.
 
-For the four real ones, the refusal reason is in the receipt detail:
+For the five real ones, the refusal reason is in the receipt detail:
 
 | detail | meaning |
 |---|---|

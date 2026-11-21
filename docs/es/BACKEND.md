@@ -39,7 +39,7 @@ PostgreSQL, la migración está acotada a `db.py` y a ningún otro lado.
 | PUT | `/v1/sites/{id}/location` | Setear coordenadas del sitio (lat/lon validados) |
 | POST/GET/DELETE | `/v1/alerts/rules` · PATCH `/v1/alerts/rules/{id}` · GET `/v1/alerts/log` · POST+GET `/v1/alerts/check` | Reglas de umbral/silencio (webhook/Telegram, inputs validados, toggle), historial con intentos, pasada manual + reenvío |
 | POST/GET | `/v1/interventions` | Registro de intervenciones (`end_before_start`→422) |
-| GET | `/v1/analytics/summary` | Stats descriptivos por nodo+variable; `granularity=auto|raw|15min|hourly|daily` elige entre filas crudas y los buckets materializados |
+| GET | `/v1/analytics/summary` | Stats descriptivos por nodo+variable; `granularity=auto|raw|15min|hourly|daily` elige entre filas crudas y los buckets materializados; las respuestas agregadas traen `mean_stderr` y `mean_ci95`, tomados de la dispersión de las medias por bucket cuando es mayor que s/√n, porque lecturas consecutivas no son independientes |
 | GET | `/v1/analytics/compare` | Dos nodos lado a lado + diferencia media |
 | GET | `/v1/analytics/before-after` | Corte pre/post por ventana de intervención; avisa bajo 30 muestras por período; con sitios control devuelve `control_group.difference_in_differences` |
 | GET | `/v1/analytics/period-compare` | Mismo nodo, dos ventanas |
@@ -132,11 +132,14 @@ El nodo responde con `command_receipts` en su siguiente lote. Un acuse para el
 comando de otro nodo, o para un comando que no existe, se cuenta y se ignora:
 el nodo es un par autenticado pero no es autoridad sobre el comando de otro.
 
-Los tipos son pocos y sin efectos secundarios a propósito:
-`set_sampling_interval`, `set_sync_interval`, `request_resync`, `set_led_mode`.
-El nodo que va en el repo valida sus argumentos y responde; no se reconfigura a
-sí mismo desde el campo. La actuación real viene con hardware que se pueda
-actuar.
+Los tipos son pocos y se pueden repetir sin riesgo:
+`set_sampling_interval`, `set_sync_interval`, `request_resync`, `set_led_mode`
+y `revoke_peer`. El nodo los aplica dentro de sus límites, los guarda tras un
+reinicio y reporta el valor aplicado. `revoke_peer` lo encola la propia central
+al retirar un nodo: a cada otro nodo de su sitio se le indica dejar de confiar
+en la credencial de vecino del nodo retirado (`{"node_id", "not_after_ms"}`, el
+vencimiento de su último certificado), y el comando vive hasta ese
+vencimiento. Actuar hardware físico no está entre ellos.
 
 
 ## Calibración

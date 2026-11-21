@@ -126,11 +126,11 @@ La semilla vieja está muerta. No reutilizarla.
 
 **Reconocerlo:** el central lo sigue ofreciendo y el nodo nunca acusa recibo.
 
-**Comprobar:** `request_resync`, `set_sampling_interval`, `set_sync_interval` y
-`set_led_mode` son las clases implementadas. Cualquier otra se reporta como clase
+**Comprobar:** `request_resync`, `set_sampling_interval`, `set_sync_interval`,
+`set_led_mode` y `revoke_peer` son las clases implementadas. Cualquier otra se reporta como clase
 desconocida y nunca será acusada — eso es un error del central, no del nodo.
 
-Para las cuatro reales, el motivo del rechazo está en el detalle del recibo:
+Para las cinco reales, el motivo del rechazo está en el detalle del recibo:
 
 | detalle | significado |
 |---|---|

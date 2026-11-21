@@ -41,12 +41,18 @@ Lo que realmente hacemos hoy, y lo que abiertamente no.
   lecturas siguen abiertas, porque el dashboard tiene que ser alcanzable
   en una LAN de confianza. Definir el token cierra también las
   lecturas de la API `/v1`. Esta es la única asimetría, y es deliberada —
-  ver `backend/cauce_server/security.py`. **El dashboard HTML no está
-  detrás del token.** Sus páginas y `/v1/live` muestran las lecturas de
-  todos los nodos a quien llegue al puerto, así que los tokens acotados
-  por sitio limitan la API, no el dashboard. Un despliegue que necesite
-  los datos privados pone autenticación en el proxy inverso delante de
-  la central.
+  ver `backend/cauce_server/security.py`. **El dashboard HTML queda
+  detrás del mismo token.** Un navegador no puede mandar una cabecera
+  bearer, así que las páginas responden con un desafío HTTP Basic y
+  toman el token como contraseña; esa misma credencial llega luego a
+  las lecturas `/v1` que hacen las páginas. En una escritura solo vale
+  con `X-Requested-With`, que un formulario de otro sitio no puede
+  poner y un script de otro sitio no puede mandar sin un preflight CORS
+  que este servidor nunca responde, porque el navegador repite una
+  credencial Basic también en peticiones de otros sitios. Un token
+  acotado por sitio abre sus nodos y un índice filtrado, y se rechaza
+  en las páginas de toda la flota. `CAUCE_DASHBOARD_PUBLIC=1` vuelve a
+  abrir las páginas, nunca la API.
 - **Los nombres que manda un nodo están restringidos, y los bloques de
   script del dashboard van escapados para su contexto.** `variable` y
   `sensor_id` se guardan tal cual, así que se limitan a

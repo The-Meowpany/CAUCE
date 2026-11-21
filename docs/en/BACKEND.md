@@ -39,7 +39,7 @@ PostgreSQL, the migration is scoped to `db.py` and nowhere else.
 | PUT | `/v1/sites/{id}/location` | Set site coordinates (validated lat/lon) |
 | POST/GET/DELETE | `/v1/alerts/rules` · PATCH `/v1/alerts/rules/{id}` · GET `/v1/alerts/log` · POST+GET `/v1/alerts/check` | Threshold/stale rules (webhook/Telegram, validated inputs, enable toggle), delivery log with attempts, manual stale pass + pending redelivery |
 | POST/GET | `/v1/interventions` | Intervention registry (`end_before_start`→422) |
-| GET | `/v1/analytics/summary` | Descriptive stats per node+variable; `granularity=auto|raw|15min|hourly|daily` switches between raw rows and the materialized buckets |
+| GET | `/v1/analytics/summary` | Descriptive stats per node+variable; `granularity=auto|raw|15min|hourly|daily` switches between raw rows and the materialized buckets; aggregated answers carry `mean_stderr` and `mean_ci95`, taken from the spread of the bucket means when that is larger than s/√n, because consecutive readings are not independent |
 | GET | `/v1/analytics/compare` | Two nodes side by side + mean difference |
 | GET | `/v1/analytics/before-after` | Pre/post split by intervention window; warns under 30 samples per period; with control sites it also returns `control_group.difference_in_differences` |
 | GET | `/v1/analytics/period-compare` | Same node, two windows |
@@ -132,10 +132,14 @@ another node's command, or for a command that does not exist, is counted
 and ignored: the node is an authenticated peer but not an authority on
 someone else's command.
 
-Kinds are deliberately small and side-effect free: `set_sampling_interval`,
-`set_sync_interval`, `request_resync`, `set_led_mode`. The shipped node
-validates their arguments and reports back; it does not reconfigure itself
-from the field. Actuation belongs with hardware that can be actuated.
+Kinds are deliberately small and safe to repeat: `set_sampling_interval`,
+`set_sync_interval`, `request_resync`, `set_led_mode` and `revoke_peer`. The
+node applies them within bounds, persists them across a reboot and reports
+the value it applied. `revoke_peer` is queued by the central itself when a
+node is retired: every other node of its site is told to stop trusting the
+retired node's peer credential (`{"node_id", "not_after_ms"}`, the expiry of
+its last certificate), and the command lives until that expiry. Actuating
+physical hardware is not among them.
 
 
 ## Calibration

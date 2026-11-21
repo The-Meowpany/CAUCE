@@ -140,7 +140,13 @@ en `peer_keys`, o si su anuncio trae una credencial firmada por la CA fijada en 
 nodo con ese mismo nombre. Volver a sembrar un nodo pasa a ser emitirle un certificado nuevo, no
 editar a cada vecino; una credencial vencida deja de valer en cuanto el reloj es válido.
 `tools/provision.py` sigue imprimiendo la línea `peer_keys` de un lote, y una clave listada
-siempre gana sobre una avalada. Cada
+siempre gana sobre una avalada. Retirar un nodo en la central envía `revoke_peer` al resto de su
+sitio; cada nodo rechaza entonces toda credencial del id retirado que venza hasta la fecha
+recibida, guarda esa lista en `/state/peer_revoked` entre reinicios y la descarta cuando ninguna
+credencial así puede seguir vigente. Un nodo re-aprovisionado después vuelve a ser de confianza
+con su credencial nueva. Con el archivo en microSD activo, los registros que un nodo guarda de sus
+vecinos se copian a `/archive/peers-AAAA-MM-DD.csv`, aparte de sus propios archivos, así un
+vecino que se rompe deja en una tarjeta una copia de lo que compartió. Cada
 ronda (`peer_interval_s`, 60 s) ofrece dos registros propios a cada vecino. Los registros de
 vecinos quedan en LittleFS: el nodo que solo los guarda nunca los sincroniza ni los archiva.
 

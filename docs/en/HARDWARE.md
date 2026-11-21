@@ -133,7 +133,13 @@ sender is trusted and every record in it is the sender's own. A sender is truste
 `peer_credential` when the central issues the node's certificate and set in the node's config
 under the same name. Reseeding a node then means issuing it a new certificate, not editing every
 neighbour; an expired credential stops being trusted once the clock is valid. `tools/provision.py`
-still prints the `peer_keys` line for a batch, and a listed key always wins over a vouched one. One
+still prints the `peer_keys` line for a batch, and a listed key always wins over a vouched one.
+Retiring a node at the central sends `revoke_peer` to the rest of its site; each node then refuses
+every credential of the retired id that expires by the date it was given, keeps that list in
+`/state/peer_revoked` across reboots, and drops it once no such credential can still be valid. A
+node re-provisioned later is trusted again on its new credential. With the microSD archive on,
+the records a node holds for its neighbours are copied to `/archive/peers-YYYY-MM-DD.csv`, apart
+from its own files, so a neighbour that dies leaves a copy of what it shared on a card. One
 round per `peer_interval_s` (60 s) offers two of this node's records to each neighbour. Peer
 records stay in LittleFS: they are never synced or archived by the node that merely holds them.
 
