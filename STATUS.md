@@ -460,11 +460,13 @@ so, and says under what threat model it is acceptable.
 ladder test and the projective doubling test stay in the tree, unregistered, with
 their outputs above.
 
-### C1 - peer-to-peer exchange (merge DONE, transport NOT)
+### C1 - peer-to-peer exchange (merge and driver DONE, exchange loop NOT)
 
-`mDNS` discovery, `ESP-NOW` transport, node-to-node replication and CRDT merge
-do not exist. This is greenfield rather than a fix, and the thesis treats it as
-proposed evolution. It has no dependency on C2.
+The sequence-based merge, per-peer watermarks and the ESP-NOW driver exist and are
+host-tested; discovery answers a broadcast announcement, and mDNS is not used. No CRDT is
+needed, because every record has a single producer. What does not exist is the exchange
+loop: `main.cpp` constructs `Esp32PeerExchange` and nothing drives it (row 12x). The thesis
+now says exactly this instead of calling the whole subsystem future work.
 
 ### Phases 0-6 to a frozen release
 
