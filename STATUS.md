@@ -137,7 +137,9 @@ not. It overrides any aspirational claim elsewhere.
 - Calibration **uncertainty**: records can carry an absolute uncertainty and
   the kind it came from, and it scales with the correction, so a report can
   separate measurement from method. There is still no metrological traceability:
-  the reference is another node, and the chain ends at a sensor datasheet.
+  the reference is another node, and the chain ends at a sensor datasheet. The
+  pilot budget (v4) assigns the unspent contingency to a traceable calibration of
+  the bench reference once the node purchase closes; until then this stands.
 - Coverage accounting caps a window at **730 days** (`MAX_WINDOW_MS` in `coverage.py`), and
   separately at `MAX_BUCKETS` samples implied by the window and the expected interval. The
   bucket cap is the one that does the work: two years of hourly data is 17,520 buckets and

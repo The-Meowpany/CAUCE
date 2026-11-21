@@ -112,14 +112,26 @@ Total USD 256,14.
 | 8 estaciones completas | 2.049,12 |
 | Gateway LoRa punto a punto (ESP32 + SX1276) | 60,00 |
 | Servidor central | 90,00 |
-| Herramientas, fabricación y banco de pruebas | 603,00 |
+| Herramientas, fabricación y banco de pruebas | 501,00 |
 | Calibración y co-localización | 30,00 |
 | Talleres y jornadas educativas | 480,00 |
 | Instalación y logística local | 140,00 |
 | Transporte internacional e importación (provisión) | 400,00 |
 | Repuestos críticos | 78,11 |
-| Contingencia | 69,77 |
+| Contingencia de doble propósito | 171,77 |
 | **Total** | **4.000,00** |
+
+La contingencia (4,3 %) tiene dos usos, en orden. Hasta cerrar la etapa 4
+(los ocho nodos comprados e importados) cubre lo que termine costando más de
+lo previsto: diferencias de precio o de tipo de cambio, importación por encima
+de la provisión, el AS3935 de DFRobot si el genérico no pasa la prueba de
+muestras, una antena para un sitio al que no llega el gateway, componentes
+fallidos más allá de los repuestos. Lo que quede financia entonces, antes de
+la co-localización, la calibración trazable del instrumento de referencia del
+banco (o una referencia certificada si no se consigue una en préstamo), que es
+lo que convierte la co-localización de consistencia relativa en sesgo
+absoluto; después, un segundo SPS30 de repuesto. Se financia imprimiendo con
+una Bambu Lab A1 mini (USD 271) en lugar de la A1, que hoy cuesta USD 441.
 
 La provisión de importación cubre un costo efectivo de hasta ~30 % sobre
 unos USD 1.368 de mercadería importada; el documento de presupuesto

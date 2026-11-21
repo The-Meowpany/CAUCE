@@ -503,7 +503,8 @@ on the node, which is why they reappear here as the first two items.
 9. **Analytics**: 15-minute, hourly and daily aggregates with
    `granularity=auto`, a bucketed series endpoint and a standard error on
    aggregated means ship; what remains is metrological traceability, which a
-   reference instrument provides and software cannot.
+   reference instrument provides and software cannot. The pilot budget funds it
+   from the unspent contingency once the node purchase closes.
 10. **Actuators**: the idempotent command channel with confirmation and the
     compact LoRa carrier ship; what remains is the actuation handlers, which
     should stay validation-only until there is hardware whose actuation is safe

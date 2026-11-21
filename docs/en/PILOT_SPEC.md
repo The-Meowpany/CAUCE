@@ -110,14 +110,25 @@ Total USD 256.14.
 | 8 complete stations | 2,049.12 |
 | LoRa point-to-point gateway (ESP32 + SX1276) | 60.00 |
 | Central server | 90.00 |
-| Tools, fabrication and bench rig | 603.00 |
+| Tools, fabrication and bench rig | 501.00 |
 | Calibration and co-location | 30.00 |
 | Workshops and educational sessions | 480.00 |
 | Installation and local logistics | 140.00 |
 | International transport and import (provision) | 400.00 |
 | Critical spares | 78.11 |
-| Contingency | 69.77 |
+| Contingency, dual purpose | 171.77 |
 | **Total** | **4,000.00** |
+
+The contingency (4.3 %) has two uses, in order. Until stage 4 closes (all
+eight nodes bought and imported) it covers what ends up costing more than
+planned: price or exchange-rate differences, import above the provision,
+the DFRobot AS3935 if the generic one fails its sample test, an antenna for
+a site the gateway cannot reach, failed parts beyond the spares. Whatever is
+left then funds, before co-location, a traceable calibration of the bench
+reference instrument (or a certified reference if none is lent), which is
+what turns co-location from relative consistency into absolute bias; then a
+second SPS30 spare. It is funded by printing on a Bambu Lab A1 mini (USD 271)
+instead of the A1, which now costs USD 441.
 
 The import provision covers an effective cost of up to ~30 % on roughly
 USD 1,368 of imported goods; the budget document lists the adjustment
