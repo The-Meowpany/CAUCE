@@ -88,7 +88,7 @@ covering the LoRa gaps.
 Pick 8 sites for environmental interest, survey gateway height and
 antenna, deploy 1–2 gateways. Everything feeds one database. Add
 ChirpStack, backups, and an HTTPS reverse proxy per `DEPLOYMENT.md`.
-One prototype through 6 acceptance tests before any ×8 purchase.
+One prototype through 6 acceptance tests before buying in quantity.
 
 Done means: one database, a coverage map from real link logs, and an
 ops runbook that isn't fiction.

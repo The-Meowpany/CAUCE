@@ -6,7 +6,7 @@
 scripted buses (I2C, UART, ADC, 1-Wire) and the firmware cross-compiles for the ESP32, but none
 of it has been on a board. Datasheet figures are the manufacturers', not ours.
 
-## Pilot station (8 identical nodes)
+## Pilot station (5 identical nodes)
 
 Every sensor is optional and **off by default**: a probe is enabled with its config key only
 where it is fitted, and a node missing one keeps measuring everything else. A probe that is
@@ -27,7 +27,7 @@ enabled but does not answer at boot is logged as `SENSOR_ABSENT` and skipped.
 | soil_moisture | capacitive probe | ADC GPIO35 | `soil_moisture_enabled` | `AnalogSensorDriver` |
 | leaf_wetness | resistive/capacitive grid | ADC GPIO32 | `leaf_wetness_enabled` | `AnalogSensorDriver` |
 | solar_irradiance (relative) | BPW34 + transimpedance stage | ADC GPIO39 | `irradiance_enabled` | `AnalogSensorDriver` |
-| soil_water_potential | gypsum block + 10k reference | ADC GPIO33; ends driven by MCP23008 GP0/GP1 at I2C 0x20 when `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) or `AnalogSensorDriver` (DC) |
+| soil_water_potential | gypsum block + 10k reference | ADC GPIO33; ends driven by MCP23017 GPA0/GPA1 at I2C 0x20 when `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) or `AnalogSensorDriver` (DC) |
 | battery_voltage | resistor divider | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (clock) | DS3231 RTC | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
 | (archive) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
@@ -37,11 +37,11 @@ Notes that change how the numbers may be read:
 
 - **The gypsum block** is read with alternating polarity when `soil_potential_ac=1`. Read as a
   DC divider, current flows through the block the same way on every sample, which polarises it
-  and drifts the reading over a season. With the expander, GP0 drives the 10k reference end and
-  GP1 the far end of the block; each read is one conversion in each direction followed by both
+  and drifts the reading over a season. With the expander, GPA0 drives the 10k reference end and
+  GPA1 the far end of the block; each read is one conversion in each direction followed by both
   ends low, so the net charge is zero. The two conversions are folded back into the millivolts
   the DC divider would have read, so `soil_potential_kpa_per_mv` and `soil_potential_offset_kpa`
-  keep their meaning and a fit made on a DC node still applies. The MCP23008 (address pins to
+  keep their meaning and a fit made on a DC node still applies. The MCP23017 (address pins to
   ground) is used because the push-pull outputs can source the divider current; a PCF8574's weak
   high side cannot. A read whose two halves do not add up to the supply is refused rather than
   reported, because that is what an undriven end looks like.
@@ -173,13 +173,13 @@ this table lists the parts and the reason for each choice.
 | CO2 | MH-Z19C | NDIR, not an estimate |
 | UV | VEML6075 | separate UVA and UVB channels |
 | Light / irradiance | BH1750 + BPW34 | lux and relative W/m2 are different quantities |
-| Wind / rain | cup anemometer, vane, tipping bucket | one kit, validated on one node before buying seven |
-| Soil | capacitive probe, gypsum block, DS18B20 | moisture, suction and temperature |
+| Wind / rain | Misol cup anemometer, vane, tipping bucket | one kit, validated on the prototype before buying the rest |
+| Soil | capacitive probe, hand-made gypsum block, DS18B20 | moisture, suction and temperature |
 | Leaf wetness | grid sensor | |
 | Lightning | AS3935 module | |
-| Clock / archive | DS3231, microSD 16 GB high-endurance | trustworthy time offline; CSV history beside LittleFS |
-| Power | 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse, TVS | |
-| Mechanics | IP65 box, printed PETG radiation shield, mast | same shield and height on every node |
+| Clock / archive | DS3231, microSD 32 GB surveillance-grade | trustworthy time offline; CSV history beside LittleFS |
+| Power | 20 W panel, 12 V 7 Ah battery, PWM charge controller, DC-DC, fuse, TVS | |
+| Mechanics | weatherproof box, commercial ABS radiation shield, mast | same shield and height on every node |
 
 ## Storage
 

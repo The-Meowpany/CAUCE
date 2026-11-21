@@ -9,20 +9,20 @@ Anexo técnico. La solicitud del fondo lleva únicamente Meta y Resultado
 ambientales autónomas capaces de generar información hiperlocal y
 comparable sobre condiciones microclimáticas en Canelones.
 
-**Resultado:** ocho estaciones calibradas y operativas, generando
+**Resultado:** cinco estaciones calibradas y operativas, generando
 registros ambientales durante el período piloto.
 
 ## 2. Alcance congelado
 
-8 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
+5 nodos idénticos · 1 gateway · 1 carrier PCB CAUCE-Node · 1 protocolo
 de datos · 1 esquema de calibración · 1 sistema de almacenamiento local ·
 1 enlace LoRa punto a punto · 1 API central · 1 visor microclimático.
 
 Regla de oro: **el nodo nunca depende del gateway para medir.**
 
-Regla de compra: **ningún componente crítico se adquiere ×8 hasta que
-el prototipo supere la aceptación** (esto es sobre todo por el
-anemómetro: se compra uno, se valida, recién después los otros siete).
+Regla de compra: **ningún componente se compra en cantidad hasta que
+el prototipo supere la aceptación**: el prototipo es una estación
+entera, así que cada tipo de sensor se valida antes del lote.
 
 Cadena causal del proyecto:
 **medir → validar → calibrar → conservar → transmitir → comparar →
@@ -74,78 +74,68 @@ volumétrico 3D está descartado por decisión de diseño. Cualquier cosa
 más grandilocuente tiene que ganarse la redacción con densidad de nodos
 primero.
 
-## 4. Nodo (×8 idénticos)
+## 4. Nodo (×5 idénticos)
 
 ESP32-WROOM-32 + SX1276/RFM95W a 915 MHz (AU915, la banda de Uruguay) ·
 BME280 (temperatura, humedad, presión) · BH1750 (iluminancia — lux, no
 irradiancia solar) · fotodiodo BPW34 con etapa de transimpedancia
-(irradiancia solar relativa) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C
-(CO₂ NDIR, corrección automática de línea base apagada, cero en
-co-localización) · VEML6075 (índice UV con UVA y UVB separados) ·
-AS3935 (conteo y distancia de descargas) · anemómetro de cazoletas +
-veleta de resistencias + pluviómetro de balancín (un kit validado antes
-de comprar siete) · sonda capacitiva de humedad de suelo, bloque de yeso
-(potencial hídrico, leído con polaridad alterna mediante un expansor MCP23008) y DS18B20 (temperatura de suelo) · sensor de mojado
-foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · microSD
-16 GB high-endurance (archivo CSV) · panel 20 W, batería
-12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS · caja IP65 con
-prensaestopas · antena 915 MHz + pigtail · pantalla de radiación impresa
-en PETG + mástil (protocolo de instalación a 2 m, práctica OMM).
+(irradiancia solar relativa) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C (CO₂
+NDIR, corrección automática de línea base desactivada, cero en
+co-localización) · VEML6075 (índice UV con UVA y UVB separados) · AS3935
+(conteo y distancia de descargas) · anemómetro de cazoletas, veleta y
+pluviómetro de balancín Misol · sonda capacitiva de humedad de suelo,
+bloque de yeso artesanal (potencial hídrico, leído con polaridad alterna
+mediante un expansor MCP23017) y DS18B20 (temperatura de suelo) · placa de
+mojado foliar · DS3231 (±2 ppm; jerarquía NTP > DS3231 > interno) · tarjeta
+microSD 32 GB de videovigilancia (archivo CSV) · panel 20 W, batería 12 V
+7 Ah, controlador de carga PWM, DC-DC, fusible, TVS · caja estanca con
+prensaestopas · antena 915 MHz · escudo de radiación comercial de ABS +
+mástil (protocolo de instalación a 2 m, práctica OMM).
 
 Cada sensor tiene driver en el firmware y una clave de config que lo
 habilita; el mapa de pines está en `HARDWARE.md`. Los drivers están
 probados en host contra buses simulados y todavía no corrieron en placa.
 
-## 5. BOM prototipo ×1 (~USD 255)
+## 5. Costo por estación
 
-ESP32 3 · SX1276 + antena 7 · BME280 7 · SPS30 36,12 · MH-Z19C 24,99 ·
-VEML6075 6 · BH1750 1,50 · etapa BPW34 3 · kit viento/lluvia 34 · sondas
-de suelo 9 · expansor de excitación del yeso 1,50 · mojado foliar 3 · AS3935 12 · DS3231 3 · microSD 6 · panel
-28 · batería 27 · controlador de carga 7,64 · regulación y protección 5 ·
-caja 7,39 · pantalla impresa 4 · PCB y conectores 12 · mástil 8.
-Total USD 256,14.
+Precios consultados en Uruguay el 21/11/2026 (Mercado Libre Uruguay y
+AliExpress con envío a Uruguay), al tipo de cambio vendedor del BROU de
+$U 41,95, más una previsión del 10 % por variación de precios hasta la
+compra: USD 429,73 por estación, con el detalle en el documento de
+presupuesto. A ese precio ocho estaciones no entran en el presupuesto;
+cinco idénticas sí, con reserva.
 
 ## 6. Presupuesto (USD 4.000)
 
 | Concepto | USD |
 |---|---|
-| 8 estaciones completas | 2.049,12 |
-| Gateway LoRa punto a punto (ESP32 + SX1276) | 60,00 |
-| Servidor central | 90,00 |
-| Herramientas, fabricación y banco de pruebas | 501,00 |
+| 5 estaciones idénticas | 2.148,65 |
+| Gateway y servidor central | 252,22 |
+| Herramientas y banco de pruebas | 146,68 |
 | Calibración y co-localización | 30,00 |
-| Talleres y jornadas educativas | 480,00 |
-| Instalación y logística local | 140,00 |
-| Transporte internacional e importación (provisión) | 400,00 |
-| Repuestos críticos | 78,11 |
-| Contingencia de doble propósito | 171,77 |
+| Talleres y jornadas educativas | 479,27 |
+| Provisión de importación e instalación | 530,01 |
+| Repuestos críticos | 122,55 |
+| Contingencia de doble propósito | 290,62 |
 | **Total** | **4.000,00** |
 
-La contingencia (4,3 %) tiene dos usos, en orden. Hasta cerrar la etapa 4
-(los ocho nodos comprados e importados) cubre lo que termine costando más de
-lo previsto: diferencias de precio o de tipo de cambio, importación por encima
-de la provisión, el AS3935 de DFRobot si el genérico no pasa la prueba de
-muestras, una antena para un sitio al que no llega el gateway, componentes
-fallidos más allá de los repuestos. Lo que quede financia entonces, antes de
-la co-localización, la calibración trazable del instrumento de referencia del
-banco, propio del proyecto (o uno certificado si ese no admite certificación), que es
-lo que convierte la co-localización de consistencia relativa en sesgo
-absoluto; después, un segundo SPS30 de repuesto. Se financia imprimiendo con
-una Bambu Lab A1 mini (USD 271) en lugar de la A1, que hoy cuesta USD 441.
+La contingencia (7,3 %) tiene dos usos, en orden. Hasta cerrar la etapa 4
+(todo comprado e importado) cubre lo que termine costando más de lo
+previsto: precios por encima de la previsión, importación por encima de la
+provisión, una antena para un sitio al que no llega el gateway,
+componentes fallidos más allá de los repuestos. Lo que quede financia
+entonces, antes de la co-localización, la calibración trazable del
+instrumento de referencia del banco, propio del proyecto (o uno certificado
+si ese no admite certificación), que es lo que convierte la
+co-localización de consistencia relativa en sesgo absoluto; después, un
+segundo SPS30 de repuesto.
 
-Cerca de la mitad del presupuesto (USD 1.947) todavía descansa en
-estimaciones sin precio consultado, así que una contingencia ponderada por
-riesgo rondaría los USD 489. El documento de presupuesto la cubre por capas
-(la contingencia, la partida condicional de refrigerios y las palancas de
-ajuste) y exige cotizar sus cinco líneas estimadas de mayor peso (kit de
-viento y lluvia, batería, traslados de talleres e instalación, materiales
-didácticos) antes de la compra de la etapa 4.
-
-La provisión de importación cubre un costo efectivo de hasta ~30 % sobre
-unos USD 1.368 de mercadería importada; el documento de presupuesto
-lista las palancas de ajuste si la cifra real es mayor. Sin línea de
-intervenciones físicas: el proyecto genera evidencia para evaluar
-medidas, no las ejecuta.
+No hay impresora 3D: un escudo de radiación comercial cuesta menos que
+imprimirlo. No hay bloques de yeso comerciales disponibles, así que se
+fabrican en los talleres. La provisión de importación es el 35 % de lo
+comprado en el exterior (unos USD 1.114). Sin línea de intervenciones
+físicas: el proyecto genera evidencia para evaluar medidas, no las
+ejecuta.
 
 Lo que queda después: hardware, firmware, protocolo, datos, metodología
 de calibración, plataforma.

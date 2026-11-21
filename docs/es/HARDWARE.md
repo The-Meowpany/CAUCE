@@ -6,7 +6,7 @@
 contra buses simulados (I2C, UART, ADC, 1-Wire) y el firmware compila para ESP32, pero nada de
 esto estuvo todavía en una placa. Las cifras de datasheet son del fabricante, no nuestras.
 
-## Estación piloto (8 nodos idénticos)
+## Estación piloto (5 nodos idénticos)
 
 Todos los sensores son opcionales y están **apagados por defecto**: un sensor se habilita con
 su clave de config solo donde está instalado, y un nodo al que le falta uno sigue midiendo todo
@@ -28,7 +28,7 @@ lo demás. Un sensor habilitado que no responde al arrancar queda registrado com
 | soil_moisture | sonda capacitiva | ADC GPIO35 | `soil_moisture_enabled` | `AnalogSensorDriver` |
 | leaf_wetness | rejilla resistiva/capacitiva | ADC GPIO32 | `leaf_wetness_enabled` | `AnalogSensorDriver` |
 | solar_irradiance (relativa) | BPW34 + etapa de transimpedancia | ADC GPIO39 | `irradiance_enabled` | `AnalogSensorDriver` |
-| soil_water_potential | bloque de yeso + referencia 10k | ADC GPIO33; extremos manejados por GP0/GP1 de un MCP23008 en I2C 0x20 con `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) o `AnalogSensorDriver` (DC) |
+| soil_water_potential | bloque de yeso + referencia 10k | ADC GPIO33; extremos manejados por GPA0/GPA1 de un MCP23017 en I2C 0x20 con `soil_potential_ac=1` | `soil_potential_enabled`, `soil_potential_ac` | `GypsumAcDriver` (AC) o `AnalogSensorDriver` (DC) |
 | battery_voltage | divisor resistivo | ADC GPIO36 | `battery_monitor_enabled` | `AnalogSensorDriver` |
 | (reloj) | RTC DS3231 | I2C 0x68 | `rtc_enabled` | `Ds3231Rtc` |
 | (archivo) | microSD 16 GB high-endurance | VSPI, CS GPIO15 | `sd_archive_enabled` | `ArchiveManager` + `Esp32SdCard` |
@@ -38,12 +38,12 @@ Notas que cambian cómo se pueden leer los números:
 
 - **El bloque de yeso** se lee con polaridad alterna cuando `soil_potential_ac=1`. Leído como
   divisor en continua, la corriente atraviesa el bloque siempre en el mismo sentido, lo que lo
-  polariza y desplaza la lectura a lo largo de una temporada. Con el expansor, GP0 maneja el
-  extremo de la referencia de 10k y GP1 el extremo lejano del bloque; cada lectura es una
+  polariza y desplaza la lectura a lo largo de una temporada. Con el expansor, GPA0 maneja el
+  extremo de la referencia de 10k y GPA1 el extremo lejano del bloque; cada lectura es una
   conversión en cada sentido y luego ambos extremos en bajo, así la carga neta es cero. Las dos
   conversiones se vuelven a expresar en los milivoltios que habría leído el divisor en continua,
   por lo que `soil_potential_kpa_per_mv` y `soil_potential_offset_kpa` conservan su significado y
-  un ajuste hecho en un nodo DC sigue valiendo. Se usa el MCP23008 (pines de dirección a masa)
+  un ajuste hecho en un nodo DC sigue valiendo. Se usa el MCP23017 (pines de dirección a masa)
   porque sus salidas push-pull pueden entregar la corriente del divisor; el lado alto débil de un
   PCF8574 no puede. Una lectura cuyas dos mitades no suman la alimentación se rechaza en vez de
   informarse, porque así se ve un extremo sin manejar.
@@ -180,13 +180,13 @@ completa); esta tabla lista los componentes y el motivo de cada elección.
 | CO2 | MH-Z19C | NDIR, no una estimación |
 | UV | VEML6075 | canales UVA y UVB separados |
 | Luz / irradiancia | BH1750 + BPW34 | lux y W/m2 relativos son magnitudes distintas |
-| Viento / lluvia | anemómetro, veleta, balancín | un kit, validado en un nodo antes de comprar siete |
-| Suelo | sonda capacitiva, bloque de yeso, DS18B20 | humedad, succión y temperatura |
+| Viento / lluvia | anemómetro, veleta y balancín Misol | un kit, validado en el prototipo antes de comprar el resto |
+| Suelo | sonda capacitiva, bloque de yeso artesanal, DS18B20 | humedad, succión y temperatura |
 | Mojado foliar | sensor de rejilla | |
 | Rayos | módulo AS3935 | |
-| Reloj / archivo | DS3231, microSD 16 GB high-endurance | hora confiable sin red; historial CSV junto a LittleFS |
-| Energía | panel 20 W, batería 12 V 7 Ah, controlador 10 A, DC-DC, fusible, TVS | |
-| Mecánica | caja IP65, escudo de radiación impreso en PETG, mástil | mismo escudo y altura en todos los nodos |
+| Reloj / archivo | DS3231, microSD 32 GB de videovigilancia | hora confiable sin red; historial CSV junto a LittleFS |
+| Energía | panel 20 W, batería 12 V 7 Ah, controlador de carga PWM, DC-DC, fusible, TVS | |
+| Mecánica | caja estanca, escudo de radiación comercial de ABS, mástil | mismo escudo y altura en todos los nodos |
 
 ## Almacenamiento
 

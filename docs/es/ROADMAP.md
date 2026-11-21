@@ -91,7 +91,7 @@ cubriendo los huecos LoRa.
 Elegir 8 sitios por interés ambiental, survey de altura y antena del
 gateway, desplegar 1–2 gateways. Todo alimenta una base. Agregar
 ChirpStack, backups y reverse proxy HTTPS según `DEPLOYMENT.md`. Un
-prototipo con 6 pruebas de aceptación antes de cualquier compra ×8.
+prototipo con 6 pruebas de aceptación antes de comprar en cantidad.
 
 Hecho significa: una base de datos, un mapa de cobertura con logs
 reales de link, y un runbook de operación que no sea ficción.

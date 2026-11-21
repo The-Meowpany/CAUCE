@@ -26,7 +26,7 @@ data with the uncertainty shown, not official meteorology.
 
 ```powershell
 cd firmware
-pio test -e native          # 569 host tests (Unity)
+pio test -e native          # 570 host tests (Unity)
 pio run -e esp32dev         # ESP32 build
 cd ..\backend
 pip install -r requirements.txt
@@ -116,7 +116,7 @@ We'd rather list these here than have you trip over them:
   reverse proxy in front.
 - BME280 numbers are datasheet-grade. Nobody in this project has verified
   them in the field, and whole-system accuracy is unmeasured.
-- Eight spread-out nodes produce a smooth interpolated field, not street
+- Five spread-out nodes produce a smooth interpolated field, not street
   resolution. The map says its effective resolution out loud.
 - Firmware updates need physical access on a board provisioned with the
   Arduino default partition table; the two-slot table with rollback
@@ -159,7 +159,7 @@ Full index: [docs/en/DOCUMENTATION_INDEX.md](docs/en/DOCUMENTATION_INDEX.md)
 
 ## Status
 
-569 firmware + 853 backend tests + ESP32 build + E2E = **1422 automated
+570 firmware + 853 backend tests + ESP32 build + E2E = **1423 automated
 checks green**. What exists and what doesn't: [STATUS.md](STATUS.md).
 
 MIT — see [LICENSE](LICENSE).

@@ -9,20 +9,20 @@ Technical annex. The funding application carries only Meta and Result
 environmental microstations capable of producing hyperlocal, comparable
 information on microclimate conditions in Canelones.
 
-**Result:** eight calibrated, operating stations generating
+**Result:** five calibrated, operating stations generating
 environmental records through the pilot period.
 
 ## 2. Frozen scope
 
-8 identical nodes · 1 gateway · 1 CAUCE-Node carrier PCB · 1 data
+5 identical nodes · 1 gateway · 1 CAUCE-Node carrier PCB · 1 data
 protocol · 1 calibration scheme · 1 local storage system · 1 LoRa
 point-to-point link · 1 central API · 1 microclimate viewer.
 
 Golden rule: **the node never depends on the gateway to measure.**
 
-Purchase rule: **no critical component gets bought ×8 until the
-prototype passes acceptance** (this is mostly about the anemometer:
-buy one, validate it, then buy the other seven).
+Purchase rule: **no component gets bought in quantity until the
+prototype passes acceptance**: the prototype is a full station, so
+every sensor type is validated before the lot.
 
 The project's causal chain:
 **measure → validate → calibrate → preserve → transmit → compare →
@@ -73,75 +73,63 @@ and direction → interpolated vector field". Volumetric 3D rendering is
 discarded by design decision. Anything grander has to
 earn its wording with node density first.
 
-## 4. Node (×8 identical)
+## 4. Node (×5 identical)
 
 ESP32-WROOM-32 + SX1276/RFM95W at 915 MHz (AU915, the Uruguayan band) ·
-BME280 (temperature, humidity, pressure) · BH1750 (illuminance — lux,
-not solar irradiance) · BPW34 photodiode with transimpedance stage
-(relative solar irradiance) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C
-(NDIR CO₂, automatic baseline correction off, zeroed at co-location) ·
-VEML6075 (UV index with separate UVA and UVB) · AS3935 (lightning count
-and distance) · cup anemometer + resistor-ladder vane + tipping-bucket
-rain gauge (one kit validated before buying seven) · capacitive soil
-moisture probe, gypsum block (soil water potential, read with alternating polarity
-through an MCP23008 expander) and DS18B20 (soil
-temperature) · leaf wetness grid · DS3231 (±2 ppm; NTP > DS3231 >
-internal hierarchy) · microSD 16 GB high-endurance (CSV archive) · 20 W panel, 12 V 7 Ah battery, 10 A controller, DC-DC, fuse,
-TVS · IP65 box with cable glands · 915 MHz antenna + pigtail · printed
-PETG radiation screen + mast (2 m installation protocol, WMO practice).
+BME280 (temperature, humidity, pressure) · BH1750 (illuminance — lux, not
+solar irradiance) · BPW34 photodiode with transimpedance stage (relative
+solar irradiance) · SPS30 (PM1, PM2.5, PM4, PM10) · MH-Z19C (NDIR CO₂,
+automatic baseline correction off, zeroed at co-location) · VEML6075 (UV
+index with separate UVA and UVB) · AS3935 (lightning count and distance) ·
+Misol cup anemometer, wind vane and tipping-bucket rain gauge · capacitive
+soil moisture probe, hand-made gypsum block (soil water potential, read
+with alternating polarity through an MCP23017 expander) and DS18B20 (soil
+temperature) · leaf wetness board · DS3231 (±2 ppm; NTP > DS3231 > internal
+hierarchy) · microSD 32 GB surveillance-grade card (CSV archive) · 20 W
+panel, 12 V 7 Ah battery, PWM charge controller, DC-DC, fuse, TVS ·
+weatherproof box with cable glands · 915 MHz antenna · commercial ABS
+radiation shield + mast (2 m installation protocol, WMO practice).
 
 Every sensor has a driver in the firmware and a config key that enables
 it; the pin map is in `HARDWARE.md`. Drivers are host-tested against
 scripted buses and have not yet run on a board.
 
-## 5. Prototype BOM ×1 (~USD 255)
+## 5. Station cost
 
-ESP32 3 · SX1276 + antenna 7 · BME280 7 · SPS30 36.12 · MH-Z19C 24.99 ·
-VEML6075 6 · BH1750 1.50 · BPW34 stage 3 · wind/rain kit 34 · soil
-probes 9 · gypsum excitation expander 1.50 · leaf wetness 3 · AS3935 12 · DS3231 3 · microSD 6 · panel 28 ·
-battery 27 · charge controller 7.64 · regulation and protection 5 ·
-box 7.39 · printed screen 4 · PCB and connectors 12 · mast 8.
-Total USD 256.14.
+Prices consulted in Uruguay on 2026-11-21 (Mercado Libre Uruguay and
+AliExpress shipping to Uruguay), at the BROU selling rate of UYU 41.95,
+plus a 10 % allowance for price changes until purchase: USD 429.73 per
+station, itemised in the budget document. At that price eight stations do
+not fit the budget; five identical ones do, with a reserve.
 
 ## 6. Budget (USD 4,000)
 
 | Item | USD |
 |---|---|
-| 8 complete stations | 2,049.12 |
-| LoRa point-to-point gateway (ESP32 + SX1276) | 60.00 |
-| Central server | 90.00 |
-| Tools, fabrication and bench rig | 501.00 |
+| 5 identical stations | 2,148.65 |
+| Gateway and central server | 252.22 |
+| Tools and bench rig | 146.68 |
 | Calibration and co-location | 30.00 |
-| Workshops and educational sessions | 480.00 |
-| Installation and local logistics | 140.00 |
-| International transport and import (provision) | 400.00 |
-| Critical spares | 78.11 |
-| Contingency, dual purpose | 171.77 |
+| Workshops and educational sessions | 479.27 |
+| Import provision and installation | 530.01 |
+| Critical spares | 122.55 |
+| Contingency, dual purpose | 290.62 |
 | **Total** | **4,000.00** |
 
-The contingency (4.3 %) has two uses, in order. Until stage 4 closes (all
-eight nodes bought and imported) it covers what ends up costing more than
-planned: price or exchange-rate differences, import above the provision,
-the DFRobot AS3935 if the generic one fails its sample test, an antenna for
-a site the gateway cannot reach, failed parts beyond the spares. Whatever is
-left then funds, before co-location, a traceable calibration of the bench
-reference instrument the project owns (or a certified one if it cannot be certified), which is
-what turns co-location from relative consistency into absolute bias; then a
-second SPS30 spare. It is funded by printing on a Bambu Lab A1 mini (USD 271)
-instead of the A1, which now costs USD 441.
+The contingency (7.3 %) has two uses, in order. Until stage 4 closes
+(everything bought and imported) it covers what ends up costing more than
+planned: prices above the allowance, import above the provision, an
+antenna for a site the gateway cannot reach, failed parts beyond the
+spares. Whatever is left then funds, before co-location, a traceable
+calibration of the bench reference instrument the project owns (or a
+certified one if it cannot be certified), which is what turns co-location
+from relative consistency into absolute bias; then a second SPS30 spare.
 
-About half of the budget (USD 1,947) still rests on estimates with no price
-checked, so a risk-weighted contingency would be about USD 489. The budget
-document covers that in layers - the contingency, the conditional catering
-line, and the adjustment levers - and requires quotes for its five heaviest
-estimated lines (wind and rain kit, battery, workshop and installation
-travel, teaching materials) before the stage 4 purchase.
-
-The import provision covers an effective cost of up to ~30 % on roughly
-USD 1,368 of imported goods; the budget document lists the adjustment
-levers if the real figure is higher. No physical interventions line:
-the project generates evidence to evaluate measures, it doesn't execute
-them.
+There is no 3D printer: a commercial radiation shield costs less than
+printing one. No commercial gypsum blocks are available, so they are made
+in the workshops. The import provision is 35 % of the goods bought from
+abroad (about USD 1,114). No physical interventions line: the project
+generates evidence to evaluate measures, it doesn't execute them.
 
 What remains afterwards: hardware, firmware, protocol, data,
 calibration methodology, platform.
