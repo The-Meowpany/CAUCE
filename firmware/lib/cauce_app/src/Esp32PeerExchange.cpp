@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "cauce/core/Ed25519Points.h"
+
 namespace cauce::app {
 
 namespace {
@@ -21,6 +23,16 @@ struct MergeApplyContext {
 Esp32PeerExchange::Esp32PeerExchange(LogStorageRepository& store, PeerWatermarks& watermarks,
                            hal::IPeerRadio* radio, hal::IPeerDiscovery* discovery)
     : store_(&store), watermarks_(&watermarks), radio_(radio), discovery_(discovery) {}
+
+void Esp32PeerExchange::setAuthentication(const PeerKeyring* keyring, const uint8_t seed[32]) {
+  keyring_ = keyring;
+  hasSeed_ = seed != nullptr;
+  if (hasSeed_) {
+    std::memcpy(seed_, seed, sizeof(seed_));
+  } else {
+    std::memset(seed_, 0, sizeof(seed_));
+  }
+}
 
 bool Esp32PeerExchange::enable() {
   enabled_ = radio_ != nullptr && discovery_ != nullptr;
@@ -161,6 +173,22 @@ MergeReport Esp32PeerExchange::mergeVerified(const ReplicatedRecord* records, si
   return report;
 }
 
+bool Esp32PeerExchange::authentic(const hal::PeerFrameContents& contents,
+                                  size_t frameLength) const {
+  if (keyring_ == nullptr) return false;
+  const uint8_t* key = keyring_->find(contents.nodeId);
+  if (key == nullptr) return false;
+  const size_t bodyLength = frameLength - kSignatureBytes;
+  if (!ed25519Verify(key, scratch_, bodyLength, scratch_ + bodyLength)) return false;
+  // A signed frame proves who sent it, not who measured what is inside. A neighbour may only
+  // hand over its own records; relaying a third node's would let one trusted key vouch for
+  // data its owner never signed.
+  for (size_t i = 0; i < contents.recordCount; ++i) {
+    if (std::strcmp(contents.records[i].nodeId, contents.nodeId) != 0) return false;
+  }
+  return true;
+}
+
 ExchangeReport Esp32PeerExchange::exchange(const uint8_t peerAddress[6]) {
   ExchangeReport report{};
   if (peerAddress == nullptr || radio_ == nullptr) {
@@ -178,24 +206,27 @@ ExchangeReport Esp32PeerExchange::exchange(const uint8_t peerAddress[6]) {
     return report;
   }
   if (got > 0) {
-    if (static_cast<size_t>(got) > sizeof(scratch_)) {
+    const size_t length = static_cast<size_t>(got);
+    hal::PeerFrameContents contents{};
+    if (length > sizeof(scratch_) || length <= kSignatureBytes ||
+        !hal::decodePeerFrame(scratch_, length - kSignatureBytes, contents)) {
       ++counters_.framesRefused;
+    } else if (!authentic(contents, length)) {
+      ++counters_.framesUnauthenticated;
     } else {
-      hal::PeerFrameContents contents{};
-      if (!hal::decodePeerFrame(scratch_, static_cast<size_t>(got), contents)) {
-        ++counters_.framesRefused;
-      } else {
-        ++counters_.framesReceived;
-        report.receivedFromPeer = contents.recordCount;
-        report.conflictsObserved =
-            mergeVerified(contents.records, contents.recordCount).conflictsObserved;
-      }
+      ++counters_.framesReceived;
+      report.receivedFromPeer = contents.recordCount;
+      report.conflictsObserved =
+          mergeVerified(contents.records, contents.recordCount).conflictsObserved;
     }
   }
 
   // 2. Offer our own records, one frame's worth. The budget is arithmetic rather than taste: an
   //    ESP-NOW payload is 250 bytes and a record costs 59, so a frame carries three.
   if (local_.records == nullptr || local_.count == 0 || local_.nextSequence == 0) return report;
+  // Nothing goes out unsigned: a neighbour would refuse it, and an unsigned offer teaches the
+  // channel what this node's frames look like for nothing.
+  if (!hasSeed_) return report;
   if (!radio_->canSendNow()) {
     // Busy is "retry later", which is a fact about the link rather than about the data, and
     // `linkFailed` is what lets a caller tell the two apart.
@@ -205,7 +236,7 @@ ExchangeReport Esp32PeerExchange::exchange(const uint8_t peerAddress[6]) {
 
   ReplicatedRecord outgoing[kMaxRecordsPerFrame];
   size_t packed = 0;
-  for (; packed < kMaxRecordsPerFrame && packed < local_.count; ++packed) {
+  for (; packed < kMaxSignedRecordsPerFrame && packed < local_.count; ++packed) {
     const Measurement& m = local_.records[packed];
     const size_t idLen = std::strlen(m.nodeId);
     // A record whose id does not fit the frame is skipped rather than truncated: a truncated id
@@ -224,12 +255,14 @@ ExchangeReport Esp32PeerExchange::exchange(const uint8_t peerAddress[6]) {
   }
   if (packed == 0) return report;
 
-  const size_t frameLength = hal::encodePeerFrame(local_.records[0].nodeId, local_.nextSequence,
-                                                  outgoing, packed, scratch_, sizeof(scratch_));
-  if (frameLength == 0) {
+  const size_t bodyLength =
+      hal::encodePeerFrame(local_.records[0].nodeId, local_.nextSequence, outgoing, packed,
+                           scratch_, sizeof(scratch_) - kSignatureBytes);
+  if (bodyLength == 0 || !ed25519Sign(scratch_ + bodyLength, seed_, scratch_, bodyLength)) {
     ++counters_.framesRefused;
     return report;
   }
+  const size_t frameLength = bodyLength + kSignatureBytes;
   report.offeredToPeer = static_cast<uint32_t>(packed);
 
   const hal::RadioStatus status = radio_->send(scratch_, frameLength, peerAddress);

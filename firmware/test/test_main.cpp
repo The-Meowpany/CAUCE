@@ -13,6 +13,7 @@ void registerPilotSensorTests();
 void registerArchiveTests();
 void registerLoRaWiringTests();
 void registerSerialBridgeTests();
+void registerPeerDriverTests();
 void registerSchedulerTests();
 void registerExportTests();
 void registerMetricsTests();
@@ -63,6 +64,7 @@ int main() {
   registerArchiveTests();
   registerLoRaWiringTests();
   registerSerialBridgeTests();
+  registerPeerDriverTests();
   registerSchedulerTests();
   registerExportTests();
   registerMetricsTests();

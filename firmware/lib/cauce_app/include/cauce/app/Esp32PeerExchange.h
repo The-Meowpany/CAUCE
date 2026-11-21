@@ -33,6 +33,7 @@
 #include "cauce/app/PeerWatermarks.h"
 #include "cauce/core/LogStorageRepository.h"
 #include "cauce/core/Measurement.h"
+#include "cauce/core/PeerKeyring.h"
 #include "cauce/core/Replication.h"
 #include "cauce/hal/Esp32PeerLink.h"
 #include "cauce/hal/IPeerLink.h"
@@ -50,6 +51,10 @@ struct PeerExchangeCounters {
   uint32_t peersSeen{0};
   uint32_t mergesBlocked{0};   // refused because storage said no; not an error
   uint32_t sendBudgetExhausted{0};
+  // Well-formed frames refused for authenticity: unknown sender, bad signature, or a sender
+  // vouching for a record that is not its own. Counted apart from framesRefused, because a
+  // climbing figure here is somebody transmitting on the channel, not radio noise.
+  uint32_t framesUnauthenticated{0};
 };
 
 // A view over this node's own records. Not an owning container: the scheduler already has them,
@@ -68,12 +73,24 @@ class Esp32PeerExchange final : public PeerExchange {
   // means either truncation or a burst that costs the scheduler its deadline, and the second
   // shows up as a node that stopped sampling.
   static constexpr size_t kMaxRecordsPerFrame = hal::kPeerFrameMaxRecords;
+  // Every frame on the air carries a 64-byte Ed25519 signature after the CRC, which leaves room
+  // for two records rather than three: 28 + 2 * 59 + 64 = 210 of 250 bytes.
+  static constexpr size_t kSignatureBytes = 64;
+  static constexpr size_t kMaxSignedRecordsPerFrame =
+      (hal::kPeerFrameMaxBytes - hal::kPeerFrameOverhead - kSignatureBytes) /
+      hal::kPeerRecordBytes;
 
   Esp32PeerExchange(LogStorageRepository& store, PeerWatermarks& watermarks,
                hal::IPeerRadio* radio, hal::IPeerDiscovery* discovery);
 
   // A null radio or discovery leaves it disabled, which is the correct outcome for a node
   // configured before this existed rather than a failure.
+  // Required before anything is merged or sent. Frames are signed with this node's Ed25519 seed
+  // and accepted only from nodes in `keyring`. Without a seed nothing is offered; with an empty
+  // keyring nothing is merged. There is no unauthenticated mode to fall back to.
+  void setAuthentication(const PeerKeyring* keyring, const uint8_t seed[32]);
+  bool canSign() const { return hasSeed_; }
+
   bool enable();
   void disable();
   bool isEnabled() const { return enabled_; }
@@ -108,6 +125,10 @@ class Esp32PeerExchange final : public PeerExchange {
 
   static MergeOutcome applyToStore(const ReplicatedRecord& record, void* context);
 
+  // Signature by the sender named in the frame, with a key from the keyring, and every record
+  // belonging to that sender. Reads the frame from scratch_.
+  bool authentic(const hal::PeerFrameContents& contents, size_t frameLength) const;
+
  public:
   ExchangeReport exchange(const uint8_t peerAddress[6]) override;
 
@@ -122,6 +143,9 @@ class Esp32PeerExchange final : public PeerExchange {
   // iteration is a fragmentation source on a device with this little heap.
   uint8_t scratch_[hal::kPeerFrameMaxBytes]{};
   LocalRecordsView local_{};
+  const PeerKeyring* keyring_{nullptr};
+  uint8_t seed_[32]{};
+  bool hasSeed_{false};
 };
 
 }  // namespace cauce::app

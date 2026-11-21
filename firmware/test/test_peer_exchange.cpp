@@ -7,12 +7,15 @@
 // peer never offers it again - silent data loss no counter would show.
 
 #include <cstdio>
+#include <string>
 #include <vector>
 #include <cstring>
 #include <unity.h>
 
 #include "cauce/app/Esp32PeerExchange.h"
 #include "cauce/app/PeerWatermarks.h"
+#include "cauce/core/Ed25519Points.h"
+#include "cauce/core/PeerKeyring.h"
 #include "cauce/hal/MemoryFileSystem.h"
 
 namespace cauce::app {
@@ -207,6 +210,50 @@ struct Rig {
   FakeRadio radio;
 };
 
+// RFC 8032 section 7.1 seeds: TEST 1 is this node, TEST 2 is the trusted neighbour CAUCE-002,
+// and a third, untrusted key stands for somebody else transmitting on the channel.
+const uint8_t kOwnSeed[32] = {0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a,
+                              0xf4, 0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32,
+                              0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60};
+const uint8_t kPeerSeed[32] = {0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda, 0x9d, 0xb6, 0xc3,
+                               0x46, 0xec, 0x11, 0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f, 0x35, 0xab,
+                               0xa6, 0x24, 0xda, 0x8c, 0xf6, 0xed, 0x4f, 0xb8, 0xa6, 0xfb};
+const uint8_t kStrangerSeed[32] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                                   0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
+                                   0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
+
+std::string keyringEntry(const char* nodeId, const uint8_t seed[32]) {
+  uint8_t publicKey[32];
+  ed25519PublicKeyFromSeed(publicKey, seed);
+  std::string out = std::string(nodeId) + ":";
+  char hex[3];
+  for (uint8_t b : publicKey) {
+    std::snprintf(hex, sizeof(hex), "%02x", b);
+    out += hex;
+  }
+  return out;
+}
+
+// A trusted neighbour CAUCE-002, and this node able to sign.
+void authenticate(Esp32PeerExchange& exchange, PeerKeyring& keyring) {
+  TEST_ASSERT_TRUE(keyring.parse(keyringEntry("CAUCE-002", kPeerSeed).c_str()));
+  exchange.setAuthentication(&keyring, kOwnSeed);
+}
+
+// What a neighbour puts on the air: the frame body, then its signature.
+std::vector<uint8_t> signedFrame(const char* sender, const ReplicatedRecord* records, size_t n,
+                                 const uint8_t seed[32]) {
+  uint8_t body[hal::kPeerFrameMaxBytes];
+  const size_t length = hal::encodePeerFrame(sender, records[n - 1].sequence, records, n, body,
+                                             sizeof(body));
+  TEST_ASSERT_TRUE(length > 0);
+  std::vector<uint8_t> frame(body, body + length);
+  frame.resize(length + 64);
+  TEST_ASSERT_TRUE(ed25519Sign(frame.data() + length, seed, body, length));
+  return frame;
+}
+
 void test_a_peer_frame_becomes_a_stored_record() {
   Rig rig;
   rig.store.open();
@@ -342,6 +389,8 @@ void test_exchange_sends_this_nodes_records() {
   Rig rig;
   rig.store.open();
   Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
+  PeerKeyring keyring;
+  authenticate(exchange, keyring);
 
   Measurement mine[2] = {localRecord("CAUCE-001", 5), localRecord("CAUCE-001", 6)};
   LocalRecordsView view{};
@@ -356,8 +405,31 @@ void test_exchange_sends_this_nodes_records() {
   TEST_ASSERT_EQUAL_UINT32(2, report.offeredToPeer);
   TEST_ASSERT_EQUAL_UINT32(2, report.acceptedByPeer);
   TEST_ASSERT_FALSE(report.linkFailed);
-  TEST_ASSERT_TRUE(rig.radio.lastLength > 0);
   TEST_ASSERT_EQUAL_UINT8_ARRAY(peer, rig.radio.lastAddress, 6);
+  // Two records and a signature: 28 + 2 * 59 + 64.
+  TEST_ASSERT_EQUAL(hal::kPeerFrameOverhead + 2 * hal::kPeerRecordBytes + 64,
+                    rig.radio.lastLength);
+  uint8_t ownPublic[32];
+  ed25519PublicKeyFromSeed(ownPublic, kOwnSeed);
+  const size_t body = rig.radio.lastLength - 64;
+  TEST_ASSERT_TRUE(ed25519Verify(ownPublic, rig.radio.lastSent.data(), body,
+                                 rig.radio.lastSent.data() + body));
+}
+
+void test_without_a_seed_nothing_is_offered() {
+  Rig rig;
+  rig.store.open();
+  Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
+  Measurement mine[1] = {localRecord("CAUCE-001", 5)};
+  LocalRecordsView view{};
+  view.records = mine;
+  view.count = 1;
+  view.nextSequence = 5;
+  exchange.setLocalRecords(view);
+  uint8_t peer[6] = {1, 2, 3, 4, 5, 6};
+  const ExchangeReport report = exchange.exchange(peer);
+  TEST_ASSERT_EQUAL_UINT32(0, report.offeredToPeer);
+  TEST_ASSERT_EQUAL(0u, rig.radio.lastLength);
 }
 
 void test_a_busy_radio_reports_the_link_failed_and_does_not_lose_the_offer() {
@@ -365,6 +437,8 @@ void test_a_busy_radio_reports_the_link_failed_and_does_not_lose_the_offer() {
   rig.store.open();
   rig.radio.busy = true;
   Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
+  PeerKeyring keyring;
+  authenticate(exchange, keyring);
 
   Measurement mine[1] = {localRecord("CAUCE-001", 5)};
   LocalRecordsView view{};
@@ -387,6 +461,8 @@ void test_a_frame_that_fails_its_checks_is_counted_not_merged() {
   Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
 
   // A frame with the right length and a wrong magic.
+  PeerKeyring keyring;
+  authenticate(exchange, keyring);
   rig.radio.toDeliver.assign(hal::kPeerFrameMaxBytes, 0x00);
   rig.radio.toDeliver[0] = 0xFF;
 
@@ -400,20 +476,55 @@ void test_a_good_frame_from_the_peer_is_merged_during_exchange() {
   Rig rig;
   rig.store.open();
   Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
+  PeerKeyring keyring;
+  authenticate(exchange, keyring);
 
   ReplicatedRecord incoming[1] = {peerRecord("CAUCE-002", 3, "air_temperature")};
-  // A real buffer, not `toDeliver.data()` on an empty vector - which is nullptr, so the first
-  // version of this test encoded into nothing and asserted that nothing arrived.
-  uint8_t frame[hal::kPeerFrameMaxBytes];
-  const size_t n = hal::encodePeerFrame("CAUCE-002", 3, incoming, 1, frame,
-                                        hal::kPeerFrameMaxBytes);
-  TEST_ASSERT_TRUE(n > 0);
-  rig.radio.toDeliver.assign(frame, frame + n);
+  rig.radio.toDeliver = signedFrame("CAUCE-002", incoming, 1, kPeerSeed);
 
   uint8_t peer[6] = {1, 2, 3, 4, 5, 6};
   const ExchangeReport report = exchange.exchange(peer);
   TEST_ASSERT_EQUAL_UINT32(1, report.receivedFromPeer);
   TEST_ASSERT_EQUAL_UINT32(1, rig.store.totalRecords());
+}
+
+// The frames below are all well-formed. What they lack is authenticity, which is the only thing
+// standing between an ESP32 anyone can buy and this node's storage.
+void assertRefused(const std::vector<uint8_t>& frame) {
+  Rig rig;
+  rig.store.open();
+  Esp32PeerExchange exchange(rig.store, rig.marks, &rig.radio, nullptr);
+  PeerKeyring keyring;
+  authenticate(exchange, keyring);
+  rig.radio.toDeliver = frame;
+  uint8_t peer[6] = {1, 2, 3, 4, 5, 6};
+  const ExchangeReport report = exchange.exchange(peer);
+  TEST_ASSERT_EQUAL_UINT32(0, report.receivedFromPeer);
+  TEST_ASSERT_EQUAL_UINT32(1, exchange.counters().framesUnauthenticated);
+  TEST_ASSERT_EQUAL_UINT32(0, rig.store.totalRecords());
+}
+
+void test_a_frame_signed_by_an_untrusted_key_is_refused() {
+  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-002", 3, "air_temperature")};
+  assertRefused(signedFrame("CAUCE-002", incoming, 1, kStrangerSeed));
+}
+
+void test_a_frame_from_a_node_not_in_the_keyring_is_refused() {
+  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-009", 3, "air_temperature")};
+  assertRefused(signedFrame("CAUCE-009", incoming, 1, kPeerSeed));
+}
+
+void test_a_tampered_frame_is_refused() {
+  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-002", 3, "air_temperature")};
+  std::vector<uint8_t> frame = signedFrame("CAUCE-002", incoming, 1, kPeerSeed);
+  frame[frame.size() - 1] ^= 0x01;  // one bit of the signature
+  assertRefused(frame);
+}
+
+void test_a_neighbour_cannot_vouch_for_another_nodes_records() {
+  // Signed correctly by CAUCE-002, carrying a record that claims to be CAUCE-003's.
+  ReplicatedRecord incoming[1] = {peerRecord("CAUCE-003", 3, "air_temperature")};
+  assertRefused(signedFrame("CAUCE-002", incoming, 1, kPeerSeed));
 }
 
 void test_an_exchange_with_no_radio_reports_the_link_failed() {
@@ -435,7 +546,6 @@ void test_a_null_peer_address_reports_the_link_failed() {
 }  // namespace
 
 void registerPeerExchangeTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_an_unseen_peer_has_a_zero_watermark);
   RUN_TEST(test_a_watermark_survives_a_save_and_load);
   RUN_TEST(test_several_peers_coexist);
@@ -456,6 +566,11 @@ void registerPeerExchangeTests() {
   RUN_TEST(test_an_out_of_range_quality_lands_on_invalid);
   RUN_TEST(test_the_watermark_advances_after_a_clean_merge);
   RUN_TEST(test_exchange_sends_this_nodes_records);
+  RUN_TEST(test_without_a_seed_nothing_is_offered);
+  RUN_TEST(test_a_frame_signed_by_an_untrusted_key_is_refused);
+  RUN_TEST(test_a_frame_from_a_node_not_in_the_keyring_is_refused);
+  RUN_TEST(test_a_tampered_frame_is_refused);
+  RUN_TEST(test_a_neighbour_cannot_vouch_for_another_nodes_records);
   RUN_TEST(test_a_busy_radio_reports_the_link_failed_and_does_not_lose_the_offer);
   RUN_TEST(test_a_frame_that_fails_its_checks_is_counted_not_merged);
   RUN_TEST(test_a_good_frame_from_the_peer_is_merged_during_exchange);

@@ -118,6 +118,12 @@ struct NodeConfig {
   bool peerEnabled{false};
   uint8_t peerChannel{0};
   char peerStatePath[64]{"/state/peer_marks"};
+  // Neighbours whose signed frames are merged: `NODE_ID:pubkeyhex,...`, at most eight. Empty
+  // means no peer is trusted, and the exchange then only offers this node's records.
+  char peerKeys[720]{};
+  // Seconds between exchange rounds. Each round signs one frame per peer, which costs real time
+  // on this CPU, so the default is a minute rather than as fast as the radio allows.
+  uint32_t peerIntervalS{60};
   uint32_t loraSyncIntervalS{3600};
   // AU915 because the pilot is in Uruguay, which uses the 915-928 MHz band. A node elsewhere
   // must set lora_region explicitly; the name is validated at boot, not guessed.

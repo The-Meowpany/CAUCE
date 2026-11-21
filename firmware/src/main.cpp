@@ -3,6 +3,8 @@
 #include "cauce/app/ArchiveManager.h"
 #include "cauce/app/DeepSleepController.h"
 #include "cauce/app/LoRaSigning.h"
+#include "cauce/app/PeerExchangeDriver.h"
+#include "cauce/core/PeerKeyring.h"
 #include "cauce/app/MeasurementScheduler.h"
 #include "cauce/core/BootDiagnostics.h"
 #include "cauce/core/DataExporter.h"
@@ -182,6 +184,8 @@ static cauce::hal::Esp32PeerRadio* g_peerRadio = nullptr;
 static cauce::hal::Esp32PeerDiscovery* g_peerDiscovery = nullptr;
 static cauce::app::PeerWatermarks* g_peerMarks = nullptr;
 static cauce::app::Esp32PeerExchange* g_peerExchange = nullptr;
+static cauce::app::PeerExchangeDriver* g_peerDriver = nullptr;
+static cauce::PeerKeyring g_peerKeyring;
 // LoRa. The forwarding gateway path, separate from the HTTP one: a node that cannot reach the
 // central directly relays through a peer with a radio.
 // LoRa is NOT constructed here. `Sx1276Radio` needs an `ISpiBus` and an `IRadioControl`, and
@@ -411,6 +415,9 @@ void setup() {
 
     const auto status = g_configManager->load(config);
     g_activeConfig = config;
+    // Before open(): the scan that rebuilds the store's counters has to know which records are
+    // this node's and which were merged from peers.
+    g_store->setOwnNodeId(config.nodeId);
     g_store->open();
     g_logger->eventf(cauce::LogLevel::Info, "CONFIG_LOADED", "status=%d node=%s",
                      static_cast<int>(status), config.nodeId);
@@ -807,10 +814,28 @@ void setup() {
       const bool discoveryUp = g_peerDiscovery->begin();
       g_peerExchange = new cauce::app::Esp32PeerExchange(*g_store, *g_peerMarks,
                                                          g_peerRadio, g_peerDiscovery);
-      if (g_peerExchange->enable()) {
+      // Authentication first: frames are signed with this node's Ed25519 seed and merged only
+      // from neighbours in peer_keys. A node without a seed cannot take part, and a malformed
+      // keyring trusts nobody rather than half of the list.
+      uint8_t seed[32];
+      const bool haveSeed = cauce::decodeSeedHex(config.syncAuthSeedHex, seed, sizeof(seed));
+      const bool keyringOk = g_peerKeyring.parse(config.peerKeys);
+      g_peerExchange->setAuthentication(&g_peerKeyring, haveSeed ? seed : nullptr);
+      volatile uint8_t* wipe = seed;
+      for (size_t i = 0; i < sizeof(seed); ++i) wipe[i] = 0;
+      if (!haveSeed || !keyringOk) {
+        g_logger->eventf(cauce::LogLevel::Warn, "PEER_EXCHANGE_UNAUTHENTICATED",
+                         "seed=%d keyring=%d", haveSeed ? 1 : 0, keyringOk ? 1 : 0);
+        g_peerExchange->disable();
+      } else if (g_peerExchange->enable()) {
+        g_peerDriver = new cauce::app::PeerExchangeDriver(*g_peerExchange, *g_peerDiscovery,
+                                                         *g_store, g_clock, config.nodeId,
+                                                         config.peerIntervalS);
         g_logger->eventf(cauce::LogLevel::Info, "PEER_EXCHANGE_ENABLED",
-                         "channel=%u peers_seen=%u", static_cast<unsigned>(config.peerChannel),
-                         static_cast<unsigned>(g_peerDiscovery->poll(nullptr, 0)));
+                         "channel=%u trusted=%u interval_s=%lu",
+                         static_cast<unsigned>(config.peerChannel),
+                         static_cast<unsigned>(g_peerKeyring.size()),
+                         static_cast<unsigned long>(config.peerIntervalS));
       } else {
         // Said at boot because a node configured for peer exchange and not getting it is the
         // exact failure that otherwise presents as "the feature does not work".
@@ -1032,6 +1057,12 @@ void loop() {
     g_syncManager->tick();
   }
   if (g_lightning != nullptr) g_lightning->service();
+  if (g_peerDriver != nullptr) {
+    // A round signs a frame per neighbour, which takes time on this CPU; the watchdog is fed
+    // first so a round on a busy site cannot be mistaken for a hang.
+    esp_task_wdt_reset();
+    g_peerDriver->tick();
+  }
   g_scheduler->tick();
   const auto& counters = g_scheduler->counters();
   g_health.uptimeMs = g_clock.monotonicMs();
