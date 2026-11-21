@@ -399,7 +399,6 @@ void test_favicon_returns_204() {
 }
 void registerApiTests() {
   TEST_SUITE_MUTATES("api", "a shared 3000-byte request body buffer");
-  UNITY_BEGIN();
   RUN_TEST(test_unknown_route_returns_404);
   RUN_TEST(test_node_endpoint_reports_identity);
   RUN_TEST(test_latest_returns_404_when_empty_and_record_when_present);
@@ -415,5 +414,4 @@ void registerApiTests() {
   RUN_TEST(test_measurements_from_filter_iso8601);
   RUN_TEST(test_root_serves_dashboard_html_in_chunks);
   RUN_TEST(test_favicon_returns_204);
-  UNITY_END();
 }

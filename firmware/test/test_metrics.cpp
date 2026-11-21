@@ -139,7 +139,6 @@ void test_exposure_none_when_below() {
 }
 
 void registerMetricsTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_sample_stats_known_vector);
   RUN_TEST(test_sample_stats_even_count_median);
   RUN_TEST(test_sample_stats_single_value);
@@ -149,5 +148,4 @@ void registerMetricsTests() {
   RUN_TEST(test_exposure_hours_above_threshold);
   RUN_TEST(test_exposure_none_when_below);
   
-  UNITY_END();
 }

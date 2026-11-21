@@ -268,7 +268,6 @@ void test_the_completed_duration_is_recorded_for_the_next_boot() {
 }  // namespace
 
 void registerBootDiagnosticsTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_the_first_boot_reports_no_history);
   RUN_TEST(test_a_completed_boot_is_not_a_reattempt);
   RUN_TEST(test_a_boot_that_died_in_a_step_is_reported_as_a_reattempt);

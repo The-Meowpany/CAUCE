@@ -289,7 +289,6 @@ void test_time_range_filters_records() {
 }
 
 void registerExportTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_csv_export_contains_header_and_rows);
   RUN_TEST(test_csv_escapes_special_characters_per_rfc4180);
   RUN_TEST(test_a_formula_in_an_identifier_is_not_left_evaluable);
@@ -303,5 +302,4 @@ void registerExportTests() {
   RUN_TEST(test_chunked_output_equals_single_shot);
   RUN_TEST(test_time_range_filters_records);
   
-  UNITY_END();
 }

@@ -625,7 +625,6 @@ void test_no_watchdog_hook_is_safe_and_the_download_still_completes() {
 }
 
 void registerOtaTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_compare_semver_pairs);
   RUN_TEST(test_sha256_streaming_matches_one_shot);
   RUN_TEST(test_happy_path_applies_and_reports_reboot_pending);
@@ -648,7 +647,6 @@ void registerOtaTests() {
   RUN_TEST(test_zero_stall_budget_is_clamped);
   RUN_TEST(test_the_watchdog_is_fed_before_each_blocking_call);
   RUN_TEST(test_no_watchdog_hook_is_safe_and_the_download_still_completes);
-  UNITY_END();
 }
 
 void test_manifest_json_full_parse() {

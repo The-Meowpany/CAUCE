@@ -291,7 +291,6 @@ void test_the_ccs811_has_no_co2_variable_at_all() {
 }
 
 void registerWeatherSensorsTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_the_calibration_constant_is_the_documented_formula);
   RUN_TEST(test_a_zero_geometry_yields_no_calibration_rather_than_a_huge_one);
   RUN_TEST(test_known_pulse_train_converts_to_the_expected_speed);
@@ -310,5 +309,4 @@ void registerWeatherSensorsTests() {
   RUN_TEST(test_the_ccs811_refuses_to_read_before_it_has_warmed_up);
   RUN_TEST(test_the_ccs811_reports_initializing_when_no_sample_is_ready_yet);
   RUN_TEST(test_the_ccs811_has_no_co2_variable_at_all);
-  UNITY_END();
 }

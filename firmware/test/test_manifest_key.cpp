@@ -101,7 +101,6 @@ void test_the_manifest_key_and_the_credential_are_both_optional_together() {
 }  // namespace
 
 void registerManifestKeyTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_a_separate_manifest_key_survives_a_config_round_trip);
   RUN_TEST(test_an_absent_manifest_key_parses_as_absent);
   RUN_TEST(test_an_empty_manifest_key_is_indistinguishable_from_an_absent_line);

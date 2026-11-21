@@ -266,7 +266,6 @@ void test_the_emitted_signature_verifies_over_the_challenge() {
 }  // namespace
 
 void registerSyncTransportAuthTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_a_signed_challenge_emits_the_four_headers_in_order);
   RUN_TEST(test_the_header_names_are_the_ones_the_central_reads);
   RUN_TEST(test_an_unreachable_central_emits_nothing_at_all);

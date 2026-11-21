@@ -77,12 +77,10 @@ void test_hmac_long_key_matches_reference() {
 }
 
 void registerSecurityTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_sha256_empty_string_vector);
   RUN_TEST(test_sha256_abc_vector);
   RUN_TEST(test_sha256_multiblock_vector);
   RUN_TEST(test_secure_equals_basic);
   RUN_TEST(test_hmac_rfc4231_case2);
   RUN_TEST(test_hmac_long_key_matches_reference);
-  UNITY_END();
 }

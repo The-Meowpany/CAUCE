@@ -61,7 +61,6 @@ void test_a_quoted_character_in_a_value_round_trips() {
 }  // namespace
 
 void registerNodeAuthWireTests() {
-  UNITY_BEGIN();
   RUN_TEST(cauce::app::test_the_serialised_challenge_reads_field_by_field);
   RUN_TEST(cauce::app::test_a_quoted_character_in_a_value_round_trips);
 }

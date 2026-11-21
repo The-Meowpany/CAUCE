@@ -216,7 +216,6 @@ void test_a_credential_without_a_certificate_is_half_configured() {
 }  // namespace
 
 void registerNodeCredentialTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_the_credential_survives_a_config_round_trip);
   RUN_TEST(test_an_absent_credential_parses_as_absent_rather_than_garbage);
   RUN_TEST(test_a_short_seed_is_refused_rather_than_padded);

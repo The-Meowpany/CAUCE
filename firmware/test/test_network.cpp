@@ -203,7 +203,6 @@ void test_no_credentials_starts_ap_immediately() {
 }
 
 void registerNetworkTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_disabled_when_wifi_not_enabled);
   RUN_TEST(test_connects_and_reaches_connected_state);
   RUN_TEST(test_link_lost_schedules_retry_with_base_backoff);
@@ -213,5 +212,4 @@ void registerNetworkTests() {
   RUN_TEST(test_degraded_on_weak_signal_and_recovers);
   RUN_TEST(test_no_credentials_starts_ap_immediately);
   
-  UNITY_END();
 }

@@ -169,7 +169,6 @@ void test_the_last_record_is_found_across_a_segment_boundary() {
 }  // namespace
 
 void registerStorageContainsTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_a_record_that_is_there_is_found);
   RUN_TEST(test_a_record_that_is_not_there_is_not_found);
   RUN_TEST(test_another_nodes_sequence_is_not_ours);

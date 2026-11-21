@@ -419,7 +419,6 @@ void test_the_challenge_request_carries_the_identity_it_was_given() {
 }
 
 void registerNodeAuthTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_the_canonical_challenge_matches_the_backends_format);
   RUN_TEST(test_the_canonical_challenge_refuses_to_truncate);
   RUN_TEST(test_the_expiry_is_plain_decimal_with_no_separators);
@@ -442,5 +441,4 @@ void registerNodeAuthTests() {
   RUN_TEST(test_a_seed_without_a_certificate_is_not_configured);
   RUN_TEST(test_clearing_the_credential_forgets_it_entirely);
   RUN_TEST(test_the_challenge_request_carries_the_identity_it_was_given);
-  UNITY_END();
 }

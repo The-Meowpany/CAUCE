@@ -282,7 +282,6 @@ void test_a_null_buffer_is_survivable() {
 }  // namespace
 
 void registerEsp32PeerLinkTests() {
-  UNITY_BEGIN();
   RUN_TEST(test_a_single_record_round_trips);
   RUN_TEST(test_a_frame_fits_the_radio_ceiling);
   RUN_TEST(test_the_record_size_is_what_the_frame_budget_assumes);
