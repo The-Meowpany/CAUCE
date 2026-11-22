@@ -93,8 +93,8 @@ built is the prototype that has to pass section 8.
 
 The LTR390 replaces the VEML6075, which Vishay discontinued: it gives the
 UV index without the separate UVA/UVB reading (`uv_ltr390=1`). The
-PMS5003 is the fallback for the SPS30 (`pm_pms5003=1`, drops PM4) if
-equipment prices push the budget past the call's 50 % equipment cap.
+PMS5003 is the fallback for the SPS30 (`pm_pms5003=1`, drops PM4) if the
+SPS30 cannot be bought in time.
 
 Every sensor has a driver in the firmware and a config key that enables
 it; the pin map is in `HARDWARE.md`. Drivers are host-tested against
@@ -121,10 +121,12 @@ panel, pipe, box, antenna), at the BROU selling rate of UYU 41.95: USD
 | Contingency | 419.86 |
 | **Project total** | **4,000.00** |
 
-The call caps equipment and infrastructure at 50 % of the project. The
-sponsoring organisation charges no administrative costs; bank and card
-fees come out of the contingency. Equipment, counted with its import taxes, is
-USD 1,985.15 (49.6 %); import taxes (USD 479.13 under Decreto 50/2026, 60 % of
+The call caps tools and equipment at 50 % of the project. The stations,
+the central node and their components are the project's product, the way
+plants are in a garden project, and do not count towards it; the note to
+the fund asks it to confirm this reading. The sponsoring organisation
+charges no administrative costs; bank and card fees come out of the
+contingency. Import taxes (USD 479.13 under Decreto 50/2026, 60 % of
 each parcel, at least USD 20) sit inside the USD 4,000. Workshops are open
 and free; participants are invited to join the project and its GitHub
 organisation, and get a certificate and project stickers. Nothing is

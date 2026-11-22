@@ -95,8 +95,7 @@ el prototipo que tiene que superar la sección 8.
 
 El LTR390 reemplaza al VEML6075, que Vishay discontinuó: da el índice UV
 sin separar UVA y UVB (`uv_ltr390=1`). El PMS5003 es la alternativa al
-SPS30 (`pm_pms5003=1`, pierde PM4) si los precios del equipamiento llevan
-el presupuesto por encima del tope del 50 % de las bases.
+SPS30 (`pm_pms5003=1`, pierde PM4) si el SPS30 no se consigue a tiempo.
 
 Cada sensor tiene driver en el firmware y una clave de config que lo
 habilita; el mapa de pines está en `HARDWARE.md`. Los drivers están
@@ -124,11 +123,13 @@ el documento de presupuesto.
 | Imprevistos | 419,86 |
 | **Total del proyecto** | **4.000,00** |
 
-Las bases limitan el equipamiento y la infraestructura al 50 % del
-proyecto. La organización patrocinadora no cobra gastos administrativos;
-las comisiones bancarias y de tarjeta salen de los imprevistos. El equipamiento, contado
-con sus tributos de importación, suma USD 1.985,15 (49,6 %); los tributos de
-importación (USD 479,13 por el Decreto 50/2026, 60 % de cada envío, mínimo
+Las bases limitan las herramientas y el equipamiento al 50 % del
+proyecto. Las estaciones, el nodo central y sus componentes son el
+producto del proyecto, como las plantas en un proyecto de huerta, y no
+cuentan para ese tope; la nota al fondo pide confirmar este criterio. La
+organización patrocinadora no cobra gastos administrativos; las
+comisiones bancarias y de tarjeta salen de los imprevistos. Los tributos
+de importación (USD 479,13 por el Decreto 50/2026, 60 % de cada envío, mínimo
 USD 20) están dentro de los USD 4.000. Los talleres son abiertos y
 gratuitos; a quienes participan se los invita a sumarse al proyecto y a su
 organización en GitHub, y reciben un certificado y stickers del proyecto.
